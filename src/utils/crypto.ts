@@ -58,7 +58,7 @@ export async function encryptValue(plaintext: string): Promise<string> {
   return ENCRYPTED_PREFIX + btoa(String.fromCharCode(...combined));
 }
 
-export function isEncrypted(value: string): boolean {
+function isEncrypted(value: string): boolean {
   return value.startsWith(ENCRYPTED_PREFIX);
 }
 

@@ -77,7 +77,6 @@ pub struct AppState {
     /// Accumulated download statistics persisted across sessions.
     pub download_stats: Mutex<DownloadStats>,
     /// Resource Intelligence Engine — analyzes URLs and selects download strategies.
-    #[allow(dead_code)]
     pub rie: ResourceIntelligenceEngine,
     /// External Tool Manager — manages FFmpeg, yt-dlp, and other external tools.
     pub external_tools: Arc<Mutex<ExternalToolManager>>,
