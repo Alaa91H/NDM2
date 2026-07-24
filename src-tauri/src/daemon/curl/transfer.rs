@@ -291,6 +291,32 @@ fn merge_parts(output_path: &Path, ranges: &[ByteRange]) -> Result<u64, String> 
 }
 
 fn resolve_effective_target(plan: &DirectDownloadPlan) -> (String, bool, PreflightData) {
+    // ── Fast path: skip the preflight HTTP request entirely for direct file
+    //    URLs that already have a recognizable extension. The probe was adding
+    //    5+ seconds of latency before every download start, and if libcurl's TLS
+    //    was misconfigured it would fail silently and block the download.
+    //
+    //    The apply_fast_resolve path already validated the URL and derived the
+    //    filename. We only need the meta-refresh / redirect resolution for URLs
+    //    that might point to HTML interstitials — not for direct file links.
+    if crate::daemon::utils::file_type_from_extension(
+        &plan.url.rsplit('.').next().unwrap_or("").to_lowercase(),
+    ) != "other"
+        || plan.url.ends_with(".exe")
+        || plan.url.ends_with(".zip")
+        || plan.url.ends_with(".pdf")
+    {
+        log::debug!(
+            "resolve_effective_target: skipping preflight for direct file URL {}",
+            plan.url
+        );
+        let preflight = PreflightData {
+            supports_range: true,
+            ..Default::default()
+        };
+        return (plan.url.clone(), true, preflight);
+    }
+
     const MAX_META_REFRESH_HOPS: usize = 5;
     let mut current = plan.url.clone();
     let mut preflight = PreflightData::default();
@@ -1594,12 +1620,14 @@ pub(crate) fn start_curl_process(state: &SharedState, id: &str) {
             run_libcurl_download(&state2, &id2, plan, cancel.clone())
         }));
         match result {
-            // Last-line defence: a transfer whose expected size is known but
-            // which produced a zero-byte file must NEVER be marked completed,
-            // no matter which code path returned Ok.
-            Ok(Ok(0)) if expected_size > 0 => {
+            // Last-line defence: a transfer that produced a zero-byte file must
+            // NEVER be marked completed — regardless of whether expected_size
+            // is known. This catches the case where libcurl silently returned
+            // Ok(0) due to TLS failure, connection drop, or empty response.
+            Ok(Ok(0)) => {
                 log::error!(
-                    "Task {id2}: download produced 0-byte file but {expected_size} bytes were expected; refusing to mark as complete"
+                    "Task {id2}: download produced 0-byte file (expected {}); refusing to mark as complete",
+                    expected_size
                 );
                 if remove_on_error {
                     let _ = std::fs::remove_file(&output_path);
@@ -1608,10 +1636,14 @@ pub(crate) fn start_curl_process(state: &SharedState, id: &str) {
                 mark_curl_task_failed(
                     &state2,
                     &id2,
-                    format!(
-                        "Transfer produced an empty file but {} bytes were expected; refusing to mark the download as complete",
-                        expected_size
-                    ),
+                    if expected_size > 0 {
+                        format!(
+                            "Transfer produced an empty file but {} bytes were expected; refusing to mark the download as complete",
+                            expected_size
+                        )
+                    } else {
+                        "Download produced an empty file (0 bytes). The server may have rejected the request or TLS may have failed.".to_string()
+                    },
                     false,
                     generation,
                 );
