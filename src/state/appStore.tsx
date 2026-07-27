@@ -145,9 +145,7 @@ function EffectsProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const { loggingEnabled, logLevel } = settingsStore.getState().settings.advanced;
     logger.setEnabled(loggingEnabled);
-    if (logLevel === 'debug' || logLevel === 'info' || logLevel === 'error') {
-      logger.setMinLevel(logLevel);
-    }
+    logger.setMinLevel(logLevel);
     logger.info('AppStore', 'Application initialized', {
       loggingEnabled,
       logLevel,
@@ -158,9 +156,7 @@ function EffectsProvider({ children }: { children: ReactNode }) {
       if (state.settings.advanced !== prev.settings.advanced) {
         const { loggingEnabled: en, logLevel: ll } = state.settings.advanced;
         logger.setEnabled(en);
-        if (ll === 'debug' || ll === 'info' || ll === 'error') {
-          logger.setMinLevel(ll);
-        }
+        logger.setMinLevel(ll);
       }
     });
     return unsub;

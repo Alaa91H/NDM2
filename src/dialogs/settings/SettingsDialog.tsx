@@ -38,7 +38,7 @@ export const SettingsDialog: React.FC = () => {
   const payload = isSettingsPayload(dialog.payload) ? dialog.payload : {};
   // Local state for atomic transactions
   const [localSettings, setLocalSettings] = useState<AppSettings>(structuredClone(settings));
-  const [localThemeSettings, setLocalThemeSettings] = useState<AppThemeSettings>(structuredClone(themeSettings));
+  const [, setLocalThemeSettings] = useState<AppThemeSettings>(structuredClone(themeSettings));
   const [activeTab, setActiveTab] = useState<SettingsTabId>(payload.tab || 'general');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -58,10 +58,10 @@ export const SettingsDialog: React.FC = () => {
     });
   };
 
-  const updateLocalThemeSetting = (key: keyof AppThemeSettings, value: unknown) => {
+  const _updateLocalThemeSetting = (key: keyof AppThemeSettings, value: unknown) => {
     setLocalThemeSettings((prev) => {
       const updated = { ...prev, [key]: value };
-      // Apply immediately and silently to global store
+      // Apply immediately and silently to the global store
       updateThemeSettings(key, value as string);
       return updated;
     });

@@ -86,8 +86,10 @@ class Logger {
     const entry: LogEntry = { timestamp: Date.now(), level: 'debug', source, message, data };
     this.push(entry);
     if (data !== undefined) {
+      // eslint-disable-next-line no-console
       console.debug(`[${source}] ${message}`, data);
     } else {
+      // eslint-disable-next-line no-console
       console.debug(`[${source}] ${message}`);
     }
   }
@@ -97,8 +99,10 @@ class Logger {
     const entry: LogEntry = { timestamp: Date.now(), level: 'info', source, message, data };
     this.push(entry);
     if (data !== undefined) {
+      // eslint-disable-next-line no-console
       console.info(`[${source}] ${message}`, data);
     } else {
+      // eslint-disable-next-line no-console
       console.info(`[${source}] ${message}`);
     }
   }

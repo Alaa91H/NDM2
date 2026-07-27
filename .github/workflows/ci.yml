@@ -291,10 +291,10 @@ jobs:
             @{ Name = 'Run tests';                         Outcome = '${{ steps.tests.outcome }}' },
             @{ Name = 'Frontend production build';         Outcome = '${{ steps.fe_build.outcome }}' }
           )
-          "## Validation gates" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-          "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-          "| Gate | Result |" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-          "| --- | --- |" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "## Validation gates" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8NoBOM
+          "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8NoBOM
+          "| Gate | Result |" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8NoBOM
+          "| --- | --- |" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8NoBOM
           $failed = @()
           foreach ($gate in $gates) {
             switch ($gate.Outcome) {
@@ -302,7 +302,7 @@ jobs:
               'failure' { $icon = 'FAIL'; $failed += $gate.Name }
               default   { $icon = 'SKIPPED' }
             }
-            "| $($gate.Name) | $icon |" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            "| $($gate.Name) | $icon |" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8NoBOM
             Write-Host ("{0,-9} {1}" -f $icon, $gate.Name)
           }
           if ($failed.Count -gt 0) {
@@ -459,7 +459,7 @@ jobs:
         run: |
           $cacheDir = Join-Path $env:RUNNER_TEMP 'vcpkg-archives'
           New-Item -ItemType Directory -Force $cacheDir | Out-Null
-          "VCPKG_DEFAULT_BINARY_CACHE=$cacheDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "VCPKG_DEFAULT_BINARY_CACHE=$cacheDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8NoBOM
 
       - name: Cache vcpkg packages
         if: runner.os == 'Windows'
@@ -479,15 +479,15 @@ jobs:
             git clone --depth 1 https://github.com/microsoft/vcpkg $vcpkgRoot
             & "$vcpkgRoot\bootstrap-vcpkg.bat" -disableMetrics
             $env:VCPKG_INSTALLATION_ROOT = $vcpkgRoot
-            "VCPKG_INSTALLATION_ROOT=$vcpkgRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-            "$vcpkgRoot" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+            "VCPKG_INSTALLATION_ROOT=$vcpkgRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8NoBOM
+            "$vcpkgRoot" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8NoBOM
             $env:Path = "$vcpkgRoot;$env:Path"
           }
           $triplet = '${{ matrix.vcpkg_triplet || 'x64-windows-static' }}'
           vcpkg install zlib:$triplet brotli:$triplet zstd:$triplet nghttp2:$triplet libssh2:$triplet curl:$triplet
-          "CMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "VCPKG_TARGET_TRIPLET=$triplet" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "NOVA_LIBCURL_FEATURE_PROFILE=maximum-stable" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8NoBOM
+          "VCPKG_TARGET_TRIPLET=$triplet" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8NoBOM
+          "NOVA_LIBCURL_FEATURE_PROFILE=maximum-stable" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8NoBOM
 
       # ── Linux-specific native deps ──
       - name: Install Linux build dependencies
@@ -574,7 +574,7 @@ jobs:
       - name: Export native curl link environment (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: node scripts/print-native-curl-env.mjs | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+        run: node scripts/print-native-curl-env.mjs | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8NoBOM
 
       - name: Verify native curl manifest
         if: runner.os == 'Windows'

@@ -558,7 +558,9 @@ const LoggingPanel: React.FC<{ settings: AppSettings; updateSetting: Props['upda
 
   useEffect(() => {
     const interval = setInterval(refreshLogs, 1000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+    };
   }, [refreshLogs]);
 
   useEffect(() => {
@@ -571,9 +573,7 @@ const LoggingPanel: React.FC<{ settings: AppSettings; updateSetting: Props['upda
     const loggingEnabled = settings.advanced.loggingEnabled;
     logger.setEnabled(loggingEnabled);
     const logLevel = settings.advanced.logLevel;
-    if (logLevel === 'debug' || logLevel === 'info' || logLevel === 'error') {
-      logger.setMinLevel(logLevel);
-    }
+    logger.setMinLevel(logLevel);
   }, [settings.advanced.loggingEnabled, settings.advanced.logLevel]);
 
   return (
