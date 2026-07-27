@@ -108,7 +108,7 @@ impl ChunkManager {
             .total_size
             .saturating_sub(self.network_samples.len() as u64 * self.current_chunk_bytes / 4);
         let remaining_factor = if remaining > 0 {
-            (remaining as f64 / self.min_chunk as f64).min(1.0).max(0.1)
+            (remaining as f64 / self.min_chunk as f64).clamp(0.1, 1.0)
         } else {
             0.1
         };

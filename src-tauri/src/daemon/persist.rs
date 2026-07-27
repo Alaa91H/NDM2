@@ -48,10 +48,7 @@ pub fn load(data_dir: &str) -> PersistedState {
                 // silently overwriting it on the next save.
                 let backup = path.with_extension("json.corrupt");
                 if let Err(copy_err) = std::fs::copy(&path, &backup) {
-                    log::warn!(
-                        "Failed to back up corrupt state file: {}",
-                        copy_err
-                    );
+                    log::warn!("Failed to back up corrupt state file: {}", copy_err);
                 }
                 PersistedState::default()
             }
@@ -151,8 +148,7 @@ pub fn start_persistence_loop(state: SharedState) {
             tokio::time::sleep(Duration::from_secs(interval)).await;
             if state.persist_dirty.swap(false, Ordering::Relaxed) {
                 let state_clone = state.clone();
-                let result =
-                    tokio::task::spawn_blocking(move || save(&state_clone)).await;
+                let result = tokio::task::spawn_blocking(move || save(&state_clone)).await;
                 // If save failed (or panicked), re-arm the dirty flag so the
                 // next loop iteration retries — otherwise the changed state
                 // would be silently lost forever.
@@ -161,10 +157,7 @@ pub fn start_persistence_loop(state: SharedState) {
                         state.persist_dirty.store(true, Ordering::Relaxed);
                     }
                     Err(join_err) => {
-                        log::error!(
-                            "Persistence task panicked; will retry: {}",
-                            join_err
-                        );
+                        log::error!("Persistence task panicked; will retry: {}", join_err);
                         state.persist_dirty.store(true, Ordering::Relaxed);
                     }
                     _ => {}

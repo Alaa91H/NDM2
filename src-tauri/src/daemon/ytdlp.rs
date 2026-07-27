@@ -721,8 +721,13 @@ pub(crate) fn build_ytdlp_args_with_engines(
     }
     if let Some(cookies_from_browser) = trimmed(&media.cookies_from_browser) {
         // Whitelist safe browser names to prevent arbitrary argument injection.
-        let safe_browsers = ["chrome", "firefox", "edge", "opera", "brave", "vivaldi", "safari", "chromium"];
-        if safe_browsers.iter().any(|b| cookies_from_browser.eq_ignore_ascii_case(b)) {
+        let safe_browsers = [
+            "chrome", "firefox", "edge", "opera", "brave", "vivaldi", "safari", "chromium",
+        ];
+        if safe_browsers
+            .iter()
+            .any(|b| cookies_from_browser.eq_ignore_ascii_case(b))
+        {
             push_arg(&mut args, "--cookies-from-browser", cookies_from_browser);
         }
     }

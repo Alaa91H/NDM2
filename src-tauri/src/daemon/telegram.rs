@@ -508,12 +508,14 @@ pub async fn handle_telegram_send_file(
 
     // Canonicalize FIRST to resolve symlinks before opening the file,
     // preventing TOCTOU symlink swap attacks.
-    let canonical = std::path::PathBuf::from(raw_path).canonicalize().map_err(|_| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"ok": false, "error": "File not found"})),
-        )
-    })?;
+    let canonical = std::path::PathBuf::from(raw_path)
+        .canonicalize()
+        .map_err(|_| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"ok": false, "error": "File not found"})),
+            )
+        })?;
     if !canonical.starts_with(&data_dir) {
         return Ok(Json(
             serde_json::json!({"ok": false, "error": "Access denied: file is outside the data directory"}),

@@ -605,10 +605,16 @@ pub async fn run_scheduler_tick(state: &SharedState) {
                 );
                 let p = priority.parse::<u32>().map_or_else(
                     |_| match priority.to_ascii_lowercase().as_str() {
-                        "critical" | "0" => crate::daemon::engine::priority_queue::DownloadPriority::Critical,
-                        "high" | "1" => crate::daemon::engine::priority_queue::DownloadPriority::High,
+                        "critical" | "0" => {
+                            crate::daemon::engine::priority_queue::DownloadPriority::Critical
+                        }
+                        "high" | "1" => {
+                            crate::daemon::engine::priority_queue::DownloadPriority::High
+                        }
                         "low" | "3" => crate::daemon::engine::priority_queue::DownloadPriority::Low,
-                        "background" | "4" => crate::daemon::engine::priority_queue::DownloadPriority::Background,
+                        "background" | "4" => {
+                            crate::daemon::engine::priority_queue::DownloadPriority::Background
+                        }
                         _ => crate::daemon::engine::priority_queue::DownloadPriority::Normal,
                     },
                     crate::daemon::engine::priority_queue::DownloadPriority::from_u32,

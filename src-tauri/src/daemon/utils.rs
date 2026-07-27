@@ -629,7 +629,7 @@ pub(crate) fn refreshed_url(refresh: String, page_url: &str) -> String {
             page_url
         };
         let clean_refresh = refresh.trim_start_matches('/');
-        return format!("{}{}", base_dir.trim_end_matches('/'), format!("/{}", clean_refresh));
+        return format!("{}/{}", base_dir.trim_end_matches('/'), clean_refresh);
     }
     refresh
 }

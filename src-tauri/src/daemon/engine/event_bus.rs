@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -204,7 +204,10 @@ impl EventBus {
             let mut inner = match self.inner.lock() {
                 Ok(g) => g,
                 Err(_) => {
-                    self.inner.lock().map(|i| i.publishing.store(false, Ordering::Release)).ok();
+                    self.inner
+                        .lock()
+                        .map(|i| i.publishing.store(false, Ordering::Release))
+                        .ok();
                     return;
                 }
             };
@@ -240,7 +243,13 @@ impl EventBus {
         let subscriber_clone = self
             .inner
             .lock()
-            .map(|inner| inner.subscribers.iter().map(|(_, s)| s.clone()).collect::<Vec<_>>())
+            .map(|inner| {
+                inner
+                    .subscribers
+                    .iter()
+                    .map(|(_, s)| s.clone())
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
         for sub in &subscriber_clone {
             let _ = catch_unwind(AssertUnwindSafe(|| sub(&ts_event))).map_err(|e| {

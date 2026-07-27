@@ -110,9 +110,7 @@ impl SelfHealer {
         let recent = self
             .failure_history
             .iter()
-            .filter(|r| {
-                r.timestamp >= window_start && !r.recovery_applied.is_empty()
-            })
+            .filter(|r| r.timestamp >= window_start && !r.recovery_applied.is_empty())
             .count() as u32;
         recent < self.max_recoveries_per_minute
     }

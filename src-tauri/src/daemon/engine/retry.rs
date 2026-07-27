@@ -70,7 +70,7 @@ impl RetryPolicy {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .subsec_nanos();
-            let jitter = (nanos as f64 % jitter_range);
+            let jitter = nanos as f64 % jitter_range;
             Duration::from_secs_f64((capped + jitter).max(0.1))
         } else {
             Duration::from_secs_f64(capped)

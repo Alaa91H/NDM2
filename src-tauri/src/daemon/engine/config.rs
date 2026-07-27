@@ -52,7 +52,7 @@ impl EngineConfig {
         let max_total_connections = (cpus * 4).clamp(4, 128);
 
         let min_segment_bytes = 256 * 1024;
-        let initial_segments = cpus.min(4).max(1);
+        let initial_segments = cpus.clamp(1, 4);
 
         let stall_threshold_ms = 5000;
         let eval_interval_ms = 2000;

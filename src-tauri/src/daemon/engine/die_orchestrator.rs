@@ -47,7 +47,10 @@ impl DieOrchestrator {
                 if p.optimal_connections > 0 {
                     p.optimal_connections
                 } else if p.per_connection_ceiling > 0 {
-                    let target = (p.throughput_ceiling / p.per_connection_ceiling).max(1) as u32;
+                    let target = p
+                        .throughput_ceiling
+                        .checked_div(p.per_connection_ceiling)
+                        .unwrap_or(1) as u32;
                     target.min(max_per_download)
                 } else {
                     requested

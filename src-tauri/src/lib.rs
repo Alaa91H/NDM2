@@ -2,6 +2,7 @@
 // object literal (see daemon::engine_capabilities), which expands past the
 // default macro recursion limit of 128.
 #![recursion_limit = "512"]
+#![allow(dead_code)]
 
 use serde::Serialize;
 use std::net::{IpAddr, TcpListener, TcpStream, ToSocketAddrs};
@@ -307,7 +308,7 @@ fn open_external_url(url: String) -> Result<(), String> {
             .split('.')
             .nth(1)
             .and_then(|s| s.parse::<u8>().ok())
-            .map_or(false, |octet| (16..=31).contains(&octet)),
+            .is_some_and(|octet| (16..=31).contains(&octet)),
         h if h.starts_with("169.254.") => true,
         // Handle IPv6 ULA (fc00::/7), link-local (fe80::/10), loopback (::1)
         h if h.starts_with("fc") || h.starts_with("fd") => true,
