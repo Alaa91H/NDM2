@@ -2,7 +2,7 @@
 // object literal (see daemon::engine_capabilities), which expands past the
 // default macro recursion limit of 128.
 #![recursion_limit = "512"]
-#![allow(dead_code)]
+#![allow(dead_code, unused_imports)]
 
 use serde::Serialize;
 use std::net::{IpAddr, TcpListener, TcpStream, ToSocketAddrs};
