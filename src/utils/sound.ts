@@ -16,7 +16,7 @@ const IDLE_TIMEOUT = 60_000;
 const scheduleIdleClose = () => {
   if (idleTimer) clearTimeout(idleTimer);
   idleTimer = setTimeout(() => {
-    audioContext?.close();
+    void audioContext?.close();
     audioContext = null;
   }, IDLE_TIMEOUT);
 };

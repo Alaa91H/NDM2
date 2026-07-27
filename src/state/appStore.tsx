@@ -324,7 +324,7 @@ function EffectsProvider({ children }: { children: ReactNode }) {
               console.warn('updateTelegramConfig failed', e);
             });
         }, 300);
-        pendingCleanup = () => window.clearTimeout(timer);
+        pendingCleanup = () => { window.clearTimeout(timer); };
       }
     });
     return () => {
@@ -524,7 +524,7 @@ function EffectsProvider({ children }: { children: ReactNode }) {
         if (cd.active && cd.active !== 'activeProgress') return;
         uiStore.getState().openDialog('activeProgress', nextProgressTask);
       }, 0);
-      pendingCleanup = () => window.clearTimeout(timer);
+      pendingCleanup = () => { window.clearTimeout(timer); };
     });
     return () => {
       pendingCleanup?.();

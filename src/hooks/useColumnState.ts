@@ -106,7 +106,7 @@ export function useColumnState() {
   const saveTimers = useRef<{ [key: string]: ReturnType<typeof setTimeout> }>({});
 
   const debouncedSave = useCallback((key: string, value: unknown) => {
-    if (saveTimers.current[key]) clearTimeout(saveTimers.current[key]);
+    clearTimeout(saveTimers.current[key]);
     saveTimers.current[key] = setTimeout(() => {
       localStorage.setItem(key, JSON.stringify(value));
     }, 300);
@@ -114,17 +114,20 @@ export function useColumnState() {
 
   useEffect(() => {
     debouncedSave(STORAGE_KEYS.colWidths, colWidths);
-    return () => { if (saveTimers.current[STORAGE_KEYS.colWidths]) clearTimeout(saveTimers.current[STORAGE_KEYS.colWidths]); };
+    const timers = saveTimers.current;
+    return () => { clearTimeout(timers[STORAGE_KEYS.colWidths]); };
   }, [colWidths, debouncedSave]);
 
   useEffect(() => {
     debouncedSave(STORAGE_KEYS.visibleCols, visibleCols);
-    return () => { if (saveTimers.current[STORAGE_KEYS.visibleCols]) clearTimeout(saveTimers.current[STORAGE_KEYS.visibleCols]); };
+    const timers = saveTimers.current;
+    return () => { clearTimeout(timers[STORAGE_KEYS.visibleCols]); };
   }, [visibleCols, debouncedSave]);
 
   useEffect(() => {
     debouncedSave(STORAGE_KEYS.colOrder, colOrder);
-    return () => { if (saveTimers.current[STORAGE_KEYS.colOrder]) clearTimeout(saveTimers.current[STORAGE_KEYS.colOrder]); };
+    const timers = saveTimers.current;
+    return () => { clearTimeout(timers[STORAGE_KEYS.colOrder]); };
   }, [colOrder, debouncedSave]);
 
   useEffect(() => {

@@ -1,25 +1,23 @@
 import type React from 'react';
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 
 export function useMultiSelection(sortedTaskIds: string[]) {
   const [checkedTaskIds, setCheckedTaskIds] = useState<Set<string>>(new Set());
   const [lastCheckedId, setLastCheckedId] = useState<string | null>(null);
 
-  useEffect(() => {
-    setCheckedTaskIds((prev) => {
-      const valid = new Set(sortedTaskIds);
-      let changed = false;
-      const next = new Set<string>();
-      for (const id of prev) {
-        if (valid.has(id)) next.add(id);
-        else changed = true;
-      }
-      return changed ? next : prev;
-    });
-  }, [sortedTaskIds]);
+  const cleanedCheckedTaskIds = useMemo(() => {
+    const valid = new Set(sortedTaskIds);
+    const next = new Set<string>();
+    let changed = false;
+    for (const id of checkedTaskIds) {
+      if (valid.has(id)) next.add(id);
+      else changed = true;
+    }
+    return changed ? next : checkedTaskIds;
+  }, [sortedTaskIds, checkedTaskIds]);
 
   const handleToggleCheckAll = () => {
-    const isAllChecked = sortedTaskIds.length > 0 && sortedTaskIds.every((id) => checkedTaskIds.has(id));
+    const isAllChecked = sortedTaskIds.length > 0 && sortedTaskIds.every((id) => cleanedCheckedTaskIds.has(id));
     setCheckedTaskIds((prev) => {
       const next = new Set(prev);
       if (isAllChecked) {
@@ -81,7 +79,7 @@ export function useMultiSelection(sortedTaskIds: string[]) {
   );
 
   return {
-    checkedTaskIds,
+    checkedTaskIds: cleanedCheckedTaskIds,
     isAllChecked,
     isSomeChecked,
     handleToggleCheckAll,
