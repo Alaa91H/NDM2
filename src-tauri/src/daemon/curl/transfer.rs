@@ -291,6 +291,11 @@ fn merge_parts(output_path: &Path, ranges: &[ByteRange]) -> Result<u64, String> 
 }
 
 fn resolve_effective_target(plan: &DirectDownloadPlan) -> (String, bool, PreflightData) {
+    log::info!(
+        "resolve_effective_target: url={}, total_size={}",
+        plan.url,
+        plan.total_size
+    );
     // ── Fast path: skip the preflight HTTP request entirely for direct file
     //    URLs that already have a recognizable extension. The probe was adding
     //    5+ seconds of latency before every download start, and if libcurl's TLS
@@ -317,6 +322,10 @@ fn resolve_effective_target(plan: &DirectDownloadPlan) -> (String, bool, Preflig
         return (plan.url.clone(), true, preflight);
     }
 
+    log::info!(
+        "resolve_effective_target: no known extension — running preflight HEAD/GET for {}",
+        plan.url
+    );
     const MAX_META_REFRESH_HOPS: usize = 5;
     let mut current = plan.url.clone();
     let mut preflight = PreflightData::default();
@@ -327,11 +336,21 @@ fn resolve_effective_target(plan: &DirectDownloadPlan) -> (String, bool, Preflig
 
         let mut easy = Easy2::new(HtmlHeadCapture::default());
         if apply_easy_options(&mut easy, &hop_plan, Some((0, 0))).is_err() {
+            log::warn!(
+                "resolve_effective_target: apply_easy_options failed for hop, returning current={}",
+                current
+            );
             return (current, true, preflight);
         }
         let _ = easy.timeout(Duration::from_secs(5));
 
-        if easy.perform().is_err() {
+        if let Err(e) = easy.perform() {
+            log::warn!(
+                "resolve_effective_target: preflight perform failed for {}: {}, returning current={}",
+                current,
+                e,
+                current
+            );
             return (current, true, preflight);
         }
 
@@ -487,58 +506,6 @@ fn update_curl_task_progress(
     }
 }
 
-fn update_single_progress(
-    state: &SharedState,
-    id: &str,
-    path: &Path,
-    total_size: u64,
-    last_total: &mut u64,
-    last_tick: &mut Instant,
-) {
-    let downloaded = FileWriter::current_size(path);
-    let now = Instant::now();
-    let elapsed = now.duration_since(*last_tick).as_secs_f64().max(0.001);
-    let speed = downloaded.saturating_sub(*last_total) as f64 / elapsed;
-    *last_total = downloaded;
-    *last_tick = now;
-
-    let speed_u64 = speed.max(0.0) as u64;
-
-    state.bandwidth_manager.report_speed(id, speed_u64);
-
-    if let Ok(trackers) = state.engine_trackers.lock() {
-        if let Some(tracker) = trackers.get(id) {
-            tracker.adaptive.report_speed(speed_u64);
-        }
-    }
-
-    let mut jobs = lock_or_err!(state.curl_jobs);
-    if let Some(job) = jobs.get_mut(id) {
-        job.task.downloaded_bytes = downloaded;
-        if total_size > 0 {
-            job.task.size_bytes = total_size;
-        }
-        job.task.speed_bytes_per_sec = speed.max(0.0) as u64;
-        job.task.elapsed_seconds = job.start_time.elapsed().as_secs();
-        job.task.time_left_seconds = if speed > 0.0 && job.task.size_bytes > downloaded {
-            ((job.task.size_bytes - downloaded) as f64 / speed).ceil() as u64
-        } else {
-            0
-        };
-        job.task.segments = build_segments(
-            1,
-            job.task.size_bytes,
-            downloaded,
-            true,
-            job.task.speed_bytes_per_sec,
-        );
-        let task = job.task.clone();
-        drop(jobs);
-        lock_or_err!(state.task_snapshot).insert(id.to_string(), task);
-        state.mark_dirty();
-    }
-}
-
 /// HTTP(S) transfers always yield a non-zero response code after a
 /// successful perform. Other protocols (FTP/SFTP/SCP/...) legitimately
 /// report response_code()==0 even on success, so the "no response" guards
@@ -593,6 +560,13 @@ fn run_single_libcurl(
     retry_after: Arc<AtomicU64>,
     streaming_digest_out: Arc<Mutex<Option<String>>>,
 ) -> Result<TransferOutcome, String> {
+    log::info!(
+        "Task {id}: run_single_libcurl starting — url={}, total_size={}, resumable={}, output={}",
+        plan.url,
+        plan.total_size,
+        plan.resumable,
+        plan.output_path.display()
+    );
     FileWriter::ensure_parent(&plan.output_path)?;
     if plan.config.bool_("skipExisting") == Some(true) && plan.output_path.exists() {
         // Only honour skipExisting when the file on disk is plausibly the
@@ -650,9 +624,11 @@ fn run_single_libcurl(
     } else {
         0
     };
+    let on_disk_before = FileWriter::current_size(&plan.output_path);
     let capture = Arc::new(Mutex::new(ResponseCapture::default()));
+    let downloaded_counter = Arc::new(AtomicU64::new(0));
     let progress = SegmentProgress {
-        downloaded: Arc::new(AtomicU64::new(0)),
+        downloaded: downloaded_counter.clone(),
         abort: cancel.clone(),
         retry_after: retry_after.clone(),
         capture: capture.clone(),
@@ -687,18 +663,44 @@ fn run_single_libcurl(
     };
     let handle = guard.add2(easy)?;
     let handles = vec![handle];
-    let mut last_total = FileWriter::current_size(&plan.output_path);
+    let mut last_total = on_disk_before;
     let mut last_tick = Instant::now();
+    let downloaded_for_tick = downloaded_counter.clone();
     let mut tick = || {
-        update_single_progress(
-            state,
-            id,
-            &plan.output_path,
-            plan.total_size,
-            &mut last_total,
-            &mut last_tick,
-        )
+        let counter_bytes = downloaded_for_tick.load(Ordering::Relaxed);
+        let disk_bytes = FileWriter::current_size(&plan.output_path);
+        let effective_downloaded =
+            on_disk_before + counter_bytes.max(disk_bytes.saturating_sub(on_disk_before));
+        let now = Instant::now();
+        let elapsed = now.duration_since(last_tick).as_secs_f64().max(0.001);
+        let speed = effective_downloaded.saturating_sub(last_total) as f64 / elapsed;
+        last_total = effective_downloaded;
+        last_tick = now;
+
+        let speed_u64 = speed.max(0.0) as u64;
+        state.bandwidth_manager.report_speed(id, speed_u64);
+
+        let mut jobs = lock_or_err!(state.curl_jobs);
+        if let Some(job) = jobs.get_mut(id) {
+            job.task.downloaded_bytes = effective_downloaded;
+            job.task.size_bytes = plan.total_size;
+            job.task.speed_bytes_per_sec = speed_u64;
+            job.task.elapsed_seconds = job.start_time.elapsed().as_secs();
+            job.task.time_left_seconds = if speed > 0.0 && plan.total_size > effective_downloaded {
+                ((plan.total_size - effective_downloaded) as f64 / speed).ceil() as u64
+            } else {
+                0
+            };
+            let task = job.task.clone();
+            drop(jobs);
+            lock_or_err!(state.task_snapshot).insert(id.to_string(), task);
+            state.mark_dirty();
+        }
     };
+    log::info!(
+        "Task {id}: starting curl multi drive loop (on_disk_before={on_disk_before}, preallocate={:?})",
+        preallocate
+    );
     if let Some(runtime) = socket_runtime.as_mut() {
         drive_multi_socket(
             guard.multi(),
@@ -714,6 +716,7 @@ fn run_single_libcurl(
     let response = handles[0]
         .response_code()
         .map_err(|e| format!("Could not read HTTP response code: {e}"))?;
+    log::info!("Task {id}: curl transfer finished — HTTP response={response}");
     if response == 304 {
         // 304 Not Modified is only a valid completion when the local file
         // actually holds the (unchanged) object. If the partial file is
@@ -805,8 +808,16 @@ fn run_single_libcurl(
     // This guard applies only to HTTP-family URLs: FTP/SFTP/SCP transfers
     // legitimately report response_code()==0 on success.
     if response == 0 && is_http_family(&plan.url) {
-        let downloaded = FileWriter::current_size(&plan.output_path);
-        if downloaded == 0 {
+        // Use the atomic counter (actual curl-written bytes) NOT file size,
+        // because preallocated files inflate FileWriter::current_size() and
+        // mask a zero-byte transfer as "complete".
+        let curl_written = downloaded_counter.load(Ordering::Relaxed);
+        log::warn!(
+            "Task {id}: HTTP response=0 — curl_written={curl_written}, on_disk={}, total_size={}",
+            FileWriter::current_size(&plan.output_path),
+            plan.total_size
+        );
+        if curl_written == 0 {
             return Err(
                 "Transfer failed: no HTTP response received (DNS, connection, or TLS error). \
                  The download engine could not reach the server."
@@ -815,19 +826,19 @@ fn run_single_libcurl(
         }
         // Partial data was received but the connection dropped before a complete
         // response. Treat this as an error so retry logic can kick in.
-        if plan.total_size > 0 && downloaded < plan.total_size {
+        if plan.total_size > 0 && curl_written < plan.total_size {
             return Err(format!(
                 "Transfer interrupted: received {} of {} bytes before connection lost (HTTP response code: 0)",
-                downloaded, plan.total_size
+                curl_written, plan.total_size
             ));
         }
         // Unknown-size HTTP transfer whose connection dropped mid-body: with
         // no Content-Length there is no way to prove completeness. Fail
         // loudly so the user can retry instead of trusting a truncated file.
-        if plan.total_size == 0 && downloaded > 0 {
+        if plan.total_size == 0 && curl_written > 0 {
             return Err(format!(
                 "Transfer ended without an HTTP response after {} bytes; the file may be incomplete",
-                downloaded
+                curl_written
             ));
         }
     }
@@ -1153,6 +1164,13 @@ fn run_libcurl_download(
     mut plan: DirectDownloadPlan,
     cancel: Arc<AtomicBool>,
 ) -> Result<u64, String> {
+    log::info!(
+        "Task {id}: run_libcurl_download entered — url={}, total_size={}, segmented={}, output={}",
+        plan.url,
+        plan.total_size,
+        plan.segmented,
+        plan.output_path.display()
+    );
     let retry_policy = plan.config.retry_policy();
     let start_time = std::time::Instant::now();
     let mut last_error = String::new();
