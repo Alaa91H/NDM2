@@ -673,9 +673,11 @@ fn curl_key_supported(
         | "userAgent" | "referer" | "headers" | "cookies" | "cookieJar"
         | "username" | "password" | "authType" | "oauth2Bearer"
         | "netrc" | "netrcOptional" | "netrcFile" | "unrestrictedAuth"
-        // Speed / retry (note: retryCount/retryDelaySec/retryMaxTimeSec are
-        // only wired in the CLI-args fallback path, NOT in libcurl-multi)
+        // Speed / retry (consumed by Rust RetryPolicy)
         | "speedLimitKbs" | "speedLimitBytes" | "rate" | "lowSpeedLimitBytes" | "speedTimeSec"
+        | "retryCount" | "retryDelaySec" | "retryMaxTimeSec"
+        | "retryAllErrors" | "retryConnRefused" | "backoffMultiplier"
+        | "retryMaxDelaySec" | "retryJitter"
         // Timeouts / limits
         | "timeoutSec" | "connectTimeoutSec" | "maxRedirs" | "maxFilesize"
         // Range / conditional
@@ -683,7 +685,7 @@ fn curl_key_supported(
         // File handling
         | "removeOnError" | "allowOverwrite" | "location" | "failWithBody"
         // HTTP method / body
-        | "httpVersion" | "requestMethod" | "data"
+        | "httpVersion" | "requestMethod" | "data" | "form"
         | "transferEncoding" | "http09Allowed" | "expect100TimeoutMs"
         // Compression
         | "compressed"
@@ -753,6 +755,7 @@ fn curl_key_supported(
         "maxFilesize" => has_flag(flags, "--max-filesize"),
         "range" => has_flag(flags, "--range"),
         "timeCond" => has_flag(flags, "--time-cond"),
+        "timeValue" => true,
         "remoteTime" => has_flag(flags, "--remote-time"),
         "skipExisting" => true,
         "removeOnError" => has_flag(flags, "--remove-on-error"),
@@ -831,7 +834,12 @@ fn curl_key_supported(
         "dohSslVerifyPeer" | "dohSslVerifyHost" => has_feature(features, "ssl"),
         // TCP / connection pool
         "freshConnect" | "forbidReuse" | "maxAgeConn" => true,
-        "retryConnRefused" => has_flag(flags, "--retry-connrefused"),
+        "retryConnRefused" => true,
+        // Retry options consumed by Rust RetryPolicy (no curl CLI flag needed)
+        "retryCount" | "retryDelaySec" | "retryMaxTimeSec" | "retryAllErrors"
+        | "backoffMultiplier" | "retryMaxDelaySec" | "retryJitter" => true,
+        // Multipart form data (core libcurl feature)
+        "form" => true,
         "dnsCacheTimeoutSec" => true,
         "bufferSize" => true,
         "rawOptions" => false,

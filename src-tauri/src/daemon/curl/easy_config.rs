@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use ::curl::easy::{
-    Auth, Easy2, Handler, HttpVersion, IpResolve, List, NetRc, ProxyType, SslOpt, SslVersion,
+    Auth, Easy2, Form, Handler, HttpVersion, IpResolve, List, NetRc, ProxyType, SslOpt, SslVersion,
     TimeCondition, WriteError,
 };
 
@@ -742,6 +742,27 @@ pub(crate) fn apply_easy_options<H: Handler>(
     if let Some(post_data) = plan.config.str_("data") {
         easy.post_fields_copy(post_data.as_bytes())
             .map_err(|e| format!("Could not configure POST data: {e}"))?;
+    }
+    if !plan.config.form.is_empty() {
+        let mut form = Form::new();
+        for entry in &plan.config.form {
+            if let Some((name, value)) = entry.split_once('=') {
+                if value.starts_with('@') {
+                    let file_path = value.strip_prefix('@').unwrap_or(value);
+                    let mut part = form.part(name);
+                    part.file_content(file_path);
+                    part.add()
+                        .map_err(|e| format!("Could not add form file part '{}': {}", name, e))?;
+                } else {
+                    let mut part = form.part(name);
+                    part.contents(value.as_bytes());
+                    part.add()
+                        .map_err(|e| format!("Could not add form field '{}': {}", name, e))?;
+                }
+            }
+        }
+        easy.httppost(form)
+            .map_err(|e| format!("Could not configure multipart form data: {e}"))?;
     }
     if let Some(time_cond) = plan.config.str_("timeCond") {
         let lower = time_cond.to_ascii_lowercase();
