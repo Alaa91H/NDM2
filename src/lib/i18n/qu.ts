@@ -1229,4 +1229,15 @@ export const qu: Record<string, string> = {
   'rename_btn': 'Rename',
   'rename_invalid_chars': 'The name contains characters that are not allowed: / \\ : * ? " < > |',
   'redownload_confirm': 'Re-download "{name}" from the beginning? The existing file will be replaced.',
+
+  'settings_logging_title': 'Application Logging',
+  'settings_logging_enable': 'Enable comprehensive logging',
+  'settings_logging_desc': 'When enabled, all frontend operations are logged with timestamps, source, and level. Logs are kept in memory (2000 entries max). This helps diagnose download issues, API errors, and connection problems. Only error-level logs are always captured regardless of this setting.',
+  'settings_logging_all_levels': 'All Levels',
+  'settings_logging_filter_source': 'Filter by source...',
+  'settings_logging_clear': 'Clear',
+  'settings_logging_refresh': 'Refresh',
+  'settings_logging_autoscroll': 'Auto-scroll',
+  'settings_logging_buffer': 'Buffer',
+  'settings_logging_empty': 'No log entries yet. Logs appear when the application performs actions.',
 };
