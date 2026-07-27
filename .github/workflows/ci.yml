@@ -277,39 +277,39 @@ jobs:
 
       - name: Summarize validation gates
         if: always()
-        shell: pwsh
         run: |
-          $gates = @(
-            @{ Name = 'Final source audit';                Outcome = '${{ steps.audit_final.outcome }}' },
-            @{ Name = 'Browser extension typecheck';       Outcome = '${{ steps.ext_typecheck.outcome }}' },
-            @{ Name = 'Browser extension release checks';  Outcome = '${{ steps.ext_release_checks.outcome }}' },
-            @{ Name = 'Browser extension production build'; Outcome = '${{ steps.ext_build.outcome }}' },
-            @{ Name = 'Synchronize translation indexes';   Outcome = '${{ steps.i18n_sync.outcome }}' },
-            @{ Name = 'Validate translations';             Outcome = '${{ steps.i18n_validate.outcome }}' },
-            @{ Name = 'TypeScript check';                  Outcome = '${{ steps.ts_check.outcome }}' },
-            @{ Name = 'ESLint';                            Outcome = '${{ steps.eslint.outcome }}' },
-            @{ Name = 'Run tests';                         Outcome = '${{ steps.tests.outcome }}' },
-            @{ Name = 'Frontend production build';         Outcome = '${{ steps.fe_build.outcome }}' }
+          echo "## Validation gates" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Gate | Result |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| --- | --- |" >> "$GITHUB_STEP_SUMMARY"
+          failed=""
+          declare -A gates=(
+            ["Final source audit"]="${{ steps.audit_final.outcome }}"
+            ["Browser extension typecheck"]="${{ steps.ext_typecheck.outcome }}"
+            ["Browser extension release checks"]="${{ steps.ext_release_checks.outcome }}"
+            ["Browser extension production build"]="${{ steps.ext_build.outcome }}"
+            ["Synchronize translation indexes"]="${{ steps.i18n_sync.outcome }}"
+            ["Validate translations"]="${{ steps.i18n_validate.outcome }}"
+            ["TypeScript check"]="${{ steps.ts_check.outcome }}"
+            ["ESLint"]="${{ steps.eslint.outcome }}"
+            ["Run tests"]="${{ steps.tests.outcome }}"
+            ["Frontend production build"]="${{ steps.fe_build.outcome }}"
           )
-          "## Validation gates" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8NoBOM
-          "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8NoBOM
-          "| Gate | Result |" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8NoBOM
-          "| --- | --- |" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8NoBOM
-          $failed = @()
-          foreach ($gate in $gates) {
-            switch ($gate.Outcome) {
-              'success' { $icon = 'PASS' }
-              'failure' { $icon = 'FAIL'; $failed += $gate.Name }
-              default   { $icon = 'SKIPPED' }
-            }
-            "| $($gate.Name) | $icon |" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8NoBOM
-            Write-Host ("{0,-9} {1}" -f $icon, $gate.Name)
-          }
-          if ($failed.Count -gt 0) {
-            Write-Error "Validation failed after collecting all gates. Failed gate(s): $($failed -join ', ')"
+          for name in "Final source audit" "Browser extension typecheck" "Browser extension release checks" "Browser extension production build" "Synchronize translation indexes" "Validate translations" "TypeScript check" "ESLint" "Run tests" "Frontend production build"; do
+            outcome="${gates[$name]}"
+            case "$outcome" in
+              success) icon="PASS" ;;
+              failure) icon="FAIL"; failed="$failed $name" ;;
+              *)       icon="SKIPPED" ;;
+            esac
+            printf "| %s | %s |\n" "$name" "$icon" >> "$GITHUB_STEP_SUMMARY"
+            printf "%-9s %s\n" "$icon" "$name"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::Validation failed. Failed gate(s):$failed"
             exit 1
-          }
-          Write-Host 'All validation gates passed.'
+          fi
+          echo "All validation gates passed."
 
   # ─────────────────────────────────────────────────────────────────────────
   # E2E Tests (PR only)
