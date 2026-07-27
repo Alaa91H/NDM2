@@ -1,9 +1,22 @@
 import type React from 'react';
-import { useState } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 
 export function useMultiSelection(sortedTaskIds: string[]) {
   const [checkedTaskIds, setCheckedTaskIds] = useState<Set<string>>(new Set());
   const [lastCheckedId, setLastCheckedId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setCheckedTaskIds((prev) => {
+      const valid = new Set(sortedTaskIds);
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (valid.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [sortedTaskIds]);
 
   const handleToggleCheckAll = () => {
     const isAllChecked = sortedTaskIds.length > 0 && sortedTaskIds.every((id) => checkedTaskIds.has(id));
@@ -18,9 +31,9 @@ export function useMultiSelection(sortedTaskIds: string[]) {
     });
   };
 
-  const selectAll = () => {
+  const selectAll = useCallback(() => {
     setCheckedTaskIds(new Set(sortedTaskIds));
-  };
+  }, [sortedTaskIds]);
 
   const handleToggleCheckTask = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -58,8 +71,14 @@ export function useMultiSelection(sortedTaskIds: string[]) {
     setCheckedTaskIds(new Set());
   };
 
-  const isAllChecked = sortedTaskIds.length > 0 && sortedTaskIds.every((id) => checkedTaskIds.has(id));
-  const isSomeChecked = sortedTaskIds.length > 0 && !isAllChecked && sortedTaskIds.some((id) => checkedTaskIds.has(id));
+  const isAllChecked = useMemo(
+    () => sortedTaskIds.length > 0 && sortedTaskIds.every((id) => checkedTaskIds.has(id)),
+    [sortedTaskIds, checkedTaskIds],
+  );
+  const isSomeChecked = useMemo(
+    () => sortedTaskIds.length > 0 && !isAllChecked && sortedTaskIds.some((id) => checkedTaskIds.has(id)),
+    [sortedTaskIds, checkedTaskIds, isAllChecked],
+  );
 
   return {
     checkedTaskIds,

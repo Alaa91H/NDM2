@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 pub mod error_intel;
 pub mod http_probe;
 pub mod plan_builder;
@@ -185,8 +183,12 @@ fn build_probe_client(state: &SharedState, body: Option<&CreateDownloadBody>) ->
     let mut builder = reqwest::Client::builder();
     if let Some(opts) = body.and_then(|b| b.direct_options.as_ref()) {
         if let Some(proxy) = opts.get("proxy").and_then(|v| v.as_str()) {
-            if let Ok(proxy) = reqwest::Proxy::all(proxy) {
-                builder = builder.proxy(proxy);
+            if crate::daemon::utils::validate_proxy_url(proxy).is_ok() {
+                if let Ok(proxy) = reqwest::Proxy::all(proxy) {
+                    builder = builder.proxy(proxy);
+                }
+            } else {
+                log::warn!("Rejected potentially unsafe proxy URL: {}", proxy);
             }
         }
         if let Some(source) = opts

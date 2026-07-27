@@ -141,9 +141,9 @@ fn is_safe_extra_arg(arg: &str) -> bool {
     }) {
         return false;
     }
-    // Non-flag args (no leading `-`) are allowed as values for preceding flags
+    // Reject path traversal in ALL non-flag args (values for preceding flags like --cookies)
     if !arg.starts_with('-') {
-        return true;
+        return !arg.contains("..");
     }
     // For flags, only allow known-safe ones (whitelist approach)
     if let Some(allowed) = ALLOWED_YTDLP_ARGS
@@ -316,6 +316,7 @@ pub fn start_ytdlp_process(state: &SharedState, id: &str) {
                     j.task.status = "error".to_string();
                     j.task.error_message = Some(format!("Failed to start: {}", e));
                 }
+                state.mark_dirty();
             }
         }
     }
@@ -719,7 +720,11 @@ pub(crate) fn build_ytdlp_args_with_engines(
         push_cookie_args(&mut args, cookies);
     }
     if let Some(cookies_from_browser) = trimmed(&media.cookies_from_browser) {
-        push_arg(&mut args, "--cookies-from-browser", cookies_from_browser);
+        // Whitelist safe browser names to prevent arbitrary argument injection.
+        let safe_browsers = ["chrome", "firefox", "edge", "opera", "brave", "vivaldi", "safari", "chromium"];
+        if safe_browsers.iter().any(|b| cookies_from_browser.eq_ignore_ascii_case(b)) {
+            push_arg(&mut args, "--cookies-from-browser", cookies_from_browser);
+        }
     }
     if let Some(ua) = trimmed(&media.user_agent) {
         push_arg(&mut args, "--user-agent", ua);
@@ -792,11 +797,17 @@ pub(crate) fn build_ytdlp_args_with_engines(
             push_string_arg(&mut args, "--downloader", Some(&value))?;
         }
     }
-    push_string_arg(
-        &mut args,
-        "--downloader-args",
-        trimmed(&media.external_downloader_args),
-    )?;
+    // Filter --downloader-args to prevent command injection through external
+    // downloaders (ffmpeg can execute arbitrary commands via filter syntax).
+    if let Some(dl_args) = trimmed(&media.external_downloader_args) {
+        let has_danger = dl_args
+            .chars()
+            .any(|c| matches!(c, ';' | '|' | '&' | '$' | '`' | '\n' | '\r'));
+        if has_danger {
+            return Err("downloader-args contain unsafe characters".to_string());
+        }
+        push_string_arg(&mut args, "--downloader-args", Some(dl_args))?;
+    }
     push_string_arg(
         &mut args,
         "--download-archive",
@@ -917,6 +928,11 @@ pub async fn create_ytdlp_task(
     let url = body.url.as_deref().unwrap_or("");
     let name = body.name.clone().unwrap_or_else(|| "media".to_string());
     let id = Uuid::new_v4().to_string();
+
+    // Block internal/loopback targets to prevent SSRF (matches curl engine path).
+    if !url.is_empty() {
+        crate::daemon::utils::is_safe_target_url(url)?;
+    }
 
     // Enforce maximum task limit to prevent memory exhaustion
     if lock_or_err!(state.task_snapshot).len() >= 10_000 {

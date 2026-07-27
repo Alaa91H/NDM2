@@ -78,11 +78,45 @@ fn run_version_check(tool: &dyn ExternalTool, path: &std::path::Path) -> Result<
 
     let mut cmd = Command::new(path);
     cmd.args(args);
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
     hide_command_window(&mut cmd);
 
-    let output = cmd
-        .output()
+    let mut child = cmd
+        .spawn()
         .map_err(|e| format!("Failed to execute {}: {}", path.display(), e))?;
+
+    let deadline = Instant::now() + timeout;
+
+    let output = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                use std::io::Read;
+                let mut stdout_buf = Vec::new();
+                let mut stderr_buf = Vec::new();
+                if let Some(ref mut h) = child.stdout {
+                    let _ = h.read_to_end(&mut stdout_buf);
+                }
+                if let Some(ref mut h) = child.stderr {
+                    let _ = h.read_to_end(&mut stderr_buf);
+                }
+                break std::process::Output {
+                    status,
+                    stdout: stdout_buf,
+                    stderr: stderr_buf,
+                };
+            }
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!("Version check timed out after {:?}", timeout));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => return Err(format!("Version check failed: {}", e)),
+        }
+    };
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -96,21 +130,12 @@ fn run_version_check(tool: &dyn ExternalTool, path: &std::path::Path) -> Result<
         return Err("Version command returned empty output".to_string());
     }
 
-    let _ = timeout;
     Ok(stdout)
 }
 
 pub fn probe_capabilities(tool: &dyn ExternalTool, path: &std::path::Path) -> Vec<String> {
-    let all_caps = tool.capabilities();
-    let mut available = Vec::new();
-
-    for cap in &all_caps {
-        available.push(cap.id.clone());
+    if !path.exists() {
+        return Vec::new();
     }
-
-    if !path.exists() || !available.is_empty() {
-        return available;
-    }
-
-    available
+    tool.capabilities().into_iter().map(|c| c.id).collect()
 }

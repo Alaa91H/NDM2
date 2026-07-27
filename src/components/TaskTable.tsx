@@ -141,21 +141,35 @@ export const TaskTable: React.FC = () => {
         },
       });
     }
-    opts.push({
-      id: 'redownload',
-      label: t('menu_redownload'),
-      icon: <RefreshCw className="w-3.5 h-3.5" />,
-      disabled: isActive,
-      onClick: () => {
-        openDialog('genericConfirm', {
-          message: t('redownload_confirm', { name: task.name }),
-          isDanger: false,
-          onConfirm: () => {
-            void redownloadTask(task.id);
-          },
-        });
-      },
-    });
+    // Redownload: restart the download from scratch (IDM "Download again")
+    // For completed/error tasks: immediate redownload (no confirmation, never disabled)
+    // For other statuses: confirmation dialog, disabled when active
+    if (task.status === 'completed' || task.status === 'error') {
+      opts.push({
+        id: 'redownload',
+        label: t('menu_redownload'),
+        icon: <RefreshCw className="w-3.5 h-3.5" />,
+        onClick: () => {
+          void redownloadTask(task.id);
+        },
+      });
+    } else {
+      opts.push({
+        id: 'redownload',
+        label: t('menu_redownload'),
+        icon: <RefreshCw className="w-3.5 h-3.5" />,
+        disabled: isActive,
+        onClick: () => {
+          openDialog('genericConfirm', {
+            message: t('redownload_confirm', { name: task.name }),
+            isDanger: false,
+            onConfirm: () => {
+              void redownloadTask(task.id);
+            },
+          });
+        },
+      });
+    }
     opts.push({
       id: 'updateLink',
       label: t('action_update_link'),
@@ -190,17 +204,6 @@ export const TaskTable: React.FC = () => {
         void writeClipboardText(task.url).catch(() => {});
       },
     });
-    // Redownload: restart the download from scratch (IDM "Download again")
-    if (task.status === 'completed' || task.status === 'error') {
-      opts.push({
-        id: 'redownload',
-        label: t('menu_redownload'),
-        icon: <RefreshCw className="w-3.5 h-3.5" />,
-        onClick: () => {
-          void redownloadTask(task.id);
-        },
-      });
-    }
     // Refresh URL: open the source URL in the system browser to capture a
     // fresh link (useful when the download URL has expired or needs a new
     // session token). The browser extension captures the new URL automatically.
@@ -439,7 +442,7 @@ export const TaskTable: React.FC = () => {
                 <Sliders className="w-3.5 h-3.5" />
               </button>
 
-              {/* Column Config Panel — anchored to this button */}
+              {/* Column Config Panel ï¿½ anchored to this button */}
               {showColConfig && (
                 <div ref={colConfigRef} className="absolute top-full ltr:right-0 rtl:left-0 z-30 mt-1">
                   <ColumnConfigPanel

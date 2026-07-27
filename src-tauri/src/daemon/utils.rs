@@ -617,16 +617,66 @@ pub(crate) fn decode_html_entities(s: &str) -> String {
 /// Resolve a meta-refresh redirect URL relative to the page URL if needed.
 pub(crate) fn refreshed_url(refresh: String, page_url: &str) -> String {
     if refresh.starts_with("http://") || refresh.starts_with("https://") {
-        refresh
-    } else if let Some(base) = page_url.rsplit_once('/') {
-        format!(
-            "{}/{}",
-            base.0.trim_end_matches('/'),
-            refresh.trim_start_matches('/')
-        )
-    } else {
-        refresh
+        return refresh;
     }
+    // Find the authority+path portion after "scheme://"
+    if let Some(scheme_end) = page_url.find("://") {
+        let authority_path = &page_url[scheme_end + 3..];
+        // Get the directory portion of the path (everything up to last /)
+        let base_dir = if let Some(pos) = authority_path.rfind('/') {
+            &page_url[..scheme_end + 3 + pos + 1]
+        } else {
+            page_url
+        };
+        let clean_refresh = refresh.trim_start_matches('/');
+        return format!("{}{}", base_dir.trim_end_matches('/'), format!("/{}", clean_refresh));
+    }
+    refresh
+}
+
+/// Validate that a proxy URL does not target internal/private networks (SSRF).
+/// Blocks localhost, loopback, private ranges, link-local, and multicast.
+pub fn validate_proxy_url(proxy_url: &str) -> Result<(), String> {
+    let url = proxy_url.trim();
+    if url.is_empty() {
+        return Err("Proxy URL is empty".to_string());
+    }
+    let without_scheme = url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_start_matches("socks4://")
+        .trim_start_matches("socks4a://")
+        .trim_start_matches("socks5://")
+        .trim_start_matches("socks5h://");
+    let authority = without_scheme.split('/').next().unwrap_or("");
+    if authority.contains('@') {
+        return Err("Proxy URL contains userinfo (e.g. user@host)".to_string());
+    }
+    let host = authority.split(':').next().unwrap_or("");
+    if host.is_empty() || host == "localhost" {
+        return Err("Proxy targets localhost".to_string());
+    }
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if is_internal_ip(ip) {
+            return Err(format!("Proxy targets internal IP {}", ip));
+        }
+        return Ok(());
+    }
+    // Resolve hostname and check all resolved addresses
+    let addr_str = format!("{}:443", host);
+    let addrs = addr_str
+        .to_socket_addrs()
+        .map_err(|e| format!("Could not resolve proxy host '{}': {}", host, e))?;
+    for addr in addrs {
+        if is_internal_ip(addr.ip()) {
+            return Err(format!(
+                "Proxy host '{}' resolves to internal IP {}",
+                host,
+                addr.ip()
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

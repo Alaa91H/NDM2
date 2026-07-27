@@ -1,4 +1,3 @@
-#![allow(dead_code, clippy::manual_checked_ops, clippy::manual_clamp)]
 use std::sync::OnceLock;
 use std::time::Duration;
 

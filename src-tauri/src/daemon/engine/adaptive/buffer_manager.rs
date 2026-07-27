@@ -1,4 +1,3 @@
-#![allow(dead_code, clippy::identity_op)]
 use std::time::{Duration, Instant};
 
 use crate::daemon::engine::config::global_config;

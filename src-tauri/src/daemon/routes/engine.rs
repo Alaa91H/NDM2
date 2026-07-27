@@ -118,7 +118,8 @@ pub async fn handle_engine_events(
     let count = params
         .get("count")
         .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(100);
+        .unwrap_or(100)
+        .min(1000);
     let events = state.event_bus.recent_events(count);
     let serialized: Vec<serde_json::Value> = events
         .into_iter()
@@ -552,6 +553,22 @@ pub async fn handle_scheduler_update(
     Json(serde_json::json!({"ok": true, "rule_id": rule_id}))
 }
 
+#[derive(Deserialize)]
+pub struct PowerCommandsBody {
+    enabled: bool,
+}
+
+pub async fn handle_scheduler_power_commands(
+    State(state): State<SharedState>,
+    Json(body): Json<PowerCommandsBody>,
+) -> Json<serde_json::Value> {
+    state.scheduler.set_power_commands_enabled(body.enabled);
+    Json(serde_json::json!({
+        "ok": true,
+        "powerCommandsEnabled": state.scheduler.power_commands_enabled(),
+    }))
+}
+
 /// Periodic scheduler tick: evaluate all rules and apply triggered actions.
 pub async fn run_scheduler_tick(state: &SharedState) {
     let active_count = {
@@ -586,12 +603,29 @@ pub async fn run_scheduler_tick(state: &SharedState) {
                     task_ids.len(),
                     priority
                 );
+                let p = priority.parse::<u32>().map_or_else(
+                    |_| match priority.to_ascii_lowercase().as_str() {
+                        "critical" | "0" => crate::daemon::engine::priority_queue::DownloadPriority::Critical,
+                        "high" | "1" => crate::daemon::engine::priority_queue::DownloadPriority::High,
+                        "low" | "3" => crate::daemon::engine::priority_queue::DownloadPriority::Low,
+                        "background" | "4" => crate::daemon::engine::priority_queue::DownloadPriority::Background,
+                        _ => crate::daemon::engine::priority_queue::DownloadPriority::Normal,
+                    },
+                    crate::daemon::engine::priority_queue::DownloadPriority::from_u32,
+                );
+                for tid in &task_ids {
+                    state.priority_queue.set_priority(tid, p);
+                }
             }
             SchedulerAction::Notify { message } => {
                 log::info!("Scheduler notification: {}", message);
                 crate::daemon::telegram::telegram_notify(state, &message).await;
             }
             SchedulerAction::Shutdown => {
+                if !state.scheduler.power_commands_enabled() {
+                    log::warn!("Scheduler: shutdown blocked — power commands not enabled");
+                    return;
+                }
                 log::info!("Scheduler: all downloads complete — shutting down the system");
                 #[cfg(target_os = "windows")]
                 {
@@ -613,6 +647,10 @@ pub async fn run_scheduler_tick(state: &SharedState) {
                 }
             }
             SchedulerAction::Sleep => {
+                if !state.scheduler.power_commands_enabled() {
+                    log::warn!("Scheduler: sleep blocked — power commands not enabled");
+                    return;
+                }
                 log::info!("Scheduler: all downloads complete — putting system to sleep");
                 #[cfg(target_os = "windows")]
                 {
@@ -1021,6 +1059,7 @@ async fn handle_engine_download(
     Json(body): Json<serde_json::Value>,
 ) -> Json<serde_json::Value> {
     let engine = body.get("engine").and_then(|v| v.as_str()).unwrap_or("");
+    let expected_sha256 = body.get("sha256").and_then(|v| v.as_str());
 
     let bin_dir = std::path::Path::new(&state.resource_dir).join("bin");
     if !bin_dir.exists() {
@@ -1073,6 +1112,24 @@ async fn handle_engine_download(
                     }));
                 }
             };
+
+            // Compute SHA-256 and verify against expected hash if provided.
+            let digest = {
+                use sha2::{Digest, Sha256};
+                let mut hasher = Sha256::new();
+                hasher.update(&bytes);
+                format!("{:x}", hasher.finalize())
+            };
+            log::info!("Downloaded {engine} binary SHA-256: {digest}");
+            if let Some(expected) = expected_sha256 {
+                if !digest.eq_ignore_ascii_case(expected) {
+                    return Json(serde_json::json!({
+                        "ok": false,
+                        "error": format!("SHA-256 mismatch: expected {expected}, got {digest}")
+                    }));
+                }
+            }
+
             if let Err(e) = std::fs::write(&dest, &bytes) {
                 return Json(serde_json::json!({
                     "ok": false,
@@ -1300,6 +1357,10 @@ pub(crate) fn register_routes(router: Router<SharedState>) -> Router<SharedState
         .route(
             "/api/engine/scheduler/{id}",
             delete(handle_scheduler_delete),
+        )
+        .route(
+            "/api/engine/scheduler/power-commands",
+            post(handle_scheduler_power_commands),
         )
         .route("/api/engine/checksum", post(handle_checksum_verify))
         .route(

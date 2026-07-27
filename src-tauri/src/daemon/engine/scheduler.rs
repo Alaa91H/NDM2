@@ -56,6 +56,7 @@ pub enum SchedulerAction {
 pub struct SmartScheduler {
     rules: Arc<Mutex<Vec<SchedulerRule>>>,
     active_rules: Arc<Mutex<Vec<String>>>,
+    power_commands_enabled: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl SmartScheduler {
@@ -63,7 +64,18 @@ impl SmartScheduler {
         Self {
             rules: Arc::new(Mutex::new(Vec::new())),
             active_rules: Arc::new(Mutex::new(Vec::new())),
+            power_commands_enabled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
+    }
+
+    pub fn set_power_commands_enabled(&self, enabled: bool) {
+        self.power_commands_enabled
+            .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn power_commands_enabled(&self) -> bool {
+        self.power_commands_enabled
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn add_rule(&self, rule: SchedulerRule) {

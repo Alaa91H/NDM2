@@ -29,36 +29,32 @@
     "clipboard-manager:allow-write-text",
     {
       "identifier": "shell:allow-spawn",
-      "allow": [{ "name": "curl", "cmd": "curl", "args": true }]
+      "allow": [
+        { "name": "curl", "cmd": "curl", "args": [{ "validator": "^(https?://.*|--[a-z-]+|-[a-zA-Z]+)$" }] },
+        { "name": "yt-dlp", "cmd": "yt-dlp", "args": [{ "validator": "^(https?://.*|--(?!exec|run|default-umask|force-overwrites|exec-after-download|use-post-overrides)[a-z-]+|-[a-zA-Z]+)$" }] }
+      ]
     },
     {
       "identifier": "shell:allow-execute",
-      "allow": [{ "name": "curl", "cmd": "curl", "args": true }]
+      "allow": [
+        { "name": "curl", "cmd": "curl", "args": [{ "validator": "^(https?://.*|--[a-z-]+|-[a-zA-Z]+)$" }] },
+        { "name": "yt-dlp", "cmd": "yt-dlp", "args": [{ "validator": "^(https?://.*|--(?!exec|run|default-umask|force-overwrites|exec-after-download|use-post-overrides)[a-z-]+|-[a-zA-Z]+)$" }] }
+      ]
     },
     "shell:allow-open",
     {
       "identifier": "shell:allow-kill",
-      "allow": [{ "name": "curl", "cmd": "curl", "args": true }]
+      "allow": [
+        { "name": "curl", "cmd": "curl", "args": [{ "validator": "^(https?://.*|--[a-z-]+|-[a-zA-Z]+)$" }] },
+        { "name": "yt-dlp", "cmd": "yt-dlp", "args": [{ "validator": "^(https?://.*|--(?!exec|run|default-umask|force-overwrites|exec-after-download|use-post-overrides)[a-z-]+|-[a-zA-Z]+)$" }] }
+      ]
     },
     {
       "identifier": "shell:allow-stdin-write",
-      "allow": [{ "name": "curl", "cmd": "curl", "args": true }]
-    },
-    {
-      "identifier": "shell:allow-spawn",
-      "allow": [{ "name": "yt-dlp", "cmd": "yt-dlp", "args": true }]
-    },
-    {
-      "identifier": "shell:allow-execute",
-      "allow": [{ "name": "yt-dlp", "cmd": "yt-dlp", "args": true }]
-    },
-    {
-      "identifier": "shell:allow-kill",
-      "allow": [{ "name": "yt-dlp", "cmd": "yt-dlp", "args": true }]
-    },
-    {
-      "identifier": "shell:allow-stdin-write",
-      "allow": [{ "name": "yt-dlp", "cmd": "yt-dlp", "args": true }]
+      "allow": [
+        { "name": "curl", "cmd": "curl", "args": [{ "validator": "^(https?://.*|--[a-z-]+|-[a-zA-Z]+)$" }] },
+        { "name": "yt-dlp", "cmd": "yt-dlp", "args": [{ "validator": "^(https?://.*|--(?!exec|run|default-umask|force-overwrites|exec-after-download|use-post-overrides)[a-z-]+|-[a-zA-Z]+)$" }] }
+      ]
     },
     "dialog:default",
     "dialog:allow-open",

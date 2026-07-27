@@ -1,4 +1,3 @@
-#![allow(dead_code, clippy::manual_checked_ops)]
 use std::time::Duration;
 
 use super::config::global_config;
@@ -65,7 +64,13 @@ impl RetryPolicy {
         let capped = base.min(self.max_delay.as_secs_f64());
         if self.jitter {
             let jitter_range = capped * 0.25;
-            let jitter = (attempt as u64 * 7919) as f64 % jitter_range;
+            // Use nanosecond timestamp for entropy to avoid thundering herd
+            // when multiple tasks retry at the same attempt number.
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .subsec_nanos();
+            let jitter = (nanos as f64 % jitter_range);
             Duration::from_secs_f64((capped + jitter).max(0.1))
         } else {
             Duration::from_secs_f64(capped)

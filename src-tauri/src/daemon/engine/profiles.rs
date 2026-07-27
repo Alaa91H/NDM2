@@ -214,13 +214,12 @@ impl ProfileManager {
     }
 
     pub fn set_active(&self, profile_id: &str) -> bool {
-        if let Ok(profiles) = self.profiles.lock() {
-            if profiles.contains_key(profile_id) {
-                if let Ok(mut active) = self.active_profile.lock() {
-                    *active = profile_id.to_string();
-                    return true;
-                }
-            }
+        // Always lock `active_profile` before `profiles` to match `active_profile()`
+        // and prevent ABBA deadlock. An invalid ID simply sets the field; the next
+        // `active_profile()` call will fall back to `DownloadProfile::balanced`.
+        if let Ok(mut active) = self.active_profile.lock() {
+            *active = profile_id.to_string();
+            return true;
         }
         false
     }
@@ -291,9 +290,12 @@ mod tests {
     }
 
     #[test]
-    fn set_active_nonexistent_returns_false() {
+    fn set_active_nonexistent_still_succeeds() {
         let pm = ProfileManager::new();
-        assert!(!pm.set_active("nonexistent"));
+        // set_active always succeeds — the ID is stored and resolved lazily
+        // by active_profile(), which falls back to balanced if missing.
+        assert!(pm.set_active("nonexistent"));
+        assert_eq!(pm.active_profile().id, "balanced");
     }
 
     #[test]

@@ -150,6 +150,25 @@ async fn handle_set_path(
         )
     })?;
 
+    // Validate the path exists and points to a real file (not a directory or broken symlink).
+    let p = std::path::Path::new(path);
+    match p.canonicalize() {
+        Ok(canonical) => {
+            if !canonical.is_file() {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": "Path does not point to a file"})),
+                ));
+            }
+        }
+        Err(_) => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Path does not exist or is not accessible"})),
+            ));
+        }
+    }
+
     let manager = state.external_tools.lock().unwrap();
     match manager.set_custom_path(id, path) {
         Ok(installation) => {

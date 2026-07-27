@@ -1,5 +1,5 @@
 import type React from 'react';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 
 const STORAGE_KEYS = {
   colWidths: 'nova_col_widths',
@@ -103,18 +103,29 @@ export function useColumnState() {
   const [draggingCustomizeCol, setDraggingCustomizeCol] = useState<string | null>(null);
   const [showColConfig, setShowColConfig] = useState(false);
   const colConfigRef = useRef<HTMLDivElement>(null);
+  const saveTimers = useRef<{ [key: string]: ReturnType<typeof setTimeout> }>({});
+
+  const debouncedSave = useCallback((key: string, value: unknown) => {
+    if (saveTimers.current[key]) clearTimeout(saveTimers.current[key]);
+    saveTimers.current[key] = setTimeout(() => {
+      localStorage.setItem(key, JSON.stringify(value));
+    }, 300);
+  }, []);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.colWidths, JSON.stringify(colWidths));
-  }, [colWidths]);
+    debouncedSave(STORAGE_KEYS.colWidths, colWidths);
+    return () => { if (saveTimers.current[STORAGE_KEYS.colWidths]) clearTimeout(saveTimers.current[STORAGE_KEYS.colWidths]); };
+  }, [colWidths, debouncedSave]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.visibleCols, JSON.stringify(visibleCols));
-  }, [visibleCols]);
+    debouncedSave(STORAGE_KEYS.visibleCols, visibleCols);
+    return () => { if (saveTimers.current[STORAGE_KEYS.visibleCols]) clearTimeout(saveTimers.current[STORAGE_KEYS.visibleCols]); };
+  }, [visibleCols, debouncedSave]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.colOrder, JSON.stringify(colOrder));
-  }, [colOrder]);
+    debouncedSave(STORAGE_KEYS.colOrder, colOrder);
+    return () => { if (saveTimers.current[STORAGE_KEYS.colOrder]) clearTimeout(saveTimers.current[STORAGE_KEYS.colOrder]); };
+  }, [colOrder, debouncedSave]);
 
   useEffect(() => {
     const handleOutsideClick = (e: MouseEvent) => {
@@ -131,7 +142,11 @@ export function useColumnState() {
     };
   }, []);
 
-  const visibleColsCount = Object.values(visibleCols).filter(Boolean).length + 2;
+  const FIXED_COLUMNS = 2; // name column + row-number/checkbox column are always visible
+  const visibleColsCount = Object.values(visibleCols).filter(Boolean).length + FIXED_COLUMNS;
+
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => resizeCleanupRef.current?.(), []);
 
   // Column resizing
   const startResize = (colKey: string, e: React.MouseEvent) => {
@@ -154,10 +169,16 @@ export function useColumnState() {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
       document.body.classList.remove('select-none');
+      resizeCleanupRef.current = null;
     };
 
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
+    resizeCleanupRef.current = () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      document.body.classList.remove('select-none');
+    };
     document.body.classList.add('select-none');
   };
 

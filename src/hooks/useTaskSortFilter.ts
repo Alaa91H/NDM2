@@ -45,8 +45,8 @@ export function useTaskSortFilter(tasks: DownloadItem[], searchQuery: string, wo
           : ((valB as number) || 0) - ((valA as number) || 0);
       }
       if (sortBy === 'retries') {
-        const rA = a.status === 'error' ? 3 : 0;
-        const rB = b.status === 'error' ? 3 : 0;
+        const rA = a.retries ?? 0;
+        const rB = b.retries ?? 0;
         return sortOrder === 'asc' ? rA - rB : rB - rA;
       }
       if (sortBy === 'crc32') {
@@ -60,6 +60,7 @@ export function useTaskSortFilter(tasks: DownloadItem[], searchQuery: string, wo
         return sortOrder === 'asc' ? pA - pB : pB - pA;
       }
       if (sortBy === 'completedDate') {
+        // Backend Task struct lacks completedAt; dateAdded is the only available timestamp.
         const dA = a.status === 'completed' ? a.dateAdded : '';
         const dB = b.status === 'completed' ? b.dateAdded : '';
         return sortOrder === 'asc' ? dA.localeCompare(dB) : dB.localeCompare(dA);

@@ -44,6 +44,15 @@ pub fn load(data_dir: &str) -> PersistedState {
             Ok(parsed) => parsed,
             Err(e) => {
                 log::warn!("Corrupt downloads-state.json, starting fresh: {}", e);
+                // Preserve the corrupt file for diagnostics instead of
+                // silently overwriting it on the next save.
+                let backup = path.with_extension("json.corrupt");
+                if let Err(copy_err) = std::fs::copy(&path, &backup) {
+                    log::warn!(
+                        "Failed to back up corrupt state file: {}",
+                        copy_err
+                    );
+                }
                 PersistedState::default()
             }
         },
@@ -84,30 +93,33 @@ fn build_snapshot(state: &AppState) -> PersistedState {
     }
 }
 
-pub fn save(state: &AppState) {
+/// Returns `true` on success, `false` on failure (caller should retry).
+pub fn save(state: &AppState) -> bool {
     let snapshot = build_snapshot(state);
     let path = state_file_path(&state.data_dir);
     let payload = match serde_json::to_string(&snapshot) {
         Ok(p) => p,
         Err(e) => {
             log::error!("Failed to serialize download state: {}", e);
-            return;
+            return false;
         }
     };
     let tmp_path = path.with_extension("json.tmp");
     if let Err(e) = std::fs::write(&tmp_path, &payload) {
         log::error!("Failed to write temporary state file: {}", e);
-        return;
+        return false;
     }
     if let Err(e) = std::fs::rename(&tmp_path, &path) {
         log::error!("Failed to rename state file into place: {}", e);
         let _ = std::fs::remove_file(&tmp_path);
+        return false;
     }
+    true
 }
 
 /// Immediately persist the download state (used during graceful shutdown).
 pub fn save_now(state: &AppState) {
-    save(state);
+    let _ = save(state);
 }
 
 /// Periodically flush the download state to disk whenever something changed.
@@ -138,8 +150,25 @@ pub fn start_persistence_loop(state: SharedState) {
 
             tokio::time::sleep(Duration::from_secs(interval)).await;
             if state.persist_dirty.swap(false, Ordering::Relaxed) {
-                let state = state.clone();
-                let _ = tokio::task::spawn_blocking(move || save(&state)).await;
+                let state_clone = state.clone();
+                let result =
+                    tokio::task::spawn_blocking(move || save(&state_clone)).await;
+                // If save failed (or panicked), re-arm the dirty flag so the
+                // next loop iteration retries — otherwise the changed state
+                // would be silently lost forever.
+                match result {
+                    Ok(false) => {
+                        state.persist_dirty.store(true, Ordering::Relaxed);
+                    }
+                    Err(join_err) => {
+                        log::error!(
+                            "Persistence task panicked; will retry: {}",
+                            join_err
+                        );
+                        state.persist_dirty.store(true, Ordering::Relaxed);
+                    }
+                    _ => {}
+                }
             }
         }
     });

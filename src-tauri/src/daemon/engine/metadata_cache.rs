@@ -49,15 +49,19 @@ impl MetadataCache {
     }
 
     pub fn get(&self, url: &str) -> Option<CachedMetadata> {
-        self.cache.lock().ok().and_then(|cache| {
-            cache.get(url).and_then(|entry| {
-                if entry.inserted_at.elapsed() < self.ttl {
-                    Some(entry.metadata.clone())
-                } else {
-                    None
-                }
-            })
-        })
+        let mut cache = match self.cache.lock() {
+            Ok(c) => c,
+            Err(_) => return None,
+        };
+        let expired = cache
+            .get(url)
+            .map(|entry| entry.inserted_at.elapsed() >= self.ttl)
+            .unwrap_or(false);
+        if expired {
+            cache.remove(url);
+            return None;
+        }
+        cache.get(url).map(|entry| entry.metadata.clone())
     }
 
     pub fn put(&self, metadata: CachedMetadata) {
@@ -159,6 +163,7 @@ mod tests {
         cache.put(meta);
         std::thread::sleep(Duration::from_millis(5));
         assert!(cache.get("https://example.com").is_none());
+        assert_eq!(cache.size(), 0, "expired entry should be removed on access");
     }
 
     #[test]

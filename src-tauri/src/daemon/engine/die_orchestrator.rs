@@ -1,4 +1,3 @@
-#![allow(dead_code, clippy::manual_checked_ops)]
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 

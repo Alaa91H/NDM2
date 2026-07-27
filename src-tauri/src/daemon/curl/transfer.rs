@@ -1444,11 +1444,22 @@ fn run_libcurl_download(
                     } else {
                         retry_policy.delay_for_attempt(attempt as u32 + 1)
                     };
-                    if let Some(max_time) = retry_policy.max_total_time {
+                    let actual_delay = if let Some(max_time) = retry_policy.max_total_time {
                         let remaining = max_time.saturating_sub(start_time.elapsed());
-                        std::thread::sleep(backoff_delay.min(remaining));
+                        backoff_delay.min(remaining)
                     } else {
-                        std::thread::sleep(backoff_delay);
+                        backoff_delay
+                    };
+                    // Sleep in 500ms chunks to check the cancel token
+                    // periodically, preventing delayed cancellation.
+                    let mut elapsed = Duration::ZERO;
+                    while elapsed < actual_delay {
+                        if cancel.load(Ordering::Acquire) {
+                            return Err("cancelled".to_string());
+                        }
+                        let chunk = Duration::from_millis(500).min(actual_delay - elapsed);
+                        std::thread::sleep(chunk);
+                        elapsed += chunk;
                     }
                 }
             }
@@ -1535,7 +1546,10 @@ pub(crate) fn mark_curl_task_failed(
         log::info!("Task {id}: download cancelled (generation={generation})");
     } else {
         log::error!("Task {id}: download failed: {message} (generation={generation})");
-        state.priority_queue.stop_download(id);
+    }
+    // Always decrement active_downloads — both cancel and error release a slot.
+    state.priority_queue.stop_download(id);
+    if !cancelled {
         if let Ok(mut stats) = state.download_stats.lock() {
             stats.total_failed += 1;
         }

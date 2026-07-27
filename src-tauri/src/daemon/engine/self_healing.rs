@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -105,10 +104,15 @@ impl SelfHealer {
 
     fn can_recover(&self) -> bool {
         let window_start = Instant::now() - self.recovery_window;
+        // Count only records where recovery was actually applied, not all
+        // failures. Raw failures (e.g., DNS timeouts from different hosts)
+        // should not consume the recovery budget.
         let recent = self
             .failure_history
             .iter()
-            .filter(|r| r.timestamp >= window_start && !r.succeeded)
+            .filter(|r| {
+                r.timestamp >= window_start && !r.recovery_applied.is_empty()
+            })
             .count() as u32;
         recent < self.max_recoveries_per_minute
     }
@@ -145,11 +149,19 @@ impl SelfHealer {
             .map(|(host, count)| format!("{}: {} consecutive failures", host, count))
             .collect();
 
+        // Count consecutive failures from the end of history (most recent).
+        let consecutive = self
+            .failure_history
+            .iter()
+            .rev()
+            .take_while(|r| !r.succeeded)
+            .count() as u32;
+
         HealthSnapshot {
             status: self.health_status(),
             uptime_secs: self.started_at.elapsed().as_secs(),
             total_recoveries: self.total_recoveries,
-            current_consecutive_failures: self.failure_history.len() as u32,
+            current_consecutive_failures: consecutive,
             last_recovery: self.last_recovery,
             active_warnings,
         }

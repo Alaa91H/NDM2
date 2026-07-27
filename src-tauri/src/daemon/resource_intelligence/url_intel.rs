@@ -100,7 +100,7 @@ fn detect_resource_type(url: &str) -> ResourceType {
     if url.starts_with("magnet:") {
         return ResourceType::Magnet;
     }
-    if url.to_lowercase().ends_with(".torrent") || url.contains(".torrent?") {
+    if url.to_ascii_lowercase().ends_with(".torrent") || url.contains(".torrent?") {
         return ResourceType::Torrent;
     }
     if url.starts_with("ftp://") || url.starts_with("ftps://") {

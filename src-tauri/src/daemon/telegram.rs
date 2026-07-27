@@ -8,6 +8,13 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use tokio_util::codec::{BytesCodec, FramedRead};
 
+/// Escape HTML special characters to prevent injection in Telegram HTML messages.
+fn escape_html(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 use crate::daemon::curl::{delete_task, list_all_tasks};
 use crate::daemon::routes::{handle_pause_task, handle_resume_task};
 use crate::daemon::state::SharedState;
@@ -289,7 +296,7 @@ fn handle_telegram_command(
                             "{} <code>{}</code> - {} ({}%)\n",
                             icon,
                             &t.id[..t.id.len().min(8)],
-                            t.name,
+                            escape_html(&t.name),
                             pct
                         ));
                     }
@@ -499,16 +506,9 @@ pub async fn handle_telegram_send_file(
             )
         })?;
 
-    // Open the file first to get a stable handle (prevents symlink swap race)
-    let file = tokio::fs::File::open(&raw_path).await.map_err(|_| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"ok": false, "error": "File not found"})),
-        )
-    })?;
-
-    let requested = std::path::Path::new(raw_path);
-    let canonical = requested.canonicalize().map_err(|_| {
+    // Canonicalize FIRST to resolve symlinks before opening the file,
+    // preventing TOCTOU symlink swap attacks.
+    let canonical = std::path::PathBuf::from(raw_path).canonicalize().map_err(|_| {
         (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"ok": false, "error": "File not found"})),
@@ -519,6 +519,13 @@ pub async fn handle_telegram_send_file(
             serde_json::json!({"ok": false, "error": "Access denied: file is outside the data directory"}),
         ));
     }
+
+    let file = tokio::fs::File::open(&canonical).await.map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"ok": false, "error": "File not found"})),
+        )
+    })?;
 
     let metadata = file.metadata().await.map_err(|_| {
         (

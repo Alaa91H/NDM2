@@ -56,7 +56,7 @@ impl Ord for QueueEntry {
     fn cmp(&self, other: &Self) -> Ordering {
         self.priority
             .cmp(&other.priority)
-            .then_with(|| other.added_at.cmp(&self.added_at))
+            .then_with(|| self.added_at.cmp(&other.added_at))
     }
 }
 
@@ -127,10 +127,13 @@ impl PriorityBandwidthQueue {
     }
 
     pub fn stop_download(&self, task_id: &str) {
-        let prev = self.active_downloads.load(AtomicOrder::Relaxed);
-        if prev > 0 {
-            self.active_downloads.fetch_sub(1, AtomicOrder::Relaxed);
-        }
+        // Use fetch_update for atomic decrement to prevent u32 underflow from
+        // concurrent stop_download calls (TOCTOU race).
+        let _ = self.active_downloads.fetch_update(
+            AtomicOrder::AcqRel,
+            AtomicOrder::Relaxed,
+            |current| current.checked_sub(1),
+        );
         self.remove(task_id);
         self.reallocate();
     }
@@ -612,7 +615,7 @@ mod tests {
         q.enqueue(e2);
 
         let entries = q.entries();
-        assert_eq!(entries[0].task_id, "second");
-        assert_eq!(entries[1].task_id, "first");
+        assert_eq!(entries[0].task_id, "first");
+        assert_eq!(entries[1].task_id, "second");
     }
 }

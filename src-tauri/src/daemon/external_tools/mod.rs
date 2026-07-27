@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 pub mod capabilities;
 pub mod discovery;
 pub mod health;
@@ -14,6 +12,8 @@ use types::{ExternalTool, ToolId, ToolInstallation, ToolRegistry, ToolState, Upd
 
 use std::path::PathBuf;
 use std::sync::Mutex;
+
+use crate::lock_or_err;
 
 pub struct ExternalToolManager {
     ffmpeg: tools::ffmpeg::FfmpegTool,
@@ -46,11 +46,11 @@ impl ExternalToolManager {
 
     pub fn discover(&self, tool_id: ToolId) -> ToolInstallation {
         let tool = self.tool_for_id(tool_id);
-        let reg = self.registry.lock().unwrap();
+        let reg = lock_or_err!(self.registry);
         let installation = self.discover_inner(tool, &reg);
         drop(reg);
 
-        let mut resolver = self.resolver.lock().unwrap();
+        let mut resolver = lock_or_err!(self.resolver);
         resolver.update_installation(installation.clone());
         drop(resolver);
 
@@ -85,7 +85,7 @@ impl ExternalToolManager {
                         last_health_check: Some(chrono::Utc::now().to_rfc3339()),
                         health_ok: report.executable_works,
                     };
-                    let mut resolver = self.resolver.lock().unwrap();
+                    let mut resolver = lock_or_err!(self.resolver);
                     resolver.update_installation(installation.clone());
                     return installation;
                 }
@@ -115,7 +115,7 @@ impl ExternalToolManager {
             };
 
             {
-                let mut reg_owned = self.registry.lock().unwrap();
+                let mut reg_owned = lock_or_err!(self.registry);
                 let path_display = installation
                     .path
                     .as_ref()
@@ -134,7 +134,7 @@ impl ExternalToolManager {
             }
 
             {
-                let mut resolver = self.resolver.lock().unwrap();
+                let mut resolver = lock_or_err!(self.resolver);
                 resolver.update_installation(installation.clone());
             }
 
@@ -207,7 +207,7 @@ impl ExternalToolManager {
         };
 
         {
-            let mut reg = self.registry.lock().unwrap();
+            let mut reg = lock_or_err!(self.registry);
             registry::update_tool_path(&mut reg, tool_id.as_str(), path);
             if let Some(ref ver) = installation.version {
                 registry::update_tool_version(&mut reg, tool_id.as_str(), &ver.to_string());
@@ -216,7 +216,7 @@ impl ExternalToolManager {
         }
 
         {
-            let mut resolver = self.resolver.lock().unwrap();
+            let mut resolver = lock_or_err!(self.resolver);
             resolver.update_installation(installation.clone());
         }
 
@@ -232,7 +232,7 @@ impl ExternalToolManager {
         installer::uninstall_tool(tool, &path, installation.installed_by_app, &self.data_dir)?;
 
         {
-            let mut resolver = self.resolver.lock().unwrap();
+            let mut resolver = lock_or_err!(self.resolver);
             resolver.remove_installation(tool_id);
         }
 
@@ -295,22 +295,22 @@ impl ExternalToolManager {
     }
 
     pub fn has_capability(&self, capability_id: &str) -> bool {
-        let resolver = self.resolver.lock().unwrap();
+        let resolver = lock_or_err!(self.resolver);
         resolver.is_capable(capability_id)
     }
 
     pub fn resolve_capability(&self, capability_id: &str) -> capabilities::CapabilityAvailability {
-        let resolver = self.resolver.lock().unwrap();
+        let resolver = lock_or_err!(self.resolver);
         resolver.resolve_capability(capability_id)
     }
 
     pub fn ytdlp_path(&self) -> Option<String> {
-        let resolver = self.resolver.lock().unwrap();
+        let resolver = lock_or_err!(self.resolver);
         resolver.tool_path(ToolId::YtDlp)
     }
 
     pub fn ffmpeg_path(&self) -> Option<String> {
-        let resolver = self.resolver.lock().unwrap();
+        let resolver = lock_or_err!(self.resolver);
         resolver.tool_path(ToolId::Ffmpeg)
     }
 

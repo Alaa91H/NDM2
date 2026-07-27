@@ -131,6 +131,7 @@ interface EngineStore {
   triggerFailover: (taskId: string) => Promise<void>;
   setFailover: (taskId: string, enabled: boolean) => Promise<void>;
   clearCache: () => Promise<void>;
+  removeTaskTelemetry: (taskId: string) => void;
 }
 
 export const useEngineStore = create<EngineStore>((set, get) => ({
@@ -358,5 +359,13 @@ export const useEngineStore = create<EngineStore>((set, get) => ({
   clearCache: async () => {
     await novaClient.clearMetadataCache();
     await get().refreshCache();
+  },
+
+  removeTaskTelemetry: (taskId) => {
+    set((prev) => {
+      const { [taskId]: _a, ...restAdaptive } = prev.adaptive;
+      const { [taskId]: _s, ...restSegments } = prev.segments;
+      return { adaptive: restAdaptive, segments: restSegments };
+    });
   },
 }));

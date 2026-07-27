@@ -142,12 +142,17 @@ function EffectsProvider({ children }: { children: ReactNode }) {
 
   // Settings persistence
   useEffect(() => {
+    let pendingCleanup: (() => void) | null = null;
     const unsub = settingsStore.subscribe((state, prev) => {
       if (state.settings !== prev.settings || state.themeSettings !== prev.themeSettings) {
-        persistSettings(state.settings, state.themeSettings);
+        pendingCleanup?.();
+        pendingCleanup = persistSettings(state.settings, state.themeSettings);
       }
     });
-    return unsub;
+    return () => {
+      pendingCleanup?.();
+      unsub();
+    };
   }, []);
 
   // Notifications muted persistence
@@ -298,10 +303,13 @@ function EffectsProvider({ children }: { children: ReactNode }) {
     return unsub;
   }, []);
 
-  // Telegram config
+  // Telegram config — uses pendingCleanup pattern because zustand's
+  // subscribe discards listener return values (no cleanup callback support).
   useEffect(() => {
+    let pendingCleanup: (() => void) | null = null;
     const unsub = settingsStore.subscribe((state, prev) => {
       if (state.settings.extra !== prev.settings.extra) {
+        pendingCleanup?.();
         const s = state.settings;
         const timer = window.setTimeout(() => {
           void novaClient
@@ -316,12 +324,13 @@ function EffectsProvider({ children }: { children: ReactNode }) {
               console.warn('updateTelegramConfig failed', e);
             });
         }, 300);
-        return () => {
-          window.clearTimeout(timer);
-        };
+        pendingCleanup = () => window.clearTimeout(timer);
       }
     });
-    return unsub;
+    return () => {
+      pendingCleanup?.();
+      unsub();
+    };
   }, []);
 
   // Live task sync (SSE + polling fallback)
@@ -490,8 +499,10 @@ function EffectsProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // Auto-progress dialog
+  // Auto-progress dialog — uses pendingCleanup pattern because zustand's
+  // subscribe discards listener return values (no cleanup callback support).
   useEffect(() => {
+    let pendingCleanup: (() => void) | null = null;
     const unsub = taskStore.subscribe((state) => {
       const activeDownload = state.tasks.find((t) => t.status === 'downloading');
       if (!activeDownload || uiStore.getState().activeProgressMinimizedToTaskbar) return;
@@ -507,16 +518,18 @@ function EffectsProvider({ children }: { children: ReactNode }) {
       }
 
       if (!nextProgressTask) return;
+      pendingCleanup?.();
       const timer = window.setTimeout(() => {
         const cd = uiStore.getState().dialog;
         if (cd.active && cd.active !== 'activeProgress') return;
         uiStore.getState().openDialog('activeProgress', nextProgressTask);
       }, 0);
-      return () => {
-        window.clearTimeout(timer);
-      };
+      pendingCleanup = () => window.clearTimeout(timer);
     });
-    return unsub;
+    return () => {
+      pendingCleanup?.();
+      unsub();
+    };
   }, []);
 
   // Unsigned update check
@@ -569,7 +582,7 @@ function persistSettings(
     const safeSettings = {
       ...settings,
       connection: { ...settings.connection, proxyUser: '', proxyPass: '' },
-      extra: { ...settings.extra, tgBotToken: '', tgChatId: '', smtpUser: '', smtpPass: '', browserPairingToken: '' },
+      extra: { ...settings.extra, tgBotToken: '', tgChatId: '', smtpUser: '', smtpPass: '' },
     };
     localStorage.setItem('nova_settings_v1', JSON.stringify(safeSettings));
     localStorage.setItem('nova_theme_settings_v1', JSON.stringify(themeSettings));

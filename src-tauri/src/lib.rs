@@ -29,14 +29,16 @@ fn validate_file_path(path: &str) -> Result<PathBuf, String> {
     {
         return Err("Path traversal detected".to_string());
     }
-    if target.is_absolute() && target.is_file() {
-        let canonical = target
-            .canonicalize()
-            .map_err(|_| "Path does not exist".to_string())?;
-        Ok(canonical)
-    } else {
-        Ok(target)
+    // Reject UNC paths (\\server\share\...) to prevent network share access.
+    if let Some(first) = target.to_str().and_then(|s| s.chars().next()) {
+        if first == '\\' {
+            return Err("UNC paths are not allowed".to_string());
+        }
     }
+    // Always canonicalize to resolve symlinks and prevent traversal.
+    target
+        .canonicalize()
+        .map_err(|_| "Path does not exist or is inaccessible".to_string())
 }
 
 mod daemon;
@@ -172,17 +174,17 @@ fn open_file(path: String) -> Result<(), String> {
         return Err("The selected download path is not a file.".to_string());
     }
 
-    // Use canonicalized UNC path (\\?\...) to bypass cmd.exe shell parsing
-    // entirely, preventing shell metacharacter injection via crafted filenames.
-    let canonical = target
+    // canonicalize() already returns \\?\ prefixed paths on Windows.
+    let unc_path = target
         .canonicalize()
         .map_err(|e| format!("Could not resolve file path: {e}"))?;
-    let unc_path = format!(r"\\?\{}", canonical.display());
 
-    let mut launcher = Command::new("cmd");
+    // Use explorer.exe which handles files directly without invoking cmd.exe shell,
+    // preventing command injection via filenames with metacharacters (&, |, etc).
+    let mut launcher = Command::new("explorer.exe");
     hide_command_window(&mut launcher);
     launcher
-        .args(["/C", "start", "", &unc_path])
+        .arg(&unc_path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -199,12 +201,11 @@ fn reveal_file(path: String) -> Result<(), String> {
     }
 
     if target.exists() && target.is_file() {
-        // Use canonicalized UNC path to bypass shell metacharacter injection.
-        let canonical = target
+        // canonicalize() already returns \\?\ prefixed paths on Windows.
+        let unc_path = target
             .canonicalize()
             .map_err(|e| format!("Could not resolve file path: {e}"))?;
-        let unc_path = format!(r"\\?\{}", canonical.display());
-        let select_arg = format!("/select,{unc_path}");
+        let select_arg = format!("/select,{}", unc_path.display());
 
         let mut launcher = Command::new("explorer.exe");
         hide_command_window(&mut launcher);
@@ -294,6 +295,48 @@ fn open_external_url(url: String) -> Result<(), String> {
     if !url.starts_with("https://") && !url.starts_with("http://") {
         return Err("Only web links can be opened.".to_string());
     }
+    // Parse the URL properly to handle IPv6 brackets, decimal IPs, etc.
+    let parsed = reqwest::Url::parse(&url).map_err(|e| format!("Invalid URL: {e}"))?;
+    let host_str = parsed.host_str().unwrap_or("");
+    // Strip IPv6 brackets for IP checks
+    let host_clean = host_str.trim_start_matches('[').trim_end_matches(']');
+    let is_internal = match host_clean {
+        "localhost" | "127.0.0.1" | "0.0.0.0" | "::1" => true,
+        h if h.starts_with("192.168.") || h.starts_with("10.") => true,
+        h if h.starts_with("172.") => h
+            .split('.')
+            .nth(1)
+            .and_then(|s| s.parse::<u8>().ok())
+            .map_or(false, |octet| (16..=31).contains(&octet)),
+        h if h.starts_with("169.254.") => true,
+        // Handle IPv6 ULA (fc00::/7), link-local (fe80::/10), loopback (::1)
+        h if h.starts_with("fc") || h.starts_with("fd") => true,
+        h if h.starts_with("fe80") => true,
+        _ => false,
+    };
+    // Also check the host as a raw IP via std::net to catch IPv4-mapped IPv6
+    // (e.g. [::ffff:127.0.0.1]) and decimal/hex encodings.
+    if !is_internal {
+        use std::net::IpAddr;
+        if let Ok(ip) = host_clean.parse::<IpAddr>() {
+            if ip.is_loopback()
+                || ip.is_unspecified()
+                || match ip {
+                    IpAddr::V4(v) => v.is_private() || v.is_link_local() || v.is_broadcast(),
+                    IpAddr::V6(v) => {
+                        v.segments()[0] & 0xfe00 == 0xfc00 // ULA
+                            || v.segments()[0] == 0xfe80    // link-local
+                            || v == std::net::Ipv6Addr::LOCALHOST
+                    }
+                }
+            {
+                return Err("Internal URLs cannot be opened in the browser.".to_string());
+            }
+        }
+    }
+    if is_internal {
+        return Err("Internal URLs cannot be opened in the browser.".to_string());
+    }
     let mut launcher = Command::new("explorer.exe");
     hide_command_window(&mut launcher);
     launcher
@@ -318,17 +361,10 @@ fn check_tcp_endpoint(host: String, port: u16) -> Result<bool, String> {
     let Some(socket_addr) = resolved.next() else {
         return Ok(false);
     };
-    // Prevent SSRF: reject connections to loopback, private, link-local, and multicast IPs
+    // Prevent SSRF: reject connections to internal/local addresses.
+    // Use the centralized is_internal_ip which handles IPv4-mapped IPv6.
     let ip = socket_addr.ip();
-    let is_internal = match ip {
-        std::net::IpAddr::V4(v4) => {
-            v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_multicast()
-        }
-        std::net::IpAddr::V6(v6) => {
-            v6.is_loopback() || (v6.segments()[0] & 0xffc0) == 0xfe80 || v6.is_multicast()
-        }
-    };
-    if is_internal {
+    if crate::daemon::utils::is_internal_ip(ip) {
         return Err("Connections to internal/local addresses are not allowed".to_string());
     }
     Ok(TcpStream::connect_timeout(&socket_addr, Duration::from_millis(1200)).is_ok())
@@ -463,7 +499,10 @@ fn kill_old_daemon() {
 
 /// Blocking: kills processes on a range of ports.
 fn kill_old_daemon_range(our_pid: u32, preferred: u16) {
-    for port in preferred..=preferred + DAEMON_PORT_SCAN_LIMIT {
+    for offset in 0..=DAEMON_PORT_SCAN_LIMIT {
+        let Some(port) = preferred.checked_add(offset) else {
+            break;
+        };
         let script = format!(
             "Get-NetTCPConnection -LocalPort {port} -State Listen -ErrorAction SilentlyContinue | ForEach-Object {{ \
                 $p = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue; \

@@ -10,12 +10,23 @@ type BrowserAudioWindow = {
 };
 
 let audioContext: AudioContext | null = null;
+let idleTimer: ReturnType<typeof setTimeout> | null = null;
+const IDLE_TIMEOUT = 60_000;
+
+const scheduleIdleClose = () => {
+  if (idleTimer) clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    audioContext?.close();
+    audioContext = null;
+  }, IDLE_TIMEOUT);
+};
 
 const getAudioContext = () => {
   if (typeof window === 'undefined') return null;
   const audioWindow = window as unknown as BrowserAudioWindow;
   const AudioContextCtor = audioWindow.AudioContext ?? audioWindow.webkitAudioContext;
   if (!AudioContextCtor) return null;
+  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
   if (!audioContext) {
     audioContext = new AudioContextCtor();
   }
@@ -51,6 +62,7 @@ const playTone = (choice: SoundChoice, volume: number) => {
   gain.connect(context.destination);
   oscillator.start(now);
   oscillator.stop(now + (isAlert ? 0.3 : 0.2));
+  scheduleIdleClose();
 };
 
 const soundChoiceForEvent = (settings: AppSettings, event: SoundEvent): SoundChoice => {
@@ -77,8 +89,8 @@ const customSoundForEvent = (settings: AppSettings, event: SoundEvent) => {
       return settings.sounds.customErrorDataUrl;
     case 'queueFinished':
       return settings.sounds.customQueueFinishedDataUrl;
-    case 'notification':
     case 'start':
+    case 'notification':
     default:
       return settings.sounds.customNotificationDataUrl;
   }
@@ -93,6 +105,12 @@ export const playAppSound = (settings: AppSettings, event: SoundEvent) => {
   if (choice === 'custom') {
     const dataUrl = customSoundForEvent(settings, event);
     if (dataUrl) {
+      const MAX_CUSTOM_SOUND_BYTES = 512_000;
+      const estimatedBytes = Math.ceil((dataUrl.length - dataUrl.indexOf(',') - 1) * 3 / 4);
+      if (estimatedBytes > MAX_CUSTOM_SOUND_BYTES) {
+        playTone('soft', volume);
+        return;
+      }
       const audio = new Audio(dataUrl);
       audio.volume = clampVolume(volume);
       void audio.play().catch(() => {

@@ -30,32 +30,55 @@ pub fn run_tool(
         cmd.current_dir(dir);
     }
 
-    let child = cmd
+    if !std::path::Path::new(&spec.program).exists() {
+        return Err(format!("Program not found: {}", spec.program));
+    }
+
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("Failed to spawn {}: {}", spec.program, e))?;
 
-    let output = if let Some(_timeout) = spec.timeout {
-        match child.wait_with_output() {
-            Ok(o) => o,
-            Err(e) => {
-                return Err(format!("Process wait failed: {}", e));
+    let deadline = spec.timeout.map(|t| Instant::now() + t);
+
+    let output = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let mut stdout_buf = Vec::new();
+                let mut stderr_buf = Vec::new();
+                if let Some(ref mut child_stdout) = child.stdout {
+                    use std::io::Read;
+                    let _ = child_stdout.read_to_end(&mut stdout_buf);
+                }
+                if let Some(ref mut child_stderr) = child.stderr {
+                    use std::io::Read;
+                    let _ = child_stderr.read_to_end(&mut stderr_buf);
+                }
+                break std::process::Output {
+                    status,
+                    stdout: stdout_buf,
+                    stderr: stderr_buf,
+                };
             }
+            Ok(None) => {
+                if let Some(dl) = &deadline {
+                    if Instant::now() >= *dl {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(format!(
+                            "Process timed out after {:?}",
+                            spec.timeout.unwrap()
+                        ));
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => return Err(format!("Process wait failed: {}", e)),
         }
-    } else {
-        child
-            .wait_with_output()
-            .map_err(|e| format!("Process wait failed: {}", e))?
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
     let elapsed = started.elapsed();
-    if let Some(timeout) = spec.timeout {
-        if elapsed > timeout {
-            return Err(format!("Process timed out after {:?}", timeout));
-        }
-    }
 
     Ok(ProcessOutput {
         stdout,

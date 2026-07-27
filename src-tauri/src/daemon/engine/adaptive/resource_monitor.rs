@@ -1,4 +1,4 @@
-#![allow(dead_code, clippy::manual_range_contains, unused_assignments)]
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug)]
@@ -188,20 +188,20 @@ impl ResourceMonitor {
             return 0.0;
         }
 
-        static mut PREV_IDLE: u64 = 0;
-        static mut PREV_TOTAL: u64 = 0;
+        static PREV_IDLE: AtomicU64 = AtomicU64::new(0);
+        static PREV_TOTAL: AtomicU64 = AtomicU64::new(0);
 
-        let cpu_pct = unsafe {
-            let d_idle = idle_ticks.saturating_sub(PREV_IDLE);
-            let d_total = total.saturating_sub(PREV_TOTAL);
-            PREV_IDLE = idle_ticks;
-            PREV_TOTAL = total;
+        let prev_idle = PREV_IDLE.load(Ordering::Relaxed);
+        let prev_total = PREV_TOTAL.load(Ordering::Relaxed);
+        PREV_IDLE.store(idle_ticks, Ordering::Relaxed);
+        PREV_TOTAL.store(total, Ordering::Relaxed);
 
-            if d_total == 0 {
-                0.0
-            } else {
-                (1.0 - (d_idle as f64 / d_total as f64)) as f32
-            }
+        let d_idle = idle_ticks.saturating_sub(prev_idle);
+        let d_total = total.saturating_sub(prev_total);
+        let cpu_pct = if d_total == 0 {
+            0.0
+        } else {
+            (1.0 - (d_idle as f64 / d_total as f64)) as f32
         };
 
         cpu_pct.clamp(0.0, 1.0)

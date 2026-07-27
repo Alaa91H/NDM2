@@ -48,17 +48,23 @@ struct CompiledCondition {
 /// Rule id paired with its pre-compiled conditions.
 type CompiledRule = (String, Vec<CompiledCondition>);
 
+struct RulesInner {
+    rules: Vec<DownloadRule>,
+    compiled: Vec<CompiledRule>,
+}
+
 #[derive(Clone)]
 pub struct DownloadRuleEngine {
-    rules: Arc<Mutex<Vec<DownloadRule>>>,
-    compiled: Arc<Mutex<Vec<CompiledRule>>>,
+    inner: Arc<Mutex<RulesInner>>,
 }
 
 impl DownloadRuleEngine {
     pub fn new() -> Self {
         Self {
-            rules: Arc::new(Mutex::new(Vec::new())),
-            compiled: Arc::new(Mutex::new(Vec::new())),
+            inner: Arc::new(Mutex::new(RulesInner {
+                rules: Vec::new(),
+                compiled: Vec::new(),
+            })),
         }
     }
 
@@ -74,21 +80,17 @@ impl DownloadRuleEngine {
                 condition: cond.clone(),
             });
         }
-        if let Ok(mut rules) = self.rules.lock() {
-            rules.push(rule.clone());
-            rules.sort_by_key(|r| r.priority);
-        }
-        if let Ok(mut compiled) = self.compiled.lock() {
-            compiled.push((rule.id, compiled_conditions));
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.rules.push(rule.clone());
+            inner.rules.sort_by_key(|r| r.priority);
+            inner.compiled.push((rule.id, compiled_conditions));
         }
     }
 
     pub fn remove_rule(&self, rule_id: &str) {
-        if let Ok(mut rules) = self.rules.lock() {
-            rules.retain(|r| r.id != rule_id);
-        }
-        if let Ok(mut compiled) = self.compiled.lock() {
-            compiled.retain(|(id, _)| id != rule_id);
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.rules.retain(|r| r.id != rule_id);
+            inner.compiled.retain(|(id, _)| id != rule_id);
         }
     }
 
@@ -111,17 +113,13 @@ impl DownloadRuleEngine {
         size_bytes: Option<u64>,
         headers: &[(String, String)],
     ) -> Vec<(String, RuleAction)> {
-        let rules = match self.rules.lock() {
-            Ok(g) => g,
-            Err(_) => return Vec::new(),
-        };
-        let compiled = match self.compiled.lock() {
+        let inner = match self.inner.lock() {
             Ok(g) => g,
             Err(_) => return Vec::new(),
         };
 
         let mut actions = Vec::new();
-        for (rule, (_, conditions)) in rules.iter().zip(compiled.iter()) {
+        for (rule, (_, conditions)) in inner.rules.iter().zip(inner.compiled.iter()) {
             if !rule.enabled {
                 continue;
             }
@@ -165,7 +163,10 @@ impl DownloadRuleEngine {
     }
 
     pub fn rules(&self) -> Vec<DownloadRule> {
-        self.rules.lock().map(|g| g.clone()).unwrap_or_default()
+        self.inner
+            .lock()
+            .map(|g| g.rules.clone())
+            .unwrap_or_default()
     }
 }
 

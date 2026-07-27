@@ -23,5 +23,5 @@ overrides:
 allowBuilds:
   esbuild: true
   playwright: true
-  spawn-sync: true
+  spawn-sync: false
   unrs-resolver: true

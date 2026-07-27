@@ -44,17 +44,20 @@ pub fn check_latest_version(tool: &dyn ExternalTool, http: &reqwest::Client) -> 
 }
 
 fn check_ytdlp_latest(http: &reqwest::Client, os: &str) -> Result<UpdateInfo, String> {
-    let rt = tokio::runtime::Handle::current();
-    let response = rt.block_on(async {
-        http.get("https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest")
-            .header("User-Agent", "NOVA-DownloadManager")
-            .send()
-            .await
+    let response = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            http.get("https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest")
+                .header("User-Agent", "NOVA-DownloadManager")
+                .send()
+                .await
+        })
     });
 
     match response {
         Ok(resp) => {
-            let body = rt.block_on(async { resp.text().await });
+            let body = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async { resp.text().await })
+            });
             match body {
                 Ok(body) => {
                     let json: serde_json::Value = serde_json::from_str(&body)
@@ -115,10 +118,6 @@ fn check_ytdlp_latest(http: &reqwest::Client, os: &str) -> Result<UpdateInfo, St
     }
 }
 
-fn get_platform_pattern() -> Option<&'static super::types::PlatformPattern> {
-    None
-}
-
 pub fn download_and_install(
     tool: &dyn ExternalTool,
     update_info: &UpdateInfo,
@@ -136,14 +135,15 @@ pub fn download_and_install(
             .map_err(|e| format!("Failed to create install directory: {}", e))?;
     }
 
-    let rt = tokio::runtime::Handle::current();
-    let response = rt
-        .block_on(async { http.get(download_url).send().await })
-        .map_err(|e| format!("Download request failed: {}", e))?;
+    let response = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async { http.get(download_url).send().await })
+    })
+    .map_err(|e| format!("Download request failed: {}", e))?;
 
-    let bytes = rt
-        .block_on(async { response.bytes().await })
-        .map_err(|e| format!("Failed to read download: {}", e))?;
+    let bytes = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async { response.bytes().await })
+    })
+    .map_err(|e| format!("Failed to read download: {}", e))?;
 
     let filename = download_url.rsplit('/').next().unwrap_or("tool");
     let dest_path = install_dir.join(filename);

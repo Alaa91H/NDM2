@@ -27,7 +27,7 @@ pub fn build_download_plan(report: &ResolutionReport, existing_partial_size: u64
         || existing_partial_size > 0;
 
     let mirrors = resource
-        .map(|_r| {
+        .map(|_| {
             report
                 .request_diagnostics
                 .head_result

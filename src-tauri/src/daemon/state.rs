@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use reqwest::Client as HttpClient;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

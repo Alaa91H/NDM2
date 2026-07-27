@@ -46,7 +46,8 @@ function shallowEqualTask(a: DownloadItem, b: DownloadItem): boolean {
     a.errorMessage === b.errorMessage &&
     a.name === b.name &&
     a.savePath === b.savePath &&
-    a.connections === b.connections
+    a.connections === b.connections &&
+    a.retries === b.retries
   );
 }
 
@@ -194,6 +195,9 @@ export const taskStore = create<TaskState>()((set, get) => ({
       }
       set((p) => ({ tasks: p.tasks.filter((t) => t.id !== id) }));
       if (uiStore.getState().selectedTaskId === id) uiStore.getState().setSelectedTaskId(null);
+      // Clean up per-task telemetry to prevent unbounded memory growth.
+      const { removeTaskTelemetry } = await import('./engineStore').then((m) => m.useEngineStore.getState());
+      removeTaskTelemetry(id);
       uiStore
         .getState()
         .addToast('warning', 'Download removed', `"${targetItem.name}" was removed from the daemon.${diskMessage}`);

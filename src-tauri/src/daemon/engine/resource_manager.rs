@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use crate::daemon::engine::config::global_config;
 
 use super::adaptive::buffer_manager::BufferManager;

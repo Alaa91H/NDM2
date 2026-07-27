@@ -192,11 +192,36 @@ fn apply_download_rules(
             RuleAction::SetRateLimit { kbps } => rate_limit_kbps = Some(kbps),
             RuleAction::AddHeader { name, value } => {
                 let options = body.direct_options.get_or_insert_with(HashMap::new);
+                let header_line = format!("{}: {}", name, value);
                 let headers = options
                     .entry("headers".to_string())
-                    .or_insert_with(|| serde_json::Value::Array(Vec::new()));
-                if let Some(list) = headers.as_array_mut() {
-                    list.push(serde_json::Value::String(format!("{}: {}", name, value)));
+                    .or_insert_with(|| serde_json::Value::String(String::new()));
+                // Headers are stored as newline-separated strings for direct_str()
+                // compatibility. An existing array from the request body is also
+                // handled by joining all entries.
+                match headers {
+                    serde_json::Value::String(s) => {
+                        if !s.is_empty() {
+                            s.push('\n');
+                        }
+                        s.push_str(&header_line);
+                    }
+                    serde_json::Value::Array(arr) => {
+                        // Legacy array format: flatten to newline-separated string.
+                        let lines: Vec<String> = arr
+                            .iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect();
+                        let mut combined = lines.join("\n");
+                        if !combined.is_empty() {
+                            combined.push('\n');
+                        }
+                        combined.push_str(&header_line);
+                        *headers = serde_json::Value::String(combined);
+                    }
+                    other => {
+                        *other = serde_json::Value::String(header_line);
+                    }
                 }
             }
             RuleAction::AddMirror { url_pattern } => mirrors.push(url_pattern),
@@ -714,16 +739,23 @@ async fn background_resolve_and_start(state: SharedState, task_id: String, origi
         }
     }
 
+    // Defer task_snapshot update to avoid nesting it inside curl_jobs lock
+    // (lock ordering: curl_jobs → task_snapshot is a deadlock risk).
+    let deferred_url_update: Option<String> = if let Some(ref final_url) = metadata.final_url {
+        if supported_direct_url(final_url) {
+            Some(final_url.clone())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     if let Ok(mut jobs) = state.curl_jobs.lock() {
         if let Some(job) = jobs.get_mut(&task_id) {
-            if let Some(ref final_url) = metadata.final_url {
-                if final_url != &job.task.url && supported_direct_url(final_url) {
+            if let Some(ref final_url) = deferred_url_update {
+                if final_url != &job.task.url {
                     job.task.url = final_url.clone();
-                    if let Ok(mut tasks) = state.task_snapshot.lock() {
-                        if let Some(task) = tasks.get_mut(&task_id) {
-                            task.url = final_url.clone();
-                        }
-                    }
                 }
             }
 
@@ -770,6 +802,16 @@ async fn background_resolve_and_start(state: SharedState, task_id: String, origi
                     "rieConnections".to_string(),
                     serde_json::Value::Number(connections.into()),
                 );
+            }
+        }
+    }
+
+    // Apply the deferred URL update to task_snapshot separately (no lock nesting).
+    if let Some(final_url) = &deferred_url_update {
+        if let Ok(mut tasks) = state.task_snapshot.lock() {
+            if let Some(task) = tasks.get_mut(&task_id) {
+                task.url = final_url.clone();
+                updates_applied = true;
             }
         }
     }

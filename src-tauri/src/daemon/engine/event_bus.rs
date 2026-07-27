@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -139,12 +140,16 @@ impl EngineEvent {
 /// Callback invoked synchronously for every published engine event.
 type Subscriber = Arc<dyn Fn(&TimestampedEvent) + Send + Sync>;
 
+pub type SubscriberId = u64;
+
 struct EventBusInner {
-    subscribers: Vec<Subscriber>,
+    subscribers: Vec<(SubscriberId, Subscriber)>,
+    next_subscriber_id: AtomicU64,
     event_log: Vec<TimestampedEvent>,
     task_index: HashMap<String, Vec<usize>>,
     next_id: AtomicU64,
     max_log_size: usize,
+    publishing: AtomicBool,
 }
 
 #[derive(Clone)]
@@ -157,10 +162,12 @@ impl EventBus {
         Self {
             inner: Arc::new(Mutex::new(EventBusInner {
                 subscribers: Vec::new(),
+                next_subscriber_id: AtomicU64::new(1),
                 event_log: Vec::new(),
                 task_index: HashMap::new(),
                 next_id: AtomicU64::new(1),
                 max_log_size: 10_000,
+                publishing: AtomicBool::new(false),
             })),
         }
     }
@@ -169,20 +176,37 @@ impl EventBus {
         Self {
             inner: Arc::new(Mutex::new(EventBusInner {
                 subscribers: Vec::new(),
+                next_subscriber_id: AtomicU64::new(1),
                 event_log: Vec::new(),
                 task_index: HashMap::new(),
                 next_id: AtomicU64::new(1),
                 max_log_size,
+                publishing: AtomicBool::new(false),
             })),
         }
     }
 
     pub fn publish(&self, event: EngineEvent) {
+        // Prevent reentrant deadlock: if a subscriber calls publish() while we're
+        // already publishing, skip the nested event to avoid locking the Mutex twice.
+        let already_publishing = self
+            .inner
+            .lock()
+            .map(|inner| inner.publishing.swap(true, Ordering::AcqRel))
+            .unwrap_or(true);
+        if already_publishing {
+            log::warn!("EventBus: reentrant publish detected — dropping event to prevent deadlock");
+            return;
+        }
+
         let task_id_opt = event.task_id().map(|s| s.to_string());
         let ts_event = {
             let mut inner = match self.inner.lock() {
                 Ok(g) => g,
-                Err(_) => return,
+                Err(_) => {
+                    self.inner.lock().map(|i| i.publishing.store(false, Ordering::Release)).ok();
+                    return;
+                }
             };
             let id = inner.next_id.fetch_add(1, Ordering::Relaxed);
             let ts_event = TimestampedEvent {
@@ -216,19 +240,47 @@ impl EventBus {
         let subscriber_clone = self
             .inner
             .lock()
-            .map(|inner| inner.subscribers.clone())
+            .map(|inner| inner.subscribers.iter().map(|(_, s)| s.clone()).collect::<Vec<_>>())
             .unwrap_or_default();
         for sub in &subscriber_clone {
-            sub(&ts_event);
+            let _ = catch_unwind(AssertUnwindSafe(|| sub(&ts_event))).map_err(|e| {
+                let msg = if let Some(s) = e.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = e.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "unknown panic".to_string()
+                };
+                log::error!("EventBus: subscriber panicked: {msg}");
+            });
         }
+        // Clear the publishing guard.
+        self.inner
+            .lock()
+            .map(|inner| inner.publishing.store(false, Ordering::Release))
+            .ok();
     }
 
-    pub fn subscribe<F>(&self, callback: F)
+    pub fn subscribe<F>(&self, callback: F) -> SubscriberId
     where
         F: Fn(&TimestampedEvent) + Send + Sync + 'static,
     {
         if let Ok(mut inner) = self.inner.lock() {
-            inner.subscribers.push(Arc::new(callback));
+            let id = inner.next_subscriber_id.fetch_add(1, Ordering::Relaxed);
+            inner.subscribers.push((id, Arc::new(callback)));
+            id
+        } else {
+            0
+        }
+    }
+
+    pub fn unsubscribe(&self, id: SubscriberId) -> bool {
+        if let Ok(mut inner) = self.inner.lock() {
+            let before = inner.subscribers.len();
+            inner.subscribers.retain(|(sid, _)| *sid != id);
+            inner.subscribers.len() < before
+        } else {
+            false
         }
     }
 
@@ -730,5 +782,59 @@ mod tests {
 
         bus2.publish(make_started("t1"));
         assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    // ── 11. Subscriber panic does not disable the bus ─────────────────
+
+    #[test]
+    fn panic_in_subscriber_does_not_disable_bus() {
+        use std::panic;
+
+        let bus = EventBus::new();
+        let counter = Arc::new(AtomicUsize::new(0));
+        let c = counter.clone();
+
+        bus.subscribe(|_| {
+            panic!("boom");
+        });
+        bus.subscribe(move |_| {
+            c.fetch_add(1, Ordering::SeqCst);
+        });
+
+        bus.publish(make_started("t1"));
+        // second subscriber still called despite first panicking
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        // bus is still functional
+        bus.publish(make_started("t2"));
+        assert_eq!(counter.load(Ordering::SeqCst), 2);
+    }
+
+    // ── 12. unsubscribe removes subscriber ────────────────────────────
+
+    #[test]
+    fn unsubscribe_removes_subscriber() {
+        let bus = EventBus::new();
+        let counter = Arc::new(AtomicUsize::new(0));
+        let c = counter.clone();
+
+        let id = bus.subscribe(move |_| {
+            c.fetch_add(1, Ordering::SeqCst);
+        });
+        assert_eq!(bus.subscriber_count(), 1);
+
+        bus.publish(make_started("t1"));
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+
+        assert!(bus.unsubscribe(id));
+        assert_eq!(bus.subscriber_count(), 0);
+
+        bus.publish(make_started("t2"));
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn unsubscribe_nonexistent_id_returns_false() {
+        let bus = EventBus::new();
+        assert!(!bus.unsubscribe(999));
     }
 }

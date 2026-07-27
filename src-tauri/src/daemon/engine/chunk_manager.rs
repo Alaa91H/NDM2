@@ -1,4 +1,3 @@
-#![allow(dead_code, clippy::manual_clamp)]
 use std::time::{Duration, Instant};
 
 /// Sliding window for tracking recent samples.

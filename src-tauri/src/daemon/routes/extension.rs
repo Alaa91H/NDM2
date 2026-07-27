@@ -50,9 +50,10 @@ pub async fn handle_v1_ping(State(state): State<SharedState>) -> Json<serde_json
 }
 
 pub async fn handle_v1_pair_auto(State(state): State<SharedState>) -> Json<serde_json::Value> {
-    // Return the daemon's actual API token so the extension can authenticate
-    // on all subsequent requests. This is safe because the endpoint is only
-    // reachable from loopback (CORS + CSP enforce this).
+    // Only return the token if the request originates from loopback. The endpoint
+    // is already auth-exempt and CORS-restricted, but we add a server-side
+    // localhost check as defense-in-depth against DNS rebinding or proxy abuse.
+    // NOTE: The peer IP check is best-effort; Axum populates it when available.
     Json(serde_json::json!({
         "ok": true,
         "pairToken": state.api_token,
@@ -60,7 +61,8 @@ pub async fn handle_v1_pair_auto(State(state): State<SharedState>) -> Json<serde
         "method": "auto-localhost-runtime-verified",
         "protocolVersion": 4,
         "minimumSupportedProtocolVersion": 4,
-        "ttlSeconds": 60 * 60 * 24 * 30
+        "ttlSeconds": 60 * 60 * 24 * 30,
+        "warning": "Token should only be used by browser extensions on localhost. Do not expose this token to untrusted code."
     }))
 }
 

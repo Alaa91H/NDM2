@@ -56,9 +56,17 @@ impl ServerProfileStore {
                         .format("%Y-%m-%d %H:%M:%S")
                         .to_string(),
                 });
-                // Keep last 100 records.
+                // Keep last 100 records per host.
                 if records.len() > 100 {
                     records.drain(0..records.len() - 100);
+                }
+                // Evict oldest hosts if the map grows too large.
+                const MAX_HOSTS: usize = 10_000;
+                if history.len() > MAX_HOSTS {
+                    let keys_to_remove: Vec<_> = history.keys().take(1_000).cloned().collect();
+                    for k in keys_to_remove {
+                        history.remove(&k);
+                    }
                 }
             }
         }

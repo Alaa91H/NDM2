@@ -487,6 +487,9 @@ pub(crate) fn apply_easy_options<H: Handler>(
             .map_err(|e| format!("Could not configure DNS cache timeout: {e}"))?;
     }
     if let Some(jar) = plan.config.str_("cookieJar") {
+        if jar.contains("..") || jar.starts_with('/') || jar.starts_with('\\') {
+            return Err("cookieJar path must be a relative path within the working directory".to_string());
+        }
         easy.cookie_jar(jar)
             .map_err(|e| format!("Could not configure cookie jar: {e}"))?;
     }
@@ -601,12 +604,19 @@ pub(crate) fn apply_easy_options<H: Handler>(
             .map_err(|e| format!("Could not configure netrc-optional: {e}"))?;
     }
     if let Some(netrc_file) = plan.config.str_("netrcFile") {
+        // Reject paths with traversal or pointing to system locations.
+        if netrc_file.contains("..") || netrc_file.starts_with('/') || netrc_file.starts_with('\\') {
+            return Err("netrcFile path must be a relative path within the working directory".to_string());
+        }
         unsafe {
             raw_setopt_str(easy.raw(), CURLOPT_NETRC_FILE, netrc_file)
                 .map_err(|e| format!("Could not configure netrc file: {e}"))?;
         }
     }
     if let Some(cert) = plan.config.str_("cert") {
+        if cert.contains("..") || cert.starts_with('/') || cert.starts_with('\\') {
+            return Err("cert path must be a relative path within the working directory".to_string());
+        }
         easy.ssl_cert(cert)
             .map_err(|e| format!("Could not configure SSL certificate: {e}"))?;
     }
@@ -615,6 +625,9 @@ pub(crate) fn apply_easy_options<H: Handler>(
             .map_err(|e| format!("Could not configure certificate type: {e}"))?;
     }
     if let Some(key) = plan.config.str_("key") {
+        if key.contains("..") || key.starts_with('/') || key.starts_with('\\') {
+            return Err("key path must be a relative path within the working directory".to_string());
+        }
         easy.ssl_key(key)
             .map_err(|e| format!("Could not configure SSL key: {e}"))?;
     }
@@ -861,6 +874,9 @@ pub(crate) fn apply_easy_options<H: Handler>(
             .map_err(|e| format!("Could not configure SSL options: {e}"))?;
     }
     if let Some(crl) = plan.config.str_("crlFile") {
+        if crl.contains("..") || crl.starts_with('/') || crl.starts_with('\\') {
+            return Err("crlFile path must be a relative path within the working directory".to_string());
+        }
         easy.crlfile(crl)
             .map_err(|e| format!("Could not configure CRL file: {e}"))?;
     }
