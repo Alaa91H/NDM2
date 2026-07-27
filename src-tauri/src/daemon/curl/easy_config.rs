@@ -540,7 +540,7 @@ pub(crate) fn apply_easy_options<H: Handler>(
         // For unknown-size files: 1 hour hard cap.
         let default_timeout = if plan.total_size > 0 {
             let estimated = (plan.total_size / 10_000) + 60;
-            estimated.max(120).min(7200)
+            estimated.clamp(120, 7200)
         } else {
             3600
         };
