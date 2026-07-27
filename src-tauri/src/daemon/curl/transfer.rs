@@ -665,7 +665,9 @@ fn run_single_libcurl(
     let handles = vec![handle];
     let mut last_total = on_disk_before;
     let mut last_tick = Instant::now();
+    let mut last_progress_time = Instant::now();
     let downloaded_for_tick = downloaded_counter.clone();
+    let cancel_for_tick = cancel.clone();
     let mut tick = || {
         let counter_bytes = downloaded_for_tick.load(Ordering::Relaxed);
         let disk_bytes = FileWriter::current_size(&plan.output_path);
@@ -676,6 +678,15 @@ fn run_single_libcurl(
         let speed = effective_downloaded.saturating_sub(last_total) as f64 / elapsed;
         last_total = effective_downloaded;
         last_tick = now;
+
+        if effective_downloaded > on_disk_before {
+            last_progress_time = now;
+        } else if now.duration_since(last_progress_time).as_secs() >= 60
+            && effective_downloaded == on_disk_before
+        {
+            log::warn!("Task {id}: stall detected — no data received for 60s, aborting transfer");
+            cancel_for_tick.store(true, Ordering::Release);
+        }
 
         let speed_u64 = speed.max(0.0) as u64;
         state.bandwidth_manager.report_speed(id, speed_u64);

@@ -532,6 +532,19 @@ pub(crate) fn apply_easy_options<H: Handler>(
     if let Some(sec) = plan.config.u64_("timeoutSec").filter(|v| *v > 0) {
         easy.timeout(Duration::from_secs(sec))
             .map_err(|e| format!("Could not configure timeout: {e}"))?;
+    } else {
+        // Default overall timeout: without this, a transfer that hangs in the
+        // multi socket interface (e.g., stuck DNS, TLS handshake stall, or a
+        // server that accepts the connection but never sends data) runs forever.
+        // For known-size files: at least 10 KB/s average + 60s grace.
+        // For unknown-size files: 1 hour hard cap.
+        let default_timeout = if plan.total_size > 0 {
+            let estimated = (plan.total_size / 10_000) + 60;
+            estimated.max(120).min(7200)
+        } else {
+            3600
+        };
+        let _ = easy.timeout(Duration::from_secs(default_timeout));
     }
     if let Some(sec) = plan.config.u64_("connectTimeoutSec").filter(|v| *v > 0) {
         easy.connect_timeout(Duration::from_secs(sec))
