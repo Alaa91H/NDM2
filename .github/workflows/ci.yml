@@ -277,39 +277,37 @@ jobs:
 
       - name: Summarize validation gates
         if: always()
+        shell: pwsh
         run: |
-          echo "## Validation gates" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Gate | Result |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| --- | --- |" >> "$GITHUB_STEP_SUMMARY"
-          failed=""
-          declare -A gates=(
-            ["Final source audit"]="${{ steps.audit_final.outcome }}"
-            ["Browser extension typecheck"]="${{ steps.ext_typecheck.outcome }}"
-            ["Browser extension release checks"]="${{ steps.ext_release_checks.outcome }}"
-            ["Browser extension production build"]="${{ steps.ext_build.outcome }}"
-            ["Synchronize translation indexes"]="${{ steps.i18n_sync.outcome }}"
-            ["Validate translations"]="${{ steps.i18n_validate.outcome }}"
-            ["TypeScript check"]="${{ steps.ts_check.outcome }}"
-            ["ESLint"]="${{ steps.eslint.outcome }}"
-            ["Run tests"]="${{ steps.tests.outcome }}"
-            ["Frontend production build"]="${{ steps.fe_build.outcome }}"
+          $gates = @(
+            @{ Name = 'Final source audit';                Outcome = '${{ steps.audit_final.outcome }}' },
+            @{ Name = 'Browser extension typecheck';       Outcome = '${{ steps.ext_typecheck.outcome }}' },
+            @{ Name = 'Browser extension release checks';  Outcome = '${{ steps.ext_release_checks.outcome }}' },
+            @{ Name = 'Browser extension production build'; Outcome = '${{ steps.ext_build.outcome }}' },
+            @{ Name = 'Synchronize translation indexes';   Outcome = '${{ steps.i18n_sync.outcome }}' },
+            @{ Name = 'Validate translations';             Outcome = '${{ steps.i18n_validate.outcome }}' },
+            @{ Name = 'TypeScript check';                  Outcome = '${{ steps.ts_check.outcome }}' },
+            @{ Name = 'ESLint';                            Outcome = '${{ steps.eslint.outcome }}' },
+            @{ Name = 'Run tests';                         Outcome = '${{ steps.tests.outcome }}' },
+            @{ Name = 'Frontend production build';         Outcome = '${{ steps.fe_build.outcome }}' }
           )
-          for name in "Final source audit" "Browser extension typecheck" "Browser extension release checks" "Browser extension production build" "Synchronize translation indexes" "Validate translations" "TypeScript check" "ESLint" "Run tests" "Frontend production build"; do
-            outcome="${gates[$name]}"
-            case "$outcome" in
-              success) icon="PASS" ;;
-              failure) icon="FAIL"; failed="$failed $name" ;;
-              *)       icon="SKIPPED" ;;
-            esac
-            printf "| %s | %s |\n" "$name" "$icon" >> "$GITHUB_STEP_SUMMARY"
-            printf "%-9s %s\n" "$icon" "$name"
-          done
-          if [ -n "$failed" ]; then
-            echo "::error::Validation failed. Failed gate(s):$failed"
+          $summary = "## Validation gates`n`n| Gate | Result |`n| --- | --- |`n"
+          $failed = @()
+          foreach ($gate in $gates) {
+            switch ($gate.Outcome) {
+              'success' { $icon = 'PASS' }
+              'failure' { $icon = 'FAIL'; $failed += $gate.Name }
+              default   { $icon = 'SKIPPED' }
+            }
+            $summary += "| $($gate.Name) | $icon |`n"
+            Write-Host ("{0,-9} {1}" -f $icon, $gate.Name)
+          }
+          [System.IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, $summary)
+          if ($failed.Count -gt 0) {
+            Write-Error "Validation failed after collecting all gates. Failed gate(s): $($failed -join ', ')"
             exit 1
-          fi
-          echo "All validation gates passed."
+          }
+          Write-Host 'All validation gates passed.'
 
   # ─────────────────────────────────────────────────────────────────────────
   # E2E Tests (PR only)
