@@ -1647,6 +1647,11 @@ pub(crate) fn start_curl_process(state: &SharedState, id: &str) {
     state.mark_dirty();
     state.priority_queue.start_download(id);
 
+    let watchdog_cancel = record.1.clone();
+    let watchdog_id = id.to_string();
+    let watchdog_state = state.clone();
+    let watchdog_expected = record.0.total_size;
+
     let state2 = state.clone();
     let id2 = id.to_string();
     std::thread::spawn(move || {
@@ -1663,10 +1668,6 @@ pub(crate) fn start_curl_process(state: &SharedState, id: &str) {
             run_libcurl_download(&state2, &id2, plan, cancel.clone())
         }));
         match result {
-            // Last-line defence: a transfer that produced a zero-byte file must
-            // NEVER be marked completed — regardless of whether expected_size
-            // is known. This catches the case where libcurl silently returned
-            // Ok(0) due to TLS failure, connection drop, or empty response.
             Ok(Ok(0)) => {
                 log::error!(
                     "Task {id2}: download produced 0-byte file (expected {}); refusing to mark as complete",
@@ -1713,6 +1714,137 @@ pub(crate) fn start_curl_process(state: &SharedState, id: &str) {
             }
         }
     });
+
+    // Watchdog thread: monitors the transfer independently of the curl
+    // multi loop. If the multi socket interface blocks inside multi.action()
+    // (which prevents tick() and the in-loop stall detector from firing),
+    // this watchdog detects the stall from OUTSIDE and force-sets the cancel
+    // token so the curl thread exits as soon as it checks it.
+    let hard_deadline_secs = if watchdog_expected > 0 {
+        let estimated = (watchdog_expected / 10_000) + 120;
+        estimated.clamp(300, 10800)
+    } else {
+        7200
+    };
+    std::thread::spawn(move || {
+        log::info!(
+            "Watchdog started for task {watchdog_id} (hard deadline: {hard_deadline_secs}s)"
+        );
+        let start = Instant::now();
+        let mut last_downloaded: u64 = 0;
+        let mut last_progress_time = Instant::now();
+        let stall_timeout = Duration::from_secs(60);
+
+        loop {
+            std::thread::sleep(Duration::from_secs(3));
+
+            if watchdog_cancel.load(Ordering::Acquire) {
+                log::info!("Watchdog for {watchdog_id}: cancel token already set, exiting");
+                return;
+            }
+
+            let (status, downloaded, speed) = {
+                let jobs = match watchdog_state.curl_jobs.lock() {
+                    Ok(j) => j,
+                    Err(_) => return,
+                };
+                match jobs.get(&watchdog_id) {
+                    Some(job) => (
+                        job.task.status.clone(),
+                        job.task.downloaded_bytes,
+                        job.task.speed_bytes_per_sec,
+                    ),
+                    None => {
+                        log::info!(
+                            "Watchdog for {watchdog_id}: job removed from curl_jobs, exiting"
+                        );
+                        return;
+                    }
+                }
+            };
+
+            if status != "downloading" {
+                log::info!("Watchdog for {watchdog_id}: status is '{status}', exiting");
+                return;
+            }
+
+            if downloaded > last_downloaded {
+                last_downloaded = downloaded;
+                last_progress_time = Instant::now();
+            }
+
+            let elapsed = start.elapsed().as_secs();
+
+            // Stall check: no bytes received for stall_timeout seconds
+            if last_progress_time.elapsed() >= stall_timeout && speed == 0 {
+                log::warn!(
+                    "Watchdog: task {watchdog_id} stalled for {}s with 0 bytes/s — force-cancelling transfer (downloaded={downloaded})",
+                    stall_timeout.as_secs()
+                );
+                watchdog_cancel.store(true, Ordering::Release);
+                force_error_status(
+                    &watchdog_state,
+                    &watchdog_id,
+                    format!(
+                        "Download stalled: no data received for {} seconds. The connection may have hung or the server stopped responding.",
+                        stall_timeout.as_secs()
+                    ),
+                );
+                return;
+            }
+
+            // Hard deadline: total elapsed time exceeded
+            if elapsed >= hard_deadline_secs {
+                log::warn!(
+                    "Watchdog: task {watchdog_id} exceeded hard deadline of {hard_deadline_secs}s — force-cancelling transfer (downloaded={downloaded})"
+                );
+                watchdog_cancel.store(true, Ordering::Release);
+                force_error_status(
+                    &watchdog_state,
+                    &watchdog_id,
+                    format!(
+                        "Download timed out after {} seconds. The transfer did not complete within the allowed time limit.",
+                        hard_deadline_secs
+                    ),
+                );
+                return;
+            }
+
+            // Periodic heartbeat log every 30s
+            if elapsed > 0 && elapsed % 30 == 0 {
+                log::info!(
+                    "Watchdog heartbeat: task {watchdog_id} — {elapsed}s elapsed, downloaded={downloaded}, speed={speed} B/s, status={status}"
+                );
+            }
+        }
+    });
+}
+
+/// Force a task to "error" status from an external thread (watchdog).
+/// This is used when the curl worker thread is stuck and cannot update
+/// the status itself. The generation check is skipped because the
+/// watchdog runs alongside the worker and is authoritative.
+fn force_error_status(state: &SharedState, id: &str, message: String) {
+    log::error!("Watchdog force-error for task {id}: {message}");
+    state.priority_queue.stop_download(id);
+    if let Ok(mut stats) = state.download_stats.lock() {
+        stats.total_failed += 1;
+    }
+    let mut jobs = lock_or_err!(state.curl_jobs);
+    if let Some(job) = jobs.get_mut(id) {
+        if job.task.status == "completed" {
+            return;
+        }
+        job.task.status = "error".to_string();
+        job.task.speed_bytes_per_sec = 0;
+        job.task.time_left_seconds = 0;
+        job.task.engine_status = Some("watchdog-timeout".to_string());
+        job.task.error_message = Some(message);
+        let task = job.task.clone();
+        drop(jobs);
+        lock_or_err!(state.task_snapshot).insert(id.to_string(), task);
+        state.mark_dirty();
+    }
 }
 
 /// Generate a unique filename by appending " (1)", " (2)", etc. before the
