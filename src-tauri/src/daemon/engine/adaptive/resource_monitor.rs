@@ -311,7 +311,7 @@ mod tests {
         m.available_memory_mb = 2048;
         m.cpu_count = 8;
         let max = m.max_safe_connections();
-        assert!(max >= 4 && max <= 32);
+        assert!((4..=32).contains(&max));
 
         m.available_memory_mb = 256;
         let low_mem = m.max_safe_connections();
@@ -386,6 +386,7 @@ mod tests {
         let mut snap = m.snapshot_clone();
         let original = snap.disk_write_mbps;
         snap.disk_write_mbps = 999;
+        assert_eq!(snap.disk_write_mbps, 999);
         let snap2 = m.snapshot_clone();
         assert_eq!(snap2.disk_write_mbps, original);
         assert_ne!(snap2.disk_write_mbps, 999);

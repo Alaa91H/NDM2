@@ -177,10 +177,10 @@ mod tests {
     fn recommend_reduces_buffer_under_memory_pressure() {
         let mut bm = BufferManager::new();
         bm.last_adjustment = Instant::now() - Duration::from_secs(10);
-        let normal = bm.recommend(1 * 1024 * 1024, 1, 0.0).write_buffer;
+        let normal = bm.recommend(1024 * 1024, 1, 0.0).write_buffer;
 
         bm.last_adjustment = Instant::now() - Duration::from_secs(10);
-        let pressured = bm.recommend(1 * 1024 * 1024, 1, 0.9).write_buffer;
+        let pressured = bm.recommend(1024 * 1024, 1, 0.9).write_buffer;
         assert!(
             pressured < normal,
             "memory pressure should reduce buffer: {} < {}",
@@ -193,10 +193,10 @@ mod tests {
     fn recommend_reduces_buffer_with_more_connections() {
         let mut bm = BufferManager::new();
         bm.last_adjustment = Instant::now() - Duration::from_secs(10);
-        let single = bm.recommend(1 * 1024 * 1024, 1, 0.0).write_buffer;
+        let single = bm.recommend(1024 * 1024, 1, 0.0).write_buffer;
 
         bm.last_adjustment = Instant::now() - Duration::from_secs(10);
-        let many = bm.recommend(1 * 1024 * 1024, 16, 0.0).write_buffer;
+        let many = bm.recommend(1024 * 1024, 16, 0.0).write_buffer;
         assert!(
             many <= single,
             "more connections should reduce buffer: {} <= {}",
@@ -247,10 +247,10 @@ mod tests {
     fn flush_interval_slower_under_pressure() {
         let mut bm = BufferManager::new();
         bm.last_adjustment = Instant::now() - Duration::from_secs(10);
-        let normal = bm.recommend(1 * 1024 * 1024, 1, 0.0).flush_interval_ms;
+        let normal = bm.recommend(1024 * 1024, 1, 0.0).flush_interval_ms;
 
         bm.last_adjustment = Instant::now() - Duration::from_secs(10);
-        let pressured = bm.recommend(1 * 1024 * 1024, 1, 0.9).flush_interval_ms;
+        let pressured = bm.recommend(1024 * 1024, 1, 0.9).flush_interval_ms;
         assert!(
             pressured >= normal,
             "pressure should slow flush: {} >= {}",
