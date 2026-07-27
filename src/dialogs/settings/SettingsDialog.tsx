@@ -1,6 +1,6 @@
 /* src/dialogs/settings/SettingsDialog.tsx */
 import React, { useState } from 'react';
-import { Settings, Sliders, Globe, Palette, Search, ChevronDown, ChevronUp, X, Activity, Shield } from 'lucide-react';
+import { Settings, Globe, Search, ChevronDown, ChevronUp, X, Activity } from 'lucide-react';
 import {
   useDialogData,
   useSettingsData,
@@ -16,13 +16,10 @@ import { playAppSound } from '../../utils/sound';
 // Import subcomponents
 import { GeneralAndDownloads } from './sections/GeneralAndDownloads';
 import { NetworkAndPerformance } from './sections/NetworkAndPerformance';
-import { BrowserAndIntegration } from './sections/BrowserAndIntegration';
-import { AppearanceSettings } from './sections/AppearanceSettings';
-import { SecuritySettings } from './sections/SecuritySettings';
 import { DiagnosticsAndSystem } from './sections/DiagnosticsAndSystem';
 
-type SettingsTabId = 'general' | 'network' | 'integration' | 'appearance' | 'security' | 'diagnostics_system';
-type DiagnosticsSubTab = 'bridge' | 'diagnostics' | 'backup' | 'advanced';
+type SettingsTabId = 'general' | 'network' | 'diagnostics_system';
+type DiagnosticsSubTab = 'bridge' | 'diagnostics' | 'backup' | 'advanced' | 'logging';
 type SettingsDialogPayload = {
   tab?: SettingsTabId;
   subTab?: DiagnosticsSubTab;
@@ -133,9 +130,6 @@ export const SettingsDialog: React.FC = () => {
       'path',
     ],
     network: ['network', 'proxy', 'connection', 'dns', 'ip', 'speed', 'bandwidth', 'threads', 'limits', 'performance'],
-    integration: ['browser', 'extension', 'integrate', 'capture', 'token', 'cookies', 'history', 'filter', 'monitor'],
-    appearance: ['appearance', 'theme', 'dark', 'color', 'layout', 'contrast', 'accent', 'toolbar'],
-    security: ['security', 'privacy', 'encryption', 'token', 'credential', 'origin', 'localhost'],
     diagnostics_system: [
       'diagnostics',
       'daemon',
@@ -147,6 +141,8 @@ export const SettingsDialog: React.FC = () => {
       'factory',
       'updates',
       'port',
+      'logging',
+      'log',
     ],
   };
 
@@ -156,7 +152,8 @@ export const SettingsDialog: React.FC = () => {
       (payload.subTab === 'bridge' ||
         payload.subTab === 'diagnostics' ||
         payload.subTab === 'backup' ||
-        payload.subTab === 'advanced')
+        payload.subTab === 'advanced' ||
+        payload.subTab === 'logging')
       ? payload.subTab
       : 'bridge',
   );
@@ -176,30 +173,13 @@ export const SettingsDialog: React.FC = () => {
     { id: 'general' as const, label: t('set_tab_general'), desc: t('set_tab_general_desc'), icon: Settings },
     { id: 'network' as const, label: t('set_tab_network'), desc: t('set_tab_network_desc'), icon: Globe },
     {
-      id: 'integration' as const,
-      label: t('set_tab_browser_integration'),
-      desc: t('set_tab_browser_integration_desc'),
-      icon: Sliders,
-    },
-    {
-      id: 'appearance' as const,
-      label: t('settings_appearance'),
-      desc: t('set_tab_appearance_security_desc'),
-      icon: Palette,
-    },
-    {
-      id: 'security' as const,
-      label: t('settings_security_privacy'),
-      desc: t('set_tab_appearance_security_desc'),
-      icon: Shield,
-    },
-    {
       id: 'diagnostics_system' as const,
       label: t('set_tab_diagnostics_system'),
       desc: t('set_tab_diagnostics_system_desc'),
       icon: Activity,
       subItems: [
         { id: 'diagnostics', label: t('set_sub_diagnostics') },
+        { id: 'logging', label: t('settings_logging_title') },
         { id: 'backup', label: t('set_sub_backup') },
       ],
     },
@@ -386,21 +366,6 @@ export const SettingsDialog: React.FC = () => {
           {activeTab === 'network' && (
             <NetworkAndPerformance settings={localSettings} updateSetting={updateLocalSetting} onAddToast={addToast} />
           )}
-
-          {activeTab === 'integration' && (
-            <BrowserAndIntegration settings={localSettings} updateSetting={updateLocalSetting} onAddToast={addToast} />
-          )}
-
-          {activeTab === 'appearance' && (
-            <AppearanceSettings
-              settings={localSettings}
-              themeSettings={localThemeSettings}
-              updateThemeSetting={updateLocalThemeSetting}
-              updateSetting={updateLocalSetting}
-            />
-          )}
-
-          {activeTab === 'security' && <SecuritySettings settings={localSettings} updateSetting={updateLocalSetting} />}
 
           {activeTab === 'diagnostics_system' && (
             <DiagnosticsAndSystem

@@ -329,23 +329,20 @@ export const StatusBar: React.FC = () => {
           </button>
         )}
 
-        {/* 1. Browser Integration Shield */}
+        {/* 1. Browser Integration Shield — display only, color indicates status */}
         {statusVisible('browser') && (
-          <button
-            onClick={() => {
-              openDialog('browserIntegration');
-            }}
-            className={`p-1.5 hover:bg-[var(--bg-hover)] rounded transition-all cursor-pointer flex items-center justify-center ${browserStatusColor}`}
+          <div
+            className={`p-1.5 rounded flex items-center justify-center ${browserStatusColor}`}
             title={browserStatusTip}
           >
             <Shield className="w-3.5 h-3.5" />
-          </button>
+          </div>
         )}
 
         {statusVisible('telegram') && (
           <button
             onClick={() => {
-              openDialog('settings', { tab: 'integrations_automation', subTab: 'telegram' });
+              openDialog('settings');
             }}
             onContextMenu={handleTelegramContextMenu}
             className={`p-1.5 hover:bg-[var(--bg-hover)] rounded transition-all cursor-pointer flex items-center justify-center ${
@@ -476,7 +473,7 @@ export const StatusBar: React.FC = () => {
             <button
               onClick={() => {
                 setTelegramMenuVisible(false);
-                openDialog('settings', { tab: 'integrations_automation', subTab: 'telegram' });
+                openDialog('settings');
               }}
               className="w-full text-left px-4 py-2 text-xs text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors cursor-pointer font-bold"
             >

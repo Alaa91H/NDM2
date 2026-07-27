@@ -149,6 +149,7 @@ export const initialSettings: AppSettings = {
     browserInterceptKeys: 'Alt',
     logLevel: 'info',
     bufferSizeKb: 256,
+    loggingEnabled: false,
   },
   extra: {
     language: 'en',

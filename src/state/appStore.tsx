@@ -13,6 +13,7 @@ import { queueStore } from '../store/queueStore';
 import { settingsStore } from '../store/settingsStore';
 import { bridgeStore } from '../store/bridgeStore';
 import { uiStore } from '../store/uiStore';
+import { logger } from '../utils/logger';
 
 const buildNovaDefaultPaths = (downloadsDir: string): AppSettings['saveAndCategories'] => {
   const sep = downloadsDir.includes('\\') ? '\\' : '/';
@@ -137,6 +138,31 @@ function EffectsProvider({ children }: { children: ReactNode }) {
         settingsStore.getState().incrementI18nRevision();
       });
     }
+    return unsub;
+  }, []);
+
+  // Initialize logger from settings
+  useEffect(() => {
+    const { loggingEnabled, logLevel } = settingsStore.getState().settings.advanced;
+    logger.setEnabled(loggingEnabled);
+    if (logLevel === 'debug' || logLevel === 'info' || logLevel === 'error') {
+      logger.setMinLevel(logLevel);
+    }
+    logger.info('AppStore', 'Application initialized', {
+      loggingEnabled,
+      logLevel,
+      timestamp: new Date().toISOString(),
+    });
+
+    const unsub = settingsStore.subscribe((state, prev) => {
+      if (state.settings.advanced !== prev.settings.advanced) {
+        const { loggingEnabled: en, logLevel: ll } = state.settings.advanced;
+        logger.setEnabled(en);
+        if (ll === 'debug' || ll === 'info' || ll === 'error') {
+          logger.setMinLevel(ll);
+        }
+      }
+    });
     return unsub;
   }, []);
 

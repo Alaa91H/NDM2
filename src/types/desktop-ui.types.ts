@@ -415,6 +415,7 @@ export interface AppSettings {
     browserInterceptKeys: string; // "Alt", "Ctrl", etc
     logLevel: 'info' | 'debug' | 'error';
     bufferSizeKb: number;
+    loggingEnabled: boolean;
   };
   extra: {
     language: string;
