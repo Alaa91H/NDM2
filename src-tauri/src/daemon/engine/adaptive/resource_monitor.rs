@@ -1,4 +1,3 @@
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug)]
@@ -134,6 +133,8 @@ impl ResourceMonitor {
 
     #[cfg(target_os = "windows")]
     fn estimate_cpu_usage_windows(&self) -> f32 {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
         #[repr(C)]
         struct FileTime {
             dw_low_date_time: u32,
