@@ -522,23 +522,4 @@ export interface ToastItem {
   action?: { label: string; onClick: () => void };
 }
 
-interface AppStoreState {
-  tasks: DownloadItem[];
-  queues: Queue[];
-  selectedTaskId: string | null;
-  workspaceView: 'all' | 'unfinished' | 'finished' | 'queued' | FileType | 'browser' | 'scheduler' | 'diagnostics';
-  bridge: {
-    status: 'connected' | 'connecting' | 'disconnected' | 'degraded';
-    version: string;
-    pid: number;
-    uptime: number;
-    speedLimit: number | null;
-  };
-  searchQuery: string;
-  dialog: DialogState;
-  settings: AppSettings;
-  themeSettings: AppThemeSettings;
-  toasts: ToastItem[];
-  isLoading: boolean;
-  isDegradedMode: boolean;
-}
+
