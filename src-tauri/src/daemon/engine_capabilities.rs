@@ -705,7 +705,7 @@ fn curl_key_supported(
         | "ftpCreateDirs"
         // TCP / connection
         | "localPortRange" | "tcpNoDelay" | "keepaliveTimeSec"
-        | "pathAsIs"
+        | "pathAsIs" | "globoff"
         | "freshConnect" | "forbidReuse" | "maxAgeConn" | "bufferSize"
         // Connection limits / download control
         | "segmented" | "forceSingleConnection"
@@ -804,6 +804,7 @@ fn curl_key_supported(
             has_flag(flags, "--happy-eyeballs-timeout-ms") && has_feature(features, "asynchdns")
         }
         "pathAsIs" => has_flag(flags, "--path-as-is"),
+        "globoff" => has_flag(flags, "--globoff"),
         "ftpCreateDirs" => has_flag(flags, "--ftp-create-dirs"),
         // Proxy TLS / auth (always available when SSL is built in)
         "proxyType" | "proxyTunnel" => true,
