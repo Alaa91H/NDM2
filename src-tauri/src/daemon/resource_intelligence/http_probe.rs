@@ -5,11 +5,10 @@ use super::types::{
     CapabilityState, ErrorPhase, ProbeMethod, ProbeResult, RedirectChain, RedirectHop,
     ResolutionError, ResourceIdentity, ServerCapabilities,
 };
-use crate::daemon::utils::infer_file_type;
+use crate::daemon::utils::{infer_file_type, DEFAULT_USER_AGENT};
 
 const PROBE_TIMEOUT_SECS: u64 = 15;
-const PROBE_USER_AGENT: &str =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) NOVA/0.1.0 ResourceIntelligenceEngine";
+const PROBE_USER_AGENT: &str = DEFAULT_USER_AGENT;
 
 pub struct HttpNegotiator<'a> {
     client: &'a reqwest::Client,

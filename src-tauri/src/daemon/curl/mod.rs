@@ -45,6 +45,21 @@ pub(super) struct DirectDownloadPlan {
     pub(super) digest_sha256: Option<String>,
     pub(super) link_mirrors: Vec<String>,
     pub(super) mirror_priorities: Vec<u32>,
+    /// When `true`, the RIE (Resource Intelligence Engine) has already
+    /// resolved the final URL, determined range support, and completed the
+    /// full preflight analysis using reqwest with anti-bot headers
+    /// (Sec-Fetch-*, realistic User-Agent, Cloudflare bypass). The curl
+    /// download thread should skip its own `resolve_effective_target`
+    /// preflight and trust the RIE's results to avoid:
+    /// - Redundant HTTP requests that double latency
+    /// - Different TLS fingerprints between reqwest and libcurl triggering
+    ///   bot detection
+    /// - Loss of cookie/session state from the RIE probe
+    /// - Cloudflare challenge pages being returned on the second request
+    pub(super) preflight_resolved: bool,
+    /// Range support detected by the RIE preflight. Only meaningful when
+    /// `preflight_resolved` is `true`.
+    pub(super) preflight_supports_range: bool,
 }
 
 #[derive(Default, Clone)]

@@ -239,6 +239,10 @@ pub(crate) fn plan_from_job(job: &CurlJob) -> DirectDownloadPlan {
     let mirror_priorities = config
         .array_u32_("mirrorPriorities")
         .unwrap_or_else(|| vec![1u32; link_mirrors.len()]);
+    let preflight_resolved = config.bool_("preflightResolved").unwrap_or(false);
+    let preflight_supports_range = config
+        .bool_("preflightSupportsRange")
+        .unwrap_or(job.task.resumable);
     DirectDownloadPlan {
         url: job.task.url.clone(),
         output_path: std::path::PathBuf::from(&job.task.save_path),
@@ -263,6 +267,8 @@ pub(crate) fn plan_from_job(job: &CurlJob) -> DirectDownloadPlan {
         digest_sha256,
         link_mirrors,
         mirror_priorities,
+        preflight_resolved,
+        preflight_supports_range,
     }
 }
 
@@ -292,10 +298,41 @@ fn merge_parts(output_path: &Path, ranges: &[ByteRange]) -> Result<u64, String> 
 
 fn resolve_effective_target(plan: &DirectDownloadPlan) -> (String, bool, PreflightData) {
     log::info!(
-        "resolve_effective_target: url={}, total_size={}",
+        "resolve_effective_target: url={}, total_size={}, preflight_resolved={}",
         plan.url,
-        plan.total_size
+        plan.total_size,
+        plan.preflight_resolved
     );
+
+    // ── RIE preflight skip ─────────────────────────────────────────────
+    // When the RIE (Resource Intelligence Engine) has already resolved the
+    // URL via reqwest with full anti-bot headers (Sec-Fetch-*, realistic
+    // User-Agent, Cloudflare challenge bypass), skip the redundant curl
+    // preflight entirely. The RIE already:
+    //   - Followed all HTTP redirects and meta-refresh chains
+    //   - Detected Cloudflare/Akamai bot challenges
+    //   - Determined range support (206 vs 200)
+    //   - Collected timing, TLS, and connection diagnostics
+    //
+    // Running a second preflight with curl would:
+    //   1. Double latency (extra round-trip before download starts)
+    //   2. Use a different TLS fingerprint (libcurl vs reqwest) that may
+    //      trigger bot detection differently
+    //   3. Lose cookie/session state from the RIE probe
+    //   4. Risk receiving a Cloudflare challenge page on the second request
+    if plan.preflight_resolved {
+        log::info!(
+            "resolve_effective_target: RIE already resolved {} — reusing preflight results (range={})",
+            plan.url,
+            plan.preflight_supports_range
+        );
+        let preflight = PreflightData {
+            supports_range: plan.preflight_supports_range,
+            ..Default::default()
+        };
+        return (plan.url.clone(), plan.preflight_supports_range, preflight);
+    }
+
     // ── Fast path: skip the preflight HTTP request entirely for direct file
     //    URLs that already have a recognizable extension. The probe was adding
     //    5+ seconds of latency before every download start, and if libcurl's TLS

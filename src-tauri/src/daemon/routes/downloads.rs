@@ -805,6 +805,18 @@ async fn background_resolve_and_start(state: SharedState, task_id: String, origi
                     serde_json::Value::Number(connections.into()),
                 );
             }
+            // Signal that the RIE has completed a full preflight resolution
+            // using reqwest with anti-bot headers. The curl download thread
+            // should skip its own `resolve_effective_target` preflight to
+            // avoid redundant requests and inconsistent headers.
+            opts.insert(
+                "preflightResolved".to_string(),
+                serde_json::Value::Bool(true),
+            );
+            opts.insert(
+                "preflightSupportsRange".to_string(),
+                serde_json::Value::Bool(metadata.resumable),
+            );
         }
     }
 
