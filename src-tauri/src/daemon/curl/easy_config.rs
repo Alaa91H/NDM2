@@ -1075,6 +1075,12 @@ pub(crate) fn apply_easy_options<H: Handler>(
             .map_err(|e| format!("Could not add Cache-Control header: {e}"))?;
         list.append("Connection: keep-alive")
             .map_err(|e| format!("Could not add Connection header: {e}"))?;
+        list.append("Sec-Fetch-Mode: no-cors")
+            .map_err(|e| format!("Could not add Sec-Fetch-Mode header: {e}"))?;
+        list.append("Sec-Fetch-Site: cross-site")
+            .map_err(|e| format!("Could not add Sec-Fetch-Site header: {e}"))?;
+        list.append("Sec-Fetch-Dest: empty")
+            .map_err(|e| format!("Could not add Sec-Fetch-Dest header: {e}"))?;
         if plan.digest_sha256.is_none() {
             list.append("Want-Digest: sha-256")
                 .map_err(|e| format!("Could not add Want-Digest header: {e}"))?;

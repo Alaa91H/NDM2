@@ -545,11 +545,13 @@ fn apply_fast_resolve(body: &mut CreateDownloadBody) -> bool {
         }
     }
 
-    if body.referer.as_deref().unwrap_or("").trim().is_empty() {
-        body.referer = Some(original_url.clone());
-    }
-    body.url = Some(original_url);
-    true
+    // No recognizable name or extension — let background_resolve_and_start
+    // analyze this URL with proper anti-bot headers (Sec-Fetch-*, realistic
+    // User-Agent) and resolve the final name, size, and metadata via RIE.
+    // Returning false here enables the background probe for ambiguous URLs
+    // (API redirects, CDN tokens, shortlinks, etc.) where curl alone may
+    // receive a block page or incorrect Content-Disposition.
+    false
 }
 
 /// Extract the final path segment as a filename, stripping query strings.
@@ -850,8 +852,7 @@ async fn background_size_probe(state: SharedState, task_id: String, url: String)
     let probe_result = probe_url_with_options(&state, &url, Some(&probe_body)).await;
     let size = match probe_result {
         Ok(json) => json
-            .get("identity")
-            .and_then(|i| i.get("contentLength"))
+            .get("sizeBytes")
             .and_then(|v| v.as_u64())
             .unwrap_or(0),
         Err(e) => {
