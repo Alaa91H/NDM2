@@ -60,10 +60,8 @@ export const MediaDownloadPage: React.FC = () => {
 
   // Local UI state
   const [url, setUrl] = useState<string>(() => (typeof dialog.payload === 'string' ? dialog.payload : ''));
-  const [targetType, _setTargetType] = useState<'video' | 'playlist'>('video');
   const [saveMode, setSaveMode] = useState<'video' | 'audio'>('video');
   const [savePath, setSavePath] = useState<string>(settings.saveAndCategories.defaultFolder || '');
-  const [selectedQueue, _setSelectedQueue] = useState<string>('main');
   const [quality, setQuality] = useState<string>(settings.extra.videoQuality || 'best');
   const [audioFormat, setAudioFormat] = useState<string>('m4a');
   const [ffmpegEnabled, setFfmpegEnabled] = useState<boolean>(settings.extra.ffmpegAutoMerge || false);
@@ -145,7 +143,7 @@ export const MediaDownloadPage: React.FC = () => {
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const latestUrlRef = useRef('');
 
-  const isPlaylistUrl = targetType === 'playlist' || /[?&]list=[^&]/.test(url);
+  const isPlaylistUrl = /[?&]list=[^&]/.test(url);
 
   /* -- URL tracking -- */
   useEffect(() => {
@@ -251,7 +249,6 @@ export const MediaDownloadPage: React.FC = () => {
   /* -- computed values -- */
   const isProbingAny = isProbing || isProbingPlaylist;
   const ytDlpReady = engineCapabilities.mediaReady;
-  const _ffmpegReady = engineCapabilities.postProcessingReady;
 
   const requiresFfmpeg = (() => {
     if (!probeResult || saveMode === 'audio') return true;
@@ -346,7 +343,7 @@ export const MediaDownloadPage: React.FC = () => {
         bitrate: '',
         sizeBytes: 0,
         ext: 'm4a',
-        description: 'AAC · Original Quality',
+        description: 'AAC ï¿½ Original Quality',
       },
       {
         value: 'flac',
@@ -385,7 +382,7 @@ export const MediaDownloadPage: React.FC = () => {
             bitrate: abr,
             sizeBytes: f.filesize || f.filesizeApprox || 0,
             ext: key,
-            description: `Original Stream${abr ? ` · ${abr}` : ''}`,
+            description: `Original Stream${abr ? ` ï¿½ ${abr}` : ''}`,
           });
         }
       }
@@ -594,7 +591,7 @@ export const MediaDownloadPage: React.FC = () => {
           category: fileType,
           status: 'downloading',
           savePath,
-          queueId: selectedQueue,
+          queueId: 'main',
           description: `Media ${saveMode} request: quality=${quality}, ffmpeg=${ffmpegEnabled ? 'enabled' : 'disabled'}, output=${outputTemplate}`,
           connections: 0,
           resumable: true,
@@ -1067,7 +1064,7 @@ export const MediaDownloadPage: React.FC = () => {
             {isPlaylistUrl && playlistResult && totalSize > 0 && (
               <div className="flex items-center justify-between text-[10px] text-[var(--text-muted)] px-1">
                 <span>
-                  {t('media_per_file')} {selectedFormatSize > 0 ? formatBytes(selectedFormatSize) : '—'}
+                  {t('media_per_file')} {selectedFormatSize > 0 ? formatBytes(selectedFormatSize) : 'ï¿½'}
                 </span>
                 <span className="text-[var(--info)] font-semibold">
                   {t('media_est_total')} {formatBytes(totalSize)}
@@ -1094,7 +1091,7 @@ export const MediaDownloadPage: React.FC = () => {
               {selectAllPlaylist ? playlistResult.entries.length : selectedPlaylistItems.size}&nbsp;item
               {(selectAllPlaylist ? playlistResult.entries.length : selectedPlaylistItems.size) !== 1 ? 's' : ''}
               {totalSize > 0 && (
-                <span className="text-[var(--info)] ml-1 font-semibold">· {formatBytes(totalSize)}</span>
+                <span className="text-[var(--info)] ml-1 font-semibold">ï¿½ {formatBytes(totalSize)}</span>
               )}
             </span>
           )}

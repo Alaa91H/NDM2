@@ -98,12 +98,8 @@ const ALLOWED_YTDLP_ARGS: &[&str] = &[
     "--force-overwrites",
     "--no-force-overwrites",
     "--write-comments",
-    "--embed-metadata",
-    "--no-embed-metadata",
-    "--embed-chapters",
     "--convert-thumbnails",
     "--postprocessor-args",
-    "--extractor-args",
     "--compat-options",
     "--live-from-start",
     "--wait-for-video",
@@ -116,7 +112,6 @@ const ALLOWED_YTDLP_ARGS: &[&str] = &[
     "--twofactor",
     "-2",
     "--netrc",
-    "--geo-bypass-country",
     "--xattrs",
     "--no-mtime",
 ];
@@ -128,7 +123,6 @@ const PATH_VALUE_FLAGS: &[&str] = &[
     "--download-archive",
     "--batch-file",
     "--ffmpeg-location",
-    "--download-archive",
 ];
 
 fn is_safe_extra_arg(arg: &str) -> bool {

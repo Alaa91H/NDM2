@@ -189,7 +189,6 @@ pub(crate) fn task_from_body(
             requested_connections(body.connections),
             initial_size,
             downloaded,
-            true,
             0,
         ),
         referer: body.referer.clone(),
@@ -1656,13 +1655,8 @@ pub(crate) fn mark_curl_task_finished(
         job.task.time_left_seconds = 0;
         job.task.engine_status = Some("completed".to_string());
         job.task.error_message = None;
-        job.task.segments = build_segments(
-            job.task.connections,
-            job.task.size_bytes,
-            final_size,
-            false,
-            0,
-        );
+        job.task.segments =
+            build_segments(job.task.connections, job.task.size_bytes, final_size, 0);
         let task = job.task.clone();
         drop(jobs);
         lock_or_err!(state.task_snapshot).insert(id.to_string(), task);

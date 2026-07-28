@@ -2,7 +2,7 @@ import type { DownloadItem } from '../types/desktop-ui.types';
 import { logger } from '../utils/logger';
 import type { DiagnosticData } from './tauriClient';
 
-export interface NovaHealth {
+interface NovaHealth {
   status: 'connected' | 'degraded';
   name: string;
   version: string;
@@ -50,7 +50,7 @@ export interface NovaHealth {
   compatibilityMode?: string;
 }
 
-export interface NovaProbeResult {
+interface NovaProbeResult {
   url: string;
   finalUrl?: string;
   fileName: string;
@@ -84,7 +84,7 @@ export interface MediaFormat {
   fps: number | null;
 }
 
-export interface MediaProbeResult {
+interface MediaProbeResult {
   id: string;
   title: string;
   duration: number;
@@ -94,14 +94,14 @@ export interface MediaProbeResult {
   formats: MediaFormat[];
 }
 
-export interface FfmpegStatus {
+interface FfmpegStatus {
   available: boolean;
   binary?: string;
   version?: string;
   versionText?: string;
 }
 
-export interface BrowserExtensionConfig {
+interface BrowserExtensionConfig {
   enabled: boolean;
   token: string;
   minSizeMb: number;
@@ -135,7 +135,7 @@ export interface MediaPlaylistEntry {
   index: number;
 }
 
-export interface MediaPlaylistResult {
+interface MediaPlaylistResult {
   title: string;
   webpageUrl: string;
   entries: MediaPlaylistEntry[];
@@ -202,53 +202,6 @@ export const novaClient = {
 
   async engineCapabilities(): Promise<unknown> {
     return request<unknown>('/api/engines/capabilities', undefined, 8000);
-  },
-
-  async downloadEngine(
-    engine: 'ytdlp' | 'ffmpeg',
-  ): Promise<{ ok: boolean; engine: string; path?: string; version?: string; error?: string }> {
-    return request(
-      '/api/engines/download',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ engine }),
-      },
-      120000,
-    );
-  },
-
-  async verifyEngine(
-    engine: 'ytdlp' | 'ffmpeg',
-  ): Promise<{ ok: boolean; available: boolean; engine: string; path?: string; version?: string; error?: string }> {
-    return request(
-      '/api/engines/verify',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ engine }),
-      },
-      10000,
-    );
-  },
-
-  async checkEngineLatestVersion(engine: 'ytdlp' | 'ffmpeg'): Promise<{
-    ok: boolean;
-    engine: string;
-    latestVersion: string;
-    currentVersion?: string;
-    updateAvailable?: boolean;
-    error?: string;
-  }> {
-    return request(
-      '/api/engines/latest-version',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ engine }),
-      },
-      15000,
-    );
   },
 
   async diagnostics(): Promise<DiagnosticData> {

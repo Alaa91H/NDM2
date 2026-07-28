@@ -231,4 +231,4 @@ export const initialSettings: AppSettings = {
 
 // Formatting utilities have moved to utils/formatUtils.ts — the single source of truth.
 // Re-exported here for backward compatibility with existing imports.
-export { formatBytes, formatSpeed, formatTimeLeft } from './utils/formatUtils';
+export { formatBytes } from './utils/formatUtils';

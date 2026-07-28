@@ -7,8 +7,6 @@ use std::path::{Path, PathBuf};
 use std::ptr;
 use std::time::Duration;
 
-use serde_json::Value;
-
 enum CurlUrl {}
 
 type CurlUrlCode = c_int;
@@ -123,14 +121,6 @@ fn curl_url_error(code: CurlUrlCode) -> String {
             .to_string_lossy()
             .to_string()
     }
-}
-
-fn option_u64(options: &HashMap<String, Value>, key: &str) -> Option<u64> {
-    options.get(key).and_then(|value| {
-        value
-            .as_u64()
-            .or_else(|| value.as_str()?.trim().parse().ok())
-    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -360,38 +350,6 @@ pub struct RetryPolicy {
 }
 
 impl RetryPolicy {
-    #[allow(dead_code)]
-    pub fn from_options(options: &HashMap<String, Value>) -> Self {
-        Self {
-            attempts: option_u64(options, "retryCount")
-                .unwrap_or(0)
-                .saturating_add(1)
-                .min(50),
-            delay: Duration::from_secs(option_u64(options, "retryDelaySec").unwrap_or(2).min(3600)),
-            max_total_time: option_u64(options, "retryMaxTimeSec")
-                .filter(|v| *v > 0)
-                .map(Duration::from_secs),
-            retry_all_errors: options
-                .get("retryAllErrors")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true),
-            backoff_multiplier: options
-                .get("backoffMultiplier")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(2.0)
-                .clamp(1.0, 10.0),
-            max_delay: Duration::from_secs(
-                option_u64(options, "retryMaxDelaySec")
-                    .unwrap_or(120)
-                    .min(3600),
-            ),
-            jitter: options
-                .get("retryJitter")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true),
-        }
-    }
-
     pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
         if attempt == 0 || self.attempts <= 1 {
             return Duration::ZERO;
@@ -523,85 +481,7 @@ pub fn record_host_ceiling(url: &str, ceiling: usize) {
     }
 }
 
-impl ConnectionLimits {
-    /// Compute sensible default connection limits based on system resources.
-    /// Uses `available_parallelism()` for CPU count and applies conservative
-    /// heuristics to avoid overwhelming the system.
-    #[allow(dead_code)]
-    pub fn from_system_resources() -> Self {
-        let cpus = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4);
-
-        let total = (cpus * 2).clamp(2, 32);
-        let per_host = (cpus).clamp(1, 16);
-        let cache = (total * 4).clamp(8, 128);
-
-        Self {
-            total,
-            per_host,
-            cache,
-        }
-    }
-
-    /// Clamp user-supplied or computed limits to sane system bounds.
-    /// Never exceeds system capacity, never goes below 1.
-    #[allow(dead_code)]
-    pub fn clamp_to_system(self) -> Self {
-        let sys = Self::from_system_resources();
-        Self {
-            total: self.total.clamp(1, sys.total * 2),
-            per_host: self.per_host.clamp(1, sys.per_host * 2),
-            cache: self.cache.clamp(1, sys.cache * 2),
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn from_options(
-        options: &HashMap<String, Value>,
-        requested: u32,
-        max_connections: u32,
-    ) -> Self {
-        let requested = requested.max(1).min(max_connections) as usize;
-        let max_connections = max_connections.max(1) as usize;
-        let total = option_u64(options, "maxTotalConnections")
-            .map(|value| value as usize)
-            .unwrap_or(requested)
-            .clamp(1, max_connections);
-        let per_host = option_u64(options, "maxHostConnections")
-            .map(|value| value as usize)
-            .unwrap_or(requested)
-            .clamp(1, total);
-        let cache = option_u64(options, "maxConnectionCache")
-            .or_else(|| option_u64(options, "maxConnects"))
-            .map(|value| value as usize)
-            .unwrap_or_else(|| total.saturating_mul(2).max(total))
-            .clamp(1, max_connections.saturating_mul(4).max(1));
-        Self {
-            total,
-            per_host,
-            cache,
-        }
-    }
-
-    /// Like `from_options` but applies hostname-aware per-host limits when
-    /// the user hasn't explicitly set `maxHostConnections`.
-    #[allow(dead_code)]
-    pub fn from_options_for_url(
-        options: &HashMap<String, Value>,
-        requested: u32,
-        max_connections: u32,
-        url: &str,
-    ) -> Self {
-        let mut limits = Self::from_options(options, requested, max_connections);
-        if option_u64(options, "maxHostConnections").is_none() {
-            if let Some(learned) = learned_host_ceiling(url) {
-                limits.per_host = learned.min(limits.total).max(1);
-            }
-        }
-        limits
-    }
-}
+impl ConnectionLimits {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EventLoopMode {
@@ -609,22 +489,7 @@ pub enum EventLoopMode {
     MultiSocket,
 }
 
-impl EventLoopMode {
-    #[allow(dead_code)]
-    pub fn from_options(options: &HashMap<String, Value>) -> Self {
-        match options
-            .get("eventLoop")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .unwrap_or_default()
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "wait_perform" | "waitperform" | "wait" | "perform" => Self::WaitPerform,
-            _ => Self::MultiSocket,
-        }
-    }
-}
+impl EventLoopMode {}
 
 #[derive(Clone, Debug, Default)]
 pub struct IntegrityMetadata {
@@ -690,47 +555,5 @@ mod tests {
         assert!(DirectUrl::parse("https://example.com/file.iso").is_ok());
         assert!(DirectUrl::parse("sftp://example.com/file.iso").is_ok());
         assert!(DirectUrl::parse("scp://example.com/file.iso").is_ok());
-    }
-
-    #[test]
-    fn event_loop_defaults_to_multi_socket() {
-        let options = HashMap::new();
-        assert_eq!(
-            EventLoopMode::from_options(&options),
-            EventLoopMode::MultiSocket
-        );
-
-        let mut options = HashMap::new();
-        options.insert("eventLoop".to_string(), serde_json::json!("waitPerform"));
-        assert_eq!(
-            EventLoopMode::from_options(&options),
-            EventLoopMode::WaitPerform
-        );
-    }
-
-    #[test]
-    fn connection_limits_separate_active_limits_from_cache_size() {
-        let mut options = HashMap::new();
-        options.insert("maxTotalConnections".to_string(), serde_json::json!(6));
-        options.insert("maxHostConnections".to_string(), serde_json::json!(3));
-        options.insert("maxConnectionCache".to_string(), serde_json::json!(20));
-
-        let limits = ConnectionLimits::from_options(&options, 8, 32);
-
-        assert_eq!(limits.total, 6);
-        assert_eq!(limits.per_host, 3);
-        assert_eq!(limits.cache, 20);
-    }
-
-    #[test]
-    fn max_connects_alias_only_sets_connection_cache() {
-        let mut options = HashMap::new();
-        options.insert("maxConnects".to_string(), serde_json::json!(4));
-
-        let limits = ConnectionLimits::from_options(&options, 12, 32);
-
-        assert_eq!(limits.total, 12);
-        assert_eq!(limits.per_host, 12);
-        assert_eq!(limits.cache, 4);
     }
 }

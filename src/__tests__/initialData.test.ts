@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { formatBytes, formatSpeed, formatTimeLeft, initialSettings } from '../initialData';
+import { formatBytes, initialSettings } from '../initialData';
+import { formatSpeed, formatTimeLeft } from '../utils/formatUtils';
 
 describe('formatBytes', () => {
   it('returns "0 B" for zero', () => {

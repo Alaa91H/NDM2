@@ -213,13 +213,7 @@ pub fn file_type_from_extension(ext: &str) -> &'static str {
 }
 
 #[inline]
-pub fn build_segments(
-    connections: u32,
-    total: u64,
-    downloaded: u64,
-    _active: bool,
-    speed: u64,
-) -> Vec<Segment> {
+pub fn build_segments(connections: u32, total: u64, downloaded: u64, speed: u64) -> Vec<Segment> {
     if total == 0 {
         return vec![Segment {
             id: 0,
@@ -832,7 +826,7 @@ mod tests {
 
     #[test]
     fn four_connections_split_total_evenly() {
-        let segs = build_segments(4, 1000, 0, true, 0);
+        let segs = build_segments(4, 1000, 0, 0);
         assert_eq!(segs.len(), 4);
         let total: u64 = segs.iter().map(|s| s.total_bytes).sum();
         assert_eq!(total, 1000);
@@ -840,13 +834,13 @@ mod tests {
 
     #[test]
     fn last_segment_picks_up_remainder() {
-        let segs = build_segments(4, 1000, 0, true, 0);
+        let segs = build_segments(4, 1000, 0, 0);
         assert_eq!(segs[3].total_bytes, 250);
     }
 
     #[test]
     fn single_connection_covers_entire_range() {
-        let segs = build_segments(1, 5000, 0, true, 0);
+        let segs = build_segments(1, 5000, 0, 0);
         assert_eq!(segs.len(), 1);
         assert_eq!(segs[0].total_bytes, 5000);
         assert_eq!(segs[0].progress, 0.0);
@@ -854,7 +848,7 @@ mod tests {
 
     #[test]
     fn zero_total_returns_single_segment() {
-        let segs = build_segments(4, 0, 0, true, 1024);
+        let segs = build_segments(4, 0, 0, 1024);
         assert_eq!(segs.len(), 1);
         assert_eq!(segs[0].total_bytes, 0);
         assert_eq!(segs[0].downloaded_bytes, 0);
@@ -863,7 +857,7 @@ mod tests {
 
     #[test]
     fn progress_calculated_correctly() {
-        let segs = build_segments(2, 1000, 600, true, 200);
+        let segs = build_segments(2, 1000, 600, 200);
         assert_eq!(segs.len(), 2);
         assert_eq!(segs[0].progress, 1.0);
         assert_eq!(segs[0].downloaded_bytes, 500);
@@ -873,7 +867,7 @@ mod tests {
 
     #[test]
     fn downloaded_beyond_seg_clamps() {
-        let segs = build_segments(2, 1000, 9999, true, 0);
+        let segs = build_segments(2, 1000, 9999, 0);
         for seg in &segs {
             assert!(seg.downloaded_bytes <= seg.total_bytes);
         }
@@ -881,7 +875,7 @@ mod tests {
 
     #[test]
     fn segment_ids_are_sequential() {
-        let segs = build_segments(8, 8000, 0, true, 0);
+        let segs = build_segments(8, 8000, 0, 0);
         for (i, seg) in segs.iter().enumerate() {
             assert_eq!(seg.id, i as u32);
         }
@@ -889,7 +883,7 @@ mod tests {
 
     #[test]
     fn speed_distributed_evenly() {
-        let segs = build_segments(4, 4000, 0, true, 1000);
+        let segs = build_segments(4, 4000, 0, 1000);
         for seg in &segs {
             assert_eq!(seg.speed, 250);
         }
@@ -897,7 +891,7 @@ mod tests {
 
     #[test]
     fn uneven_split_remainder_goes_to_last() {
-        let segs = build_segments(3, 1000, 0, true, 0);
+        let segs = build_segments(3, 1000, 0, 0);
         assert_eq!(segs[0].total_bytes, 333);
         assert_eq!(segs[1].total_bytes, 333);
         assert_eq!(segs[2].total_bytes, 334);

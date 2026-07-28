@@ -41,7 +41,7 @@ async function getOrCreateKey(): Promise<CryptoKey | null> {
   ]);
 }
 
-export async function encryptValue(plaintext: string): Promise<string> {
+async function encryptValue(plaintext: string): Promise<string> {
   if (!plaintext) return plaintext;
   if (!isCryptoAvailable()) return plaintext;
 
@@ -60,22 +60,6 @@ export async function encryptValue(plaintext: string): Promise<string> {
 
 function isEncrypted(value: string): boolean {
   return value.startsWith(ENCRYPTED_PREFIX);
-}
-
-export async function decryptValue(ciphertext: string): Promise<string> {
-  if (!ciphertext || !ciphertext.startsWith(ENCRYPTED_PREFIX)) return ciphertext;
-  if (!isCryptoAvailable()) return ciphertext;
-
-  const key = await getOrCreateKey();
-  if (!key) return ciphertext;
-
-  const raw = ciphertext.slice(ENCRYPTED_PREFIX.length);
-  const combined = Uint8Array.from(atob(raw), (c) => c.charCodeAt(0));
-  const iv = combined.slice(0, 12);
-  const data = combined.slice(12);
-
-  const decrypted = await crypto.subtle.decrypt({ name: ALGORITHM, iv }, key, data);
-  return new TextDecoder().decode(decrypted);
 }
 
 function getNested(obj: Record<string, unknown>, path: readonly string[]): string | undefined {
@@ -112,18 +96,6 @@ export async function encryptCredentials<T extends Record<string, unknown>>(sett
     if (val && !isEncrypted(val)) {
       const encrypted = await encryptValue(val);
       result = setNested(result, path, encrypted);
-    }
-  }
-  return result;
-}
-
-export async function decryptCredentials<T extends Record<string, unknown>>(settings: T): Promise<T> {
-  let result = settings;
-  for (const path of CREDENTIAL_FIELDS) {
-    const val = getNested(result, path);
-    if (val && isEncrypted(val)) {
-      const decrypted = await decryptValue(val);
-      result = setNested(result, path, decrypted);
     }
   }
   return result;

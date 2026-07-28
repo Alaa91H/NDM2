@@ -423,7 +423,6 @@ pub(crate) async fn redownload_task(state: &SharedState, id: &str) -> Result<Tas
                 job.task.connections,
                 job.task.size_bytes,
                 0,
-                true,
                 0,
             );
             let task = job.task.clone();
