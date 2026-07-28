@@ -5,11 +5,10 @@ import {
   useDialogData,
   useSettingsData,
   useSettingsActions,
-  useThemeData,
   useToastActions,
   useI18n,
 } from '../../store/selectors';
-import type { AppSettings, AppThemeSettings } from '../../types/desktop-ui.types';
+import type { AppSettings } from '../../types/desktop-ui.types';
 import { initialSettings } from '../../initialData';
 import { playAppSound } from '../../utils/sound';
 import { tauriClient } from '../../api/tauriClient';
@@ -32,14 +31,12 @@ const isSettingsPayload = (payload: unknown): payload is SettingsDialogPayload =
 export const SettingsDialog: React.FC = () => {
   const dialog = useDialogData();
   const settings = useSettingsData();
-  const { updateSettings, updateThemeSettings } = useSettingsActions();
-  const themeSettings = useThemeData();
+  const { updateSettings } = useSettingsActions();
   const { addToast } = useToastActions();
   const t = useI18n();
   const payload = isSettingsPayload(dialog.payload) ? dialog.payload : {};
   // Local state for atomic transactions
   const [localSettings, setLocalSettings] = useState<AppSettings>(structuredClone(settings));
-  const [, setLocalThemeSettings] = useState<AppThemeSettings>(structuredClone(themeSettings));
   const [activeTab, setActiveTab] = useState<SettingsTabId>(payload.tab || 'general');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -55,15 +52,6 @@ export const SettingsDialog: React.FC = () => {
       }
       // Apply immediately and silently to global store
       updateSettings(updated, true);
-      return updated;
-    });
-  };
-
-  const _updateLocalThemeSetting = (key: keyof AppThemeSettings, value: unknown) => {
-    setLocalThemeSettings((prev) => {
-      const updated = { ...prev, [key]: value };
-      // Apply immediately and silently to the global store
-      updateThemeSettings(key, value as string);
       return updated;
     });
   };
@@ -88,19 +76,8 @@ export const SettingsDialog: React.FC = () => {
   const handleResetAllSilent = () => {
     const defaults = structuredClone(initialSettings);
     setLocalSettings(defaults);
-    const defaultsTheme: AppThemeSettings = {
-      theme: 'dark',
-      density: 'dense',
-      accent: 'blue',
-      progress: 'bar',
-      contrast: 'normal',
-    };
-    setLocalThemeSettings(defaultsTheme);
     // Directly apply all changes to the store instantly and silently
     updateSettings(defaults, true);
-    (Object.keys(defaultsTheme) as (keyof AppThemeSettings)[]).forEach((key) => {
-      updateThemeSettings(key, defaultsTheme[key]);
-    });
   };
 
   const handleTestNotification = () => {
@@ -174,6 +151,7 @@ export const SettingsDialog: React.FC = () => {
         { id: 'diagnostics', label: t('set_sub_diagnostics') },
         { id: 'logging', label: t('settings_logging_title') },
         { id: 'backup', label: t('set_sub_backup') },
+        { id: 'advanced', label: t('set_sub_advanced') },
       ],
     },
   ];

@@ -54,8 +54,10 @@ pub struct ServerProfile {
     pub initial_rtt_us: u64,
     pub initial_throughput: u64,
     pub handshake_time_us: u64,
+    pub initial_ttfb_us: u64,
 
     pub rtt_samples: Vec<u64>,
+    pub ttfb_samples: Vec<u64>,
     pub throughput_samples: Vec<u64>,
     pub median_rtt_us: u64,
     pub p95_rtt_us: u64,
@@ -217,6 +219,7 @@ impl ServerProfiler {
         server_header: Option<String>,
         initial_rtt_us: u64,
         handshake_us: u64,
+        ttfb_us: u64,
     ) {
         let profile = self.get_or_create(host);
         profile.protocol = protocol;
@@ -231,8 +234,12 @@ impl ServerProfiler {
         profile.server_software = server_header;
         profile.initial_rtt_us = initial_rtt_us;
         profile.handshake_time_us = handshake_us;
+        profile.initial_ttfb_us = ttfb_us;
         if initial_rtt_us > 0 {
             profile.rtt_samples.push(initial_rtt_us);
+        }
+        if ttfb_us > 0 {
+            profile.ttfb_samples.push(ttfb_us);
         }
         profile.total_probes += 1;
         profile.successful_probes += 1;
@@ -361,6 +368,7 @@ mod tests {
             Some("nginx".to_string()),
             15000,
             8000,
+            0,
         );
         let prof = p.get("cdn.example.com").unwrap();
         assert_eq!(prof.protocol, ProtocolVersion::Http2);
@@ -385,6 +393,7 @@ mod tests {
             None,
             10000,
             5000,
+            0,
         );
         p.update_from_telemetry("h", 12000, 500_000, 200, false);
         p.update_from_telemetry("h", 9000, 600_000, 200, false);
@@ -406,6 +415,7 @@ mod tests {
             None,
             10000,
             5000,
+            0,
         );
         p.update_from_telemetry("h", 10000, 100_000, 429, false);
         let prof = p.get("h").unwrap();
@@ -425,6 +435,7 @@ mod tests {
             None,
             10000,
             5000,
+            0,
         );
         p.update_from_telemetry("h", 0, 0, 0, true);
         p.update_from_telemetry("h", 0, 0, 0, true);
@@ -445,6 +456,7 @@ mod tests {
             None,
             10000,
             5000,
+            0,
         );
         p.report_failure("h");
         p.report_failure("h");
@@ -465,6 +477,7 @@ mod tests {
             None,
             20000,
             5000,
+            0,
         );
         for i in 0..20 {
             p.update_from_telemetry("h", 15000 + i * 1000, 200_000 + i * 50_000, 200, false);
@@ -563,6 +576,7 @@ mod tests {
             None,
             10000,
             5000,
+            0,
         );
         p.learn_optimal_connections("h", 4, 800_000);
         let prof = p.get("h").unwrap();
@@ -592,6 +606,7 @@ mod tests {
             None,
             10000,
             5000,
+            0,
         );
         for i in 0..150 {
             p.update_from_telemetry("h", 10000 + i, 100_000, 200, false);

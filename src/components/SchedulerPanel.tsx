@@ -185,9 +185,6 @@ export const SchedulerPanel: React.FC = () => {
   const [hangupOnComplete, setHangupOnComplete] = useState<boolean>(selectedQueue.hangupOnComplete);
   const [retryCount, setRetryCount] = useState<number>(selectedQueue.retryCount);
   const [exitOnComplete, setExitOnComplete] = useState<boolean>(false);
-  const [playChime, setPlayChime] = useState<boolean>(true);
-  const [enableWebhook, setEnableWebhook] = useState<boolean>(false);
-  const [webhookUrl, setWebhookUrl] = useState<string>('https://api.my-server.com/dl-webhook');
   const [retryDelay, setRetryDelay] = useState<number>(10);
   const [smartScheduleType, setSmartScheduleType] = useState<ScheduleType>(inferScheduleType(selectedQueue));
 
@@ -643,12 +640,6 @@ export const SchedulerPanel: React.FC = () => {
                     onHangupChange={setHangupOnComplete}
                     exitOnComplete={exitOnComplete}
                     onExitChange={setExitOnComplete}
-                    playChime={playChime}
-                    onChimeChange={setPlayChime}
-                    enableWebhook={enableWebhook}
-                    onWebhookEnableChange={setEnableWebhook}
-                    webhookUrl={webhookUrl}
-                    onWebhookUrlChange={setWebhookUrl}
                   />
                 )}
                 {activeTab === 'retries' && (

@@ -73,6 +73,9 @@ pub(super) struct ResponseCapture {
     /// differ from the probed Content-Length, because libcurl transparently
     /// decompresses the body.
     pub(super) content_encoded: bool,
+    /// HTTP version from the first response status line (e.g., "1.1", "2").
+    /// Captured by the header callback and read back by the adaptive engine.
+    pub(super) http_version: Option<String>,
 }
 
 pub(super) struct SegmentProgress {

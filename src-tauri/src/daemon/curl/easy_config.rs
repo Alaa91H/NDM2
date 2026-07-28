@@ -113,7 +113,15 @@ impl Handler for SegmentWriter {
         };
         let line = line.trim_end();
         if let Some(rest) = line.strip_prefix("HTTP/") {
-            if let Some(code) = rest.split_whitespace().nth(1).and_then(|c| c.parse().ok()) {
+            let mut parts = rest.split_whitespace();
+            // The first token is the HTTP version (e.g., "1.1", "2").
+            if let Some(ver) = parts.next() {
+                if let Ok(mut cap) = self.progress.capture.lock() {
+                    cap.http_version = Some(ver.to_string());
+                }
+            }
+            // The second token is the status code.
+            if let Some(code) = parts.next().and_then(|c| c.parse().ok()) {
                 if let Ok(mut cap) = self.progress.capture.lock() {
                     cap.status_code = code;
                 }
@@ -192,6 +200,7 @@ const HTML_HEAD_CAPTURE_LIMIT: usize = 64 * 1024;
 #[derive(Default)]
 pub(crate) struct HtmlHeadCapture {
     body: Vec<u8>,
+    http_version: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 impl Handler for HtmlHeadCapture {
     fn write(&mut self, data: &[u8]) -> Result<usize, WriteError> {
@@ -202,10 +211,27 @@ impl Handler for HtmlHeadCapture {
         }
         Ok(data.len())
     }
+    fn header(&mut self, data: &[u8]) -> bool {
+        let Ok(line) = std::str::from_utf8(data) else {
+            return true;
+        };
+        let line = line.trim_end();
+        if let Some(rest) = line.strip_prefix("HTTP/") {
+            if let Some(ver) = rest.split_whitespace().next() {
+                if let Ok(mut v) = self.http_version.lock() {
+                    *v = Some(ver.to_string());
+                }
+            }
+        }
+        true
+    }
 }
 impl HtmlHeadCapture {
     pub(crate) fn text(&self) -> String {
         String::from_utf8_lossy(&self.body).into_owned()
+    }
+    pub(crate) fn http_version(&self) -> Option<String> {
+        self.http_version.lock().ok().and_then(|v| v.clone())
     }
 }
 

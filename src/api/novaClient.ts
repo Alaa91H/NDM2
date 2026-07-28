@@ -435,18 +435,6 @@ export const novaClient = {
     return request<DownloadItem>(`/api/downloads/${encodeURIComponent(id)}/redownload`, { method: 'POST' }, 8000);
   },
 
-  async updateTorrentConfig(config: Record<string, unknown>): Promise<void> {
-    await request<unknown>(
-      '/api/torrents/config',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config),
-      },
-      5000,
-    );
-  },
-
   async probeMedia(url: string): Promise<MediaProbeResult> {
     return request<MediaProbeResult>(`/api/ytdlp/probe?url=${encodeURIComponent(url)}`, undefined, 30000);
   },
@@ -473,16 +461,6 @@ export const novaClient = {
 
   async probePlaylist(url: string): Promise<MediaPlaylistResult> {
     return request<MediaPlaylistResult>(`/api/ytdlp/probe-playlist?url=${encodeURIComponent(url)}`, undefined, 60000);
-  },
-
-  async getTelegramConfig(): Promise<{
-    enabled: boolean;
-    token: string;
-    chatId: number;
-    apiBase: string;
-    fileUploadLimitMb: number;
-  }> {
-    return request('/api/telegram/config', undefined, 5000);
   },
 
   async updateTelegramConfig(config: {
@@ -572,12 +550,6 @@ export const novaClient = {
 
   async uninstallExternalTool(toolId: string): Promise<{ ok: boolean; error?: string }> {
     return request(`/api/external-tools/${toolId}/uninstall`, { method: 'POST' }, 15000);
-  },
-
-  async checkToolCapability(
-    capabilityId: string,
-  ): Promise<{ capabilityId: string; available: boolean; toolId: string; requiresMessage?: string }> {
-    return request(`/api/external-tools/capabilities/${capabilityId}`, undefined, 5000);
   },
 
   // ── Engine Integration ─────────────────────────────────────────────
@@ -715,33 +687,6 @@ export const novaClient = {
     return { ok: Boolean(data.ok) };
   },
 
-  async getProfile(profileId: string): Promise<{ ok: boolean; profile?: unknown }> {
-    return request(`/api/engine/profiles/${encodeURIComponent(profileId)}`, undefined, 5000);
-  },
-
-  async addCustomProfile(
-    manifest: Record<string, unknown>,
-  ): Promise<{ ok: boolean; profileId?: string; error?: string }> {
-    return request(
-      '/api/engine/profiles/custom',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(manifest),
-      },
-      5000,
-    );
-  },
-
-  async deleteProfile(profileId: string): Promise<{ ok: boolean }> {
-    const data = await request<Record<string, unknown>>(
-      `/api/engine/profiles/${encodeURIComponent(profileId)}`,
-      { method: 'DELETE' },
-      5000,
-    );
-    return { ok: Boolean(data.ok) };
-  },
-
   async getRetryPolicy(): Promise<{ ok: boolean; policy: unknown; backoffPreviewSecs: number[] }> {
     const data = await request<Record<string, unknown>>('/api/engine/retry-policy', undefined, 5000);
     const preview = Array.isArray(data.backoff_preview_secs) ? data.backoff_preview_secs : [];
@@ -779,56 +724,6 @@ export const novaClient = {
     return { ok: Boolean(data.ok), policy: data.policy, error: asStr(data.error) };
   },
 
-  async listDownloadRules(): Promise<{ ok: boolean; rules: unknown[] }> {
-    const data = await request<Record<string, unknown>>('/api/engine/rules', undefined, 5000);
-    return { ok: Boolean(data.ok), rules: Array.isArray(data.rules) ? data.rules : [] };
-  },
-
-  async addDownloadRule(rule: Record<string, unknown>): Promise<{ ok: boolean; ruleId: string }> {
-    const data = await request<Record<string, unknown>>(
-      '/api/engine/rules',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rule }),
-      },
-      5000,
-    );
-    return { ok: Boolean(data.ok), ruleId: asStr(data.rule_id) };
-  },
-
-  async deleteDownloadRule(ruleId: string): Promise<{ ok: boolean; ruleId: string }> {
-    const data = await request<Record<string, unknown>>(
-      `/api/engine/rules/${encodeURIComponent(ruleId)}`,
-      { method: 'DELETE' },
-      5000,
-    );
-    return { ok: Boolean(data.ok), ruleId: asStr(data.rule_id, ruleId) };
-  },
-
-  async listSchedulerRules(): Promise<{ ok: boolean; rules: unknown[]; activeRuleIds: string[] }> {
-    const data = await request<Record<string, unknown>>('/api/engine/scheduler', undefined, 5000);
-    const active = Array.isArray(data.active_rule_ids) ? data.active_rule_ids : [];
-    return {
-      ok: Boolean(data.ok),
-      rules: Array.isArray(data.rules) ? data.rules : [],
-      activeRuleIds: active.map((id) => asStr(id)),
-    };
-  },
-
-  async addSchedulerRule(rule: Record<string, unknown>): Promise<{ ok: boolean; ruleId: string }> {
-    const data = await request<Record<string, unknown>>(
-      '/api/engine/scheduler',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rule }),
-      },
-      5000,
-    );
-    return { ok: Boolean(data.ok), ruleId: asStr(data.rule_id) };
-  },
-
   async updateSchedulerRule(rule: Record<string, unknown>): Promise<{ ok: boolean; ruleId: string }> {
     const data = await request<Record<string, unknown>>(
       '/api/engine/scheduler/update',
@@ -840,34 +735,6 @@ export const novaClient = {
       5000,
     );
     return { ok: Boolean(data.ok), ruleId: asStr(data.rule_id) };
-  },
-
-  async deleteSchedulerRule(ruleId: string): Promise<{ ok: boolean; ruleId: string }> {
-    const data = await request<Record<string, unknown>>(
-      `/api/engine/scheduler/${encodeURIComponent(ruleId)}`,
-      { method: 'DELETE' },
-      5000,
-    );
-    return { ok: Boolean(data.ok), ruleId: asStr(data.rule_id, ruleId) };
-  },
-
-  async verifyChecksum(config: { path: string; expected: string; algorithm?: string }): Promise<{
-    ok: boolean;
-    algorithm?: string;
-    expected?: string;
-    actual?: string;
-    passed?: boolean;
-    error?: string;
-  }> {
-    return request(
-      '/api/engine/checksum',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config),
-      },
-      30000,
-    );
   },
 
   async listMirrors(): Promise<{ ok: boolean; downloads: unknown[] }> {
@@ -886,23 +753,6 @@ export const novaClient = {
       5000,
     );
     return { ok: Boolean(data.ok), taskId: asStr(data.task_id, taskId) };
-  },
-
-  async setMirror(taskId: string, mirrorUrl: string): Promise<{ ok: boolean; taskId: string; mirrorUrl: string }> {
-    const data = await request<Record<string, unknown>>(
-      '/api/engine/mirrors/set',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ task_id: taskId, mirror_url: mirrorUrl }),
-      },
-      5000,
-    );
-    return {
-      ok: Boolean(data.ok),
-      taskId: asStr(data.task_id, taskId),
-      mirrorUrl: asStr(data.mirror_url, mirrorUrl),
-    };
   },
 
   async triggerMirrorFailover(
@@ -951,95 +801,6 @@ export const novaClient = {
       ok: Boolean(data.ok),
       plugins: Array.isArray(data.plugins) ? data.plugins : [],
       apiVersion: asStr(data.api_version),
-    };
-  },
-
-  async getPlugin(pluginId: string): Promise<{ ok: boolean; plugin?: unknown; error?: string }> {
-    const data = await request<Record<string, unknown>>(
-      `/api/plugins/${encodeURIComponent(pluginId)}`,
-      undefined,
-      5000,
-    );
-    return {
-      ok: Boolean(data.ok),
-      plugin: data.plugin,
-      error: asStr(data.error) || undefined,
-    };
-  },
-
-  async registerPlugin(manifest: Record<string, unknown>): Promise<{ ok: boolean; pluginId?: string; error?: string }> {
-    const data = await request<Record<string, unknown>>(
-      '/api/plugins',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ manifest }),
-      },
-      5000,
-    );
-    return {
-      ok: Boolean(data.ok),
-      pluginId: asStr(data.plugin_id) || undefined,
-      error: asStr(data.error) || undefined,
-    };
-  },
-
-  async unregisterPlugin(pluginId: string): Promise<{ ok: boolean; pluginId?: string; error?: string }> {
-    const data = await request<Record<string, unknown>>(
-      `/api/plugins/${encodeURIComponent(pluginId)}`,
-      { method: 'DELETE' },
-      5000,
-    );
-    return {
-      ok: Boolean(data.ok),
-      pluginId: asStr(data.plugin_id) || undefined,
-      error: asStr(data.error) || undefined,
-    };
-  },
-
-  async enablePlugin(pluginId: string): Promise<{ ok: boolean; pluginId?: string; error?: string }> {
-    const data = await request<Record<string, unknown>>(
-      `/api/plugins/${encodeURIComponent(pluginId)}/enable`,
-      { method: 'POST' },
-      5000,
-    );
-    return {
-      ok: Boolean(data.ok),
-      pluginId: asStr(data.plugin_id) || undefined,
-      error: asStr(data.error) || undefined,
-    };
-  },
-
-  async disablePlugin(pluginId: string): Promise<{ ok: boolean; pluginId?: string; error?: string }> {
-    const data = await request<Record<string, unknown>>(
-      `/api/plugins/${encodeURIComponent(pluginId)}/disable`,
-      { method: 'POST' },
-      5000,
-    );
-    return {
-      ok: Boolean(data.ok),
-      pluginId: asStr(data.plugin_id) || undefined,
-      error: asStr(data.error) || undefined,
-    };
-  },
-
-  async updatePluginSettings(
-    pluginId: string,
-    settings: Record<string, unknown>,
-  ): Promise<{ ok: boolean; pluginId?: string; error?: string }> {
-    const data = await request<Record<string, unknown>>(
-      `/api/plugins/${encodeURIComponent(pluginId)}/settings`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ settings }),
-      },
-      5000,
-    );
-    return {
-      ok: Boolean(data.ok),
-      pluginId: asStr(data.plugin_id) || undefined,
-      error: asStr(data.error) || undefined,
     };
   },
 
@@ -1116,9 +877,6 @@ export const novaClient = {
     return request('/api/stats', undefined, 5000);
   },
 
-  async getPendingCaptures(): Promise<{ ok: boolean; captures?: unknown[] }> {
-    return request('/captures/pending', undefined, 5000);
-  },
 };
 
 async function request<T>(path: string, init?: RequestInit, timeoutMs = 2500): Promise<T> {

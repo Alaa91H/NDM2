@@ -1,6 +1,4 @@
-pub mod error_intel;
 pub mod http_probe;
-pub mod plan_builder;
 pub mod retry_intel;
 pub mod stability;
 pub mod strategy;
@@ -21,7 +19,7 @@ pub use stability::ServerProfileStore;
 /// The Resource Intelligence Engine.
 ///
 /// Takes a URL + user intent, runs the full analysis pipeline, and produces
-/// a `ResolutionReport` and `DownloadPlan`. The engine is non-blocking:
+/// a `ResolutionReport`. The engine is non-blocking:
 /// the caller receives an initial report quickly, and deep analysis continues
 /// in the background.
 pub struct ResourceIntelligenceEngine {
@@ -36,7 +34,7 @@ impl ResourceIntelligenceEngine {
     }
 
     /// Run the full resolution pipeline on a URL. Returns the final
-    /// `ResolutionReport`. The caller should use this to build a `DownloadPlan`.
+    /// `ResolutionReport`.
     pub async fn resolve(
         &self,
         state: &SharedState,

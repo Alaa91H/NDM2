@@ -2,7 +2,6 @@ use super::types::{ErrorCategory, ResolutionError, RetryDecision, RetryStrategy}
 use std::time::Duration;
 
 const MAX_RETRY_ATTEMPTS: u32 = 5;
-const MAX_RETRY_BUDGET: u32 = 10;
 const CIRCUIT_BREAKER_THRESHOLD: u32 = 3;
 const BASE_BACKOFF_MS: u64 = 1000;
 const MAX_BACKOFF_MS: u64 = 30_000;
@@ -22,7 +21,6 @@ pub fn decide_retry(
             attempt_count,
             strategy: RetryStrategy::DoNotRetry,
             reason: format!("Error category {:?} is not retryable", error.category),
-            budget_remaining: 0,
             circuit_breaker_active: false,
         };
     }
@@ -38,7 +36,6 @@ pub fn decide_retry(
             reason: format!(
                 "Circuit breaker active: {total_failures} consecutive failures, stability {stability_score:.2}"
             ),
-            budget_remaining: 0,
             circuit_breaker_active: true,
         };
     }
@@ -52,7 +49,6 @@ pub fn decide_retry(
             attempt_count,
             strategy: RetryStrategy::DoNotRetry,
             reason: format!("Max attempts ({MAX_RETRY_ATTEMPTS}) reached"),
-            budget_remaining: 0,
             circuit_breaker_active: false,
         };
     }
@@ -66,7 +62,6 @@ pub fn decide_retry(
             attempt_count,
             strategy: RetryStrategy::FixedDelay,
             reason: format!("Server provided Retry-After: {}s", retry_after.as_secs()),
-            budget_remaining: MAX_RETRY_ATTEMPTS.saturating_sub(attempt_count + 1),
             circuit_breaker_active: false,
         };
     }
@@ -110,7 +105,6 @@ pub fn decide_retry(
             attempt_count + 1,
             MAX_RETRY_ATTEMPTS
         ),
-        budget_remaining: MAX_RETRY_ATTEMPTS.saturating_sub(attempt_count + 1),
         circuit_breaker_active: false,
     }
 }
@@ -141,12 +135,8 @@ mod tests {
             phase: super::super::types::ErrorPhase::HttpRequest,
             message: "test".to_string(),
             http_status: None,
-            curl_code: None,
-            curl_message: None,
-            os_error: None,
             retryable: true,
             retry_after: None,
-            user_action_required: false,
         }
     }
 

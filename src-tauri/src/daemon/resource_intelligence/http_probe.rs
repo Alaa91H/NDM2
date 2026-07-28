@@ -50,12 +50,8 @@ impl<'a> HttpNegotiator<'a> {
                         phase: ErrorPhase::HttpRequest,
                         message: err_msg.clone(),
                         http_status: Some(r.status_code),
-                        curl_code: None,
-                        curl_message: None,
-                        os_error: None,
                         retryable: r.status_code >= 500,
                         retry_after: None,
-                        user_action_required: false,
                     });
                 }
             }
@@ -65,12 +61,8 @@ impl<'a> HttpNegotiator<'a> {
                     phase: ErrorPhase::HttpRequest,
                     message: "HEAD request failed".to_string(),
                     http_status: None,
-                    curl_code: None,
-                    curl_message: None,
-                    os_error: None,
                     retryable: true,
                     retry_after: None,
-                    user_action_required: false,
                 });
             }
         }
@@ -167,10 +159,8 @@ impl<'a> HttpNegotiator<'a> {
             etag,
             last_modified,
             digest_sha256,
-            content_md5: None,
             file_name,
             file_type: file_type.to_string(),
-            fingerprint: None,
         };
 
         // Detect best final URL from redirects.
@@ -193,11 +183,29 @@ impl<'a> HttpNegotiator<'a> {
             get_result.as_ref().map(|_| ProbeMethod::Get)
         };
 
-        let capabilities = detect_capabilities(
+        let mut capabilities = detect_capabilities(
             head_supports_range,
             range_confirms_range,
             has_size.or(range_proves_size),
+            &head_result,
+            &get_result,
         );
+
+        // Extract RFC 6249 mirror URLs from Link headers across all probe
+        // results. These feed into the mirror failover system so the download
+        // engine can switch to an alternate source if the primary fails.
+        let mut mirrors = Vec::new();
+        for probe in [&head_result, &range_result, &get_result]
+            .into_iter()
+            .flatten()
+        {
+            for url in extract_link_mirrors(probe) {
+                if !mirrors.contains(&url) {
+                    mirrors.push(url);
+                }
+            }
+        }
+        capabilities.link_mirrors = mirrors;
 
         let total_duration = start.elapsed();
 
@@ -254,7 +262,6 @@ impl<'a> HttpNegotiator<'a> {
                     headers,
                     duration: start.elapsed(),
                     final_url: Some(final_url),
-                    body_preview: None,
                     error: if status >= 400 {
                         Some(format!("HEAD returned {status}"))
                     } else {
@@ -269,7 +276,7 @@ impl<'a> HttpNegotiator<'a> {
                 headers: HashMap::new(),
                 duration: start.elapsed(),
                 final_url: None,
-                body_preview: None,
+
                 error: Some(e.to_string()),
                 redirect_hop: None,
             }),
@@ -315,7 +322,7 @@ impl<'a> HttpNegotiator<'a> {
                     headers,
                     duration: start.elapsed(),
                     final_url: Some(final_url),
-                    body_preview: None,
+
                     error: None,
                     redirect_hop: hop,
                 })
@@ -326,7 +333,7 @@ impl<'a> HttpNegotiator<'a> {
                 headers: HashMap::new(),
                 duration: start.elapsed(),
                 final_url: None,
-                body_preview: None,
+
                 error: Some(e.to_string()),
                 redirect_hop: None,
             }),
@@ -371,7 +378,7 @@ impl<'a> HttpNegotiator<'a> {
                     headers,
                     duration: start.elapsed(),
                     final_url: Some(final_url),
-                    body_preview: None,
+
                     error: None,
                     redirect_hop: hop,
                 })
@@ -382,7 +389,7 @@ impl<'a> HttpNegotiator<'a> {
                 headers: HashMap::new(),
                 duration: start.elapsed(),
                 final_url: None,
-                body_preview: None,
+
                 error: Some(e.to_string()),
                 redirect_hop: None,
             }),
@@ -394,6 +401,8 @@ fn detect_capabilities(
     head_supports_range: bool,
     range_confirmed: bool,
     size: Option<u64>,
+    head_result: &Option<ProbeResult>,
+    get_result: &Option<ProbeResult>,
 ) -> ServerCapabilities {
     let range_support = if range_confirmed || head_supports_range {
         CapabilityState::Confirmed
@@ -413,19 +422,83 @@ fn detect_capabilities(
         CapabilityState::Unknown
     };
 
+    // Infer a reasonable connection count from the probe results. This feeds
+    // into `background_resolve_and_start` → `rie_connections` → the curl
+    // download thread so it doesn't default to a single connection when the
+    // server clearly supports parallel ranges.
+    let detected_connections = if range_confirmed {
+        let size = size.unwrap_or(0);
+        if size >= 100_000_000 {
+            Some(8) // 100MB+ → aggressive parallelism
+        } else if size >= 10_000_000 {
+            Some(4) // 10MB+ → moderate parallelism
+        } else if size >= 1_048_576 {
+            Some(2) // 1MB+ → conservative parallelism
+        } else {
+            Some(1) // <1MB → single connection
+        }
+    } else {
+        None // Unknown range support → let the engine decide
+    };
+
+    // Detect compression from Content-Encoding header.
+    let compression = head_result
+        .as_ref()
+        .or(get_result.as_ref())
+        .and_then(|r| r.headers.get("content-encoding"))
+        .map(|ce| {
+            if ce.eq_ignore_ascii_case("identity") {
+                CapabilityState::NotSupported
+            } else {
+                CapabilityState::Confirmed
+            }
+        })
+        .unwrap_or(CapabilityState::Unknown);
+
+    // Detect chunked transfer from Transfer-Encoding header.
+    let chunked_transfer = head_result
+        .as_ref()
+        .or(get_result.as_ref())
+        .and_then(|r| r.headers.get("transfer-encoding"))
+        .map(|te| {
+            if te.to_ascii_lowercase().contains("chunked") {
+                CapabilityState::Confirmed
+            } else {
+                CapabilityState::NotSupported
+            }
+        })
+        .unwrap_or(CapabilityState::Unknown);
+
+    // Detect HTTP/2 multiplexing from response status line (parsed into
+    // header map as a synthetic key by the probe runner, or from the
+    // Content-Type to at least know the server is modern).
+    let http2_multiplexing = head_result
+        .as_ref()
+        .or(get_result.as_ref())
+        .and_then(|r| r.headers.get("http-version"))
+        .map(|hv| {
+            if hv.starts_with("2") || hv.starts_with("h2") {
+                CapabilityState::Confirmed
+            } else {
+                CapabilityState::NotSupported
+            }
+        })
+        .unwrap_or(CapabilityState::Unknown);
+
     ServerCapabilities {
         range_support,
         resume_support,
         parallel_connections,
-        compression: CapabilityState::Unknown,
-        chunked_transfer: CapabilityState::Unknown,
-        http2_multiplexing: CapabilityState::Unknown,
+        compression,
+        chunked_transfer,
+        http2_multiplexing,
         content_length_reliable: if size.unwrap_or(0) > 0 {
             CapabilityState::Confirmed
         } else {
             CapabilityState::Unknown
         },
-        detected_connections: None,
+        detected_connections,
+        link_mirrors: Vec::new(),
     }
 }
 

@@ -119,18 +119,12 @@ export const ActiveProgressDialog: React.FC<{ taskId?: string }> = ({ taskId }) 
     (taskFromPayload ? tasks.find((tt) => tt.id === taskFromPayload.id) || taskFromPayload : null) ||
     tasks.find((tt) => tt.status === 'downloading');
 
-  const [activeTab, setActiveTab] = useState<'status' | 'speed' | 'options'>('status');
+  const [activeTab, setActiveTab] = useState<'status' | 'speed'>('status');
   // Collapsed by default so the dialog opens compact; the toggle reveals the
   // tabs, details and per-segment cards.
   const [detailsCollapsed, setDetailsCollapsed] = useState(true);
   const speedLimitEnabled = settings.connection.speedLimiter.enabled;
   const speedLimitValue = settings.connection.speedLimiter.maxSpeedKbs;
-  const [notifyOnComplete, setNotifyOnComplete] = useState(true);
-  const [disconnectOnComplete, setDisconnectOnComplete] = useState(false);
-  const [exitOnComplete, setExitOnComplete] = useState(false);
-  const [shutdownOnComplete, setShutdownOnComplete] = useState(false);
-  const [shutdownAction, setShutdownAction] = useState('Shutdown computer');
-  const [forceCloseProcesses, setForceCloseProcesses] = useState(false);
 
   const progressPercent = task
     ? task.sizeBytes > 0
@@ -327,15 +321,6 @@ export const ActiveProgressDialog: React.FC<{ taskId?: string }> = ({ taskId }) 
             >
               {t('progress_speed_tab')}
             </button>
-            <button
-              onClick={() => {
-                setActiveTab('options');
-              }}
-              className={tabClass('options')}
-              style={{ borderRadius: '4px 4px 0 0' }}
-            >
-              {t('progress_options_tab')}
-            </button>
           </div>
 
           <div
@@ -437,95 +422,6 @@ export const ActiveProgressDialog: React.FC<{ taskId?: string }> = ({ taskId }) 
               </div>
             )}
 
-            {activeTab === 'options' && (
-              <div className="space-y-2 animate-in fade-in duration-150">
-                <div className="flex justify-between items-center text-xs text-[var(--text-secondary)]">
-                  <span className="font-semibold shrink-0">{t('progress_save_to')}</span>
-                  <span className="text-[var(--text-primary)] font-mono truncate ml-2 select-all w-full text-left">
-                    {task.savePath}
-                  </span>
-                </div>
-                <label className="flex items-center gap-2 cursor-pointer select-none pt-0.5">
-                  <input
-                    type="checkbox"
-                    checked={notifyOnComplete}
-                    onChange={(e) => {
-                      setNotifyOnComplete(e.target.checked);
-                    }}
-                    className="w-3.5 h-3.5 rounded border-[var(--border-color)] bg-[var(--bg-input)] text-[var(--accent-primary)] focus:ring-0 cursor-pointer"
-                  />
-                  <span className="text-xs text-[var(--text-primary)]">{t('progress_notify_complete')}</span>
-                </label>
-                <div
-                  className={`grid grid-cols-12 gap-y-1.5 text-[11px] ${notifyOnComplete ? 'opacity-40 pointer-events-none' : ''}`}
-                >
-                  <label className="col-span-12 flex items-center gap-2 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={disconnectOnComplete}
-                      onChange={(e) => {
-                        setDisconnectOnComplete(e.target.checked);
-                      }}
-                      disabled={notifyOnComplete}
-                      className="w-3.5 h-3.5 rounded border-[var(--border-color)] bg-[var(--bg-input)] text-[var(--accent-primary)] focus:ring-0 cursor-pointer"
-                    />
-                    <span className="text-[var(--text-secondary)]">{t('progress_disconnect_complete')}</span>
-                  </label>
-                  <label className="col-span-12 flex items-center gap-2 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={exitOnComplete}
-                      onChange={(e) => {
-                        setExitOnComplete(e.target.checked);
-                      }}
-                      disabled={notifyOnComplete}
-                      className="w-3.5 h-3.5 rounded border-[var(--border-color)] bg-[var(--bg-input)] text-[var(--accent-primary)] focus:ring-0 cursor-pointer"
-                    />
-                    <span className="text-[var(--text-secondary)]">{t('progress_exit_complete')}</span>
-                  </label>
-                  <div className="col-span-12 flex flex-wrap items-center gap-2">
-                    <label className="flex items-center gap-2 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={shutdownOnComplete}
-                        onChange={(e) => {
-                          setShutdownOnComplete(e.target.checked);
-                        }}
-                        disabled={notifyOnComplete}
-                        className="w-3.5 h-3.5 rounded border-[var(--border-color)] bg-[var(--bg-input)] text-[var(--accent-primary)] focus:ring-0 cursor-pointer"
-                      />
-                      <span className="text-[var(--text-secondary)] whitespace-nowrap">
-                        {t('progress_power_action')}
-                      </span>
-                    </label>
-                    <select
-                      value={shutdownAction}
-                      onChange={(e) => {
-                        setShutdownAction(e.target.value);
-                      }}
-                      disabled={notifyOnComplete || !shutdownOnComplete}
-                      className="bg-[var(--bg-input)] border border-[var(--border-color)] text-[var(--text-primary)] text-[10px] md:text-xs px-2 py-0.5 rounded focus:outline-none focus:border-[var(--accent-primary)] disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <option value="Shutdown computer">{t('progress_shutdown')}</option>
-                      <option value="Restart computer">{t('progress_restart')}</option>
-                      <option value="Sleep">{t('progress_sleep')}</option>
-                    </select>
-                    <label className="flex items-center gap-1.5 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={forceCloseProcesses}
-                        onChange={(e) => {
-                          setForceCloseProcesses(e.target.checked);
-                        }}
-                        disabled={notifyOnComplete || !shutdownOnComplete}
-                        className="w-3.5 h-3.5 rounded border-[var(--border-color)] bg-[var(--bg-input)] text-[var(--accent-primary)] focus:ring-0 cursor-pointer"
-                      />
-                      <span className="text-[var(--text-secondary)]">{t('progress_force_close')}</span>
-                    </label>
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
 
           {/* Segment Distribution Cards */}
@@ -610,7 +506,7 @@ export const ActiveProgressDialog: React.FC<{ taskId?: string }> = ({ taskId }) 
           </div>
         )}
 
-        {/* Show / Hide details — next to the Stop button, clearly visible */}
+        {/* Show / Hide details ï¿½ next to the Stop button, clearly visible */}
         <button
           onClick={() => {
             setDetailsCollapsed((v) => !v);

@@ -178,12 +178,8 @@ impl ServerProfileStore {
         StabilityAnalysis {
             response_stability: if variance < 1000.0 { 1.0 } else { 0.5 },
             connection_stability: 1.0 - connection_failures,
-            timeout_frequency: 0.0,
-            speed_variance: variance,
             error_rate,
             rate_limiting_detected: rate_limit_freq > 0.05,
-            retry_frequency: 0.0,
-            connection_failure_frequency: connection_failures,
             overall_stability: overall,
         }
     }

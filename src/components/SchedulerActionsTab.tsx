@@ -1,5 +1,5 @@
 import React from 'react';
-import { Server, Shield, ShieldAlert, Volume2, Globe } from 'lucide-react';
+import { Server, Shield, ShieldAlert } from 'lucide-react';
 import { useI18n } from '../store/selectors';
 
 interface SchedulerActionsTabProps {
@@ -9,12 +9,6 @@ interface SchedulerActionsTabProps {
   onHangupChange: (v: boolean) => void;
   exitOnComplete: boolean;
   onExitChange: (v: boolean) => void;
-  playChime: boolean;
-  onChimeChange: (v: boolean) => void;
-  enableWebhook: boolean;
-  onWebhookEnableChange: (v: boolean) => void;
-  webhookUrl: string;
-  onWebhookUrlChange: (v: string) => void;
 }
 
 export const SchedulerActionsTab: React.FC<SchedulerActionsTabProps> = ({
@@ -24,12 +18,6 @@ export const SchedulerActionsTab: React.FC<SchedulerActionsTabProps> = ({
   onHangupChange,
   exitOnComplete,
   onExitChange,
-  playChime,
-  onChimeChange,
-  enableWebhook,
-  onWebhookEnableChange,
-  webhookUrl,
-  onWebhookUrlChange,
 }) => {
   const t = useI18n();
 
@@ -93,54 +81,6 @@ export const SchedulerActionsTab: React.FC<SchedulerActionsTabProps> = ({
             className="w-4.5 h-4.5 text-[var(--accent-primary)] focus-visible:ring-[var(--accent-primary)] cursor-pointer"
           />
         </label>
-
-        <label className="flex items-center justify-between p-3 bg-[var(--bg-surface)] border border-[var(--border-color)] hover:border-[var(--accent-border)] rounded-xl cursor-pointer hover:bg-[var(--bg-hover)] shadow-sm">
-          <div className="flex items-center gap-2.5">
-            <Volume2 className="w-4 h-4 text-[var(--success)]" />
-            <div className="flex flex-col">
-              <span className="text-xs font-bold text-[var(--text-primary)]">{t('sched_action_chime')}</span>
-              <span className="text-[10px] text-[var(--text-muted)]">{t('sched_action_chime_desc')}</span>
-            </div>
-          </div>
-          <input
-            type="checkbox"
-            checked={playChime}
-            onChange={(e) => {
-              onChimeChange(e.target.checked);
-            }}
-            className="w-4.5 h-4.5 text-[var(--accent-primary)] focus-visible:ring-[var(--accent-primary)] cursor-pointer"
-          />
-        </label>
-      </div>
-
-      <div className="p-3 bg-[var(--bg-surface)] border border-[var(--border-color)] rounded-xl space-y-2.5 shadow-sm">
-        <label className="flex items-center justify-between cursor-pointer">
-          <div className="flex items-center gap-2.5">
-            <Globe className="w-4 h-4 text-[var(--accent-primary)]" />
-            <div className="flex flex-col">
-              <span className="text-xs font-bold text-[var(--text-primary)]">{t('sched_action_webhook')}</span>
-              <span className="text-[10px] text-[var(--text-muted)]">{t('sched_action_webhook_desc')}</span>
-            </div>
-          </div>
-          <input
-            type="checkbox"
-            checked={enableWebhook}
-            onChange={(e) => {
-              onWebhookEnableChange(e.target.checked);
-            }}
-            className="w-4.5 h-4.5 text-[var(--accent-primary)] focus-visible:ring-[var(--accent-primary)] cursor-pointer"
-          />
-        </label>
-        {enableWebhook && (
-          <input
-            type="url"
-            value={webhookUrl}
-            onChange={(e) => {
-              onWebhookUrlChange(e.target.value);
-            }}
-            className="w-full bg-[var(--bg-input)] border border-[var(--border-color)] rounded-lg px-3 py-2 text-xs font-mono text-[var(--text-secondary)] focus-visible:outline-none focus-visible:border-[var(--accent-primary)]"
-          />
-        )}
       </div>
     </div>
   );

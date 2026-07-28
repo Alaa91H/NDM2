@@ -662,8 +662,8 @@ struct ProbeMetadata {
     etag: Option<String>,
     last_modified: Option<String>,
     digest_sha256: Option<String>,
+    content_type: Option<String>,
     link_mirrors: Vec<String>,
-    mirror_priorities: Vec<serde_json::Value>,
     strategy: Option<String>,
     connections: Option<u32>,
 }
@@ -711,8 +711,10 @@ async fn background_resolve_and_start(state: SharedState, task_id: String, origi
             etag: identity.and_then(|i| i.etag.clone()),
             last_modified: identity.and_then(|i| i.last_modified.clone()),
             digest_sha256: identity.and_then(|i| i.digest_sha256.clone()),
-            link_mirrors: Vec::new(),
-            mirror_priorities: Vec::new(),
+            content_type: identity
+                .and_then(|i| i.content_type.clone())
+                .filter(|n| !n.is_empty()),
+            link_mirrors: report.server_capabilities.link_mirrors.clone(),
             strategy: Some(format!("{:?}", report.recommended_strategy)),
             connections: report.server_capabilities.detected_connections,
         }
@@ -776,6 +778,10 @@ async fn background_resolve_and_start(state: SharedState, task_id: String, origi
                     serde_json::Value::String(digest.clone()),
                 );
             }
+            if let Some(ref ct) = metadata.content_type {
+                opts.entry("contentType".to_string())
+                    .or_insert_with(|| serde_json::Value::String(ct.clone()));
+            }
             if !metadata.link_mirrors.is_empty() {
                 let mirrors: Vec<serde_json::Value> = metadata
                     .link_mirrors
@@ -783,12 +789,6 @@ async fn background_resolve_and_start(state: SharedState, task_id: String, origi
                     .map(|m| serde_json::Value::String(m.clone()))
                     .collect();
                 opts.insert("linkMirrors".to_string(), serde_json::Value::Array(mirrors));
-                if !metadata.mirror_priorities.is_empty() {
-                    opts.insert(
-                        "mirrorPriorities".to_string(),
-                        serde_json::Value::Array(metadata.mirror_priorities),
-                    );
-                }
             }
             if job.task.size_bytes == 0 && metadata.size_bytes > 0 {
                 job.task.size_bytes = metadata.size_bytes;

@@ -82,7 +82,6 @@ pub struct TelemetrySnapshot {
 
 pub struct TelemetryBus {
     connections: Vec<ConnectionSlot>,
-    aggregate_bytes: AtomicU64,
     aggregate_speed: AtomicU64,
     aggregate_peak: AtomicU64,
     active_conns: AtomicU32,
@@ -129,7 +128,6 @@ impl TelemetryBus {
         }
         Self {
             connections,
-            aggregate_bytes: AtomicU64::new(0),
             aggregate_speed: AtomicU64::new(0),
             aggregate_peak: AtomicU64::new(0),
             active_conns: AtomicU32::new(0),
@@ -247,10 +245,11 @@ impl TelemetryBus {
                 alive: slot.alive.load(Ordering::Relaxed),
             });
         }
+        let total_bytes: u64 = connections.iter().map(|c| c.bytes_downloaded).sum();
         TelemetrySnapshot {
             connections,
             aggregate: AggregateTelemetry {
-                total_bytes: self.aggregate_bytes.load(Ordering::Relaxed),
+                total_bytes,
                 total_speed: self.aggregate_speed.load(Ordering::Relaxed),
                 peak_speed: self.aggregate_peak.load(Ordering::Relaxed),
                 active_connections: self.active_conns.load(Ordering::Relaxed),
@@ -274,7 +273,6 @@ impl TelemetryBus {
             slot.http_status.store(0, Ordering::Relaxed);
             slot.alive.store(false, Ordering::Relaxed);
         }
-        self.aggregate_bytes.store(0, Ordering::Relaxed);
         self.aggregate_speed.store(0, Ordering::Relaxed);
         self.aggregate_peak.store(0, Ordering::Relaxed);
         self.active_conns.store(0, Ordering::Relaxed);
@@ -421,6 +419,7 @@ impl AdaptiveEngine {
         server_header: Option<String>,
         initial_rtt_us: u64,
         handshake_us: u64,
+        ttfb_us: u64,
     ) {
         self.protocol = ProtocolAdapter::new(protocol.clone());
         self.profiler.seed_from_preflight(
@@ -432,6 +431,7 @@ impl AdaptiveEngine {
             server_header,
             initial_rtt_us,
             handshake_us,
+            ttfb_us,
         );
     }
 
@@ -807,6 +807,7 @@ mod tests {
             Some("nginx".into()),
             15000,
             20000,
+            0,
         );
         let profile = engine.profiler.get("example.com").unwrap();
         assert_eq!(profile.protocol, ProtocolVersion::Http2);
@@ -831,6 +832,7 @@ mod tests {
             None,
             20000,
             30000,
+            0,
         );
         engine.set_tick_interval(Duration::from_millis(1));
         std::thread::sleep(Duration::from_millis(5));

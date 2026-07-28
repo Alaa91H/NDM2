@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use ::curl::easy::Easy2;
+use ::curl::easy::{Easy2, HttpVersion};
 
 use super::*;
 use crate::daemon::direct::{
@@ -415,6 +415,20 @@ fn resolve_effective_target(plan: &DirectDownloadPlan) -> (String, bool, Preflig
         }
         if let Ok(t) = easy.starttransfer_time() {
             preflight.ttfb_us = t.as_micros() as u64;
+        }
+
+        // Capture the HTTP version from the preflight response so the adaptive
+        // engine can make protocol-aware decisions (e.g., HTTP/2 multiplexing
+        // supports more concurrent streams than HTTP/1.1).
+        {
+            if let Some(ver) = easy.get_ref().http_version() {
+                preflight.protocol = match ver.as_str() {
+                    "1.0" => "HTTP/1.0".to_string(),
+                    "1.1" => "HTTP/1.1".to_string(),
+                    "2" => "h2".to_string(),
+                    _ => format!("HTTP/{}", ver),
+                };
+            }
         }
 
         let is_html = easy
@@ -985,6 +999,7 @@ fn run_segmented_libcurl(
                 None,
                 preflight.initial_rtt_us,
                 preflight.tls_handshake_us,
+                preflight.ttfb_us,
             );
         }
         if let Some(ref strat) = plan.config.rie_strategy {
@@ -1403,6 +1418,13 @@ fn run_libcurl_download(
                 return Err("cancelled".to_string())
             }
             Err(error) => {
+                // ── Self-healer + policy engine ──────────────────────────
+                // The self-healer analyzes the failure pattern and recommends
+                // a recovery action. The policy engine records the decision
+                // for analytics. We then use the recovery decision to
+                // influence the actual retry behavior below.
+                let mut healer_abort = false;
+                let mut healer_pause: Option<Duration> = None;
                 {
                     let failure_count = state
                         .engine_trackers
@@ -1415,11 +1437,54 @@ fn run_libcurl_download(
                     if let Ok(mut healer) = state.self_healer.lock() {
                         let recovery = healer.on_failure(&ctx.host, &error, &ctx);
                         log::info!("Task {}: self-healer recovery decision: {:?}", id, recovery);
+                        // Wire the recovery decision into the retry loop.
+                        if let crate::daemon::engine::policy_engine::PolicyDecision::Recovery {
+                            ref action,
+                            ..
+                        } = recovery
+                        {
+                            use crate::daemon::engine::policy_engine::RecoveryAction;
+                            match action {
+                                RecoveryAction::Abort => {
+                                    log::warn!(
+                                        "Task {}: self-healer recommends abort — {}",
+                                        id,
+                                        error
+                                    );
+                                    healer_abort = true;
+                                }
+                                RecoveryAction::ReduceConnections => {
+                                    let new_conns = (plan.connections / 2).max(1);
+                                    log::info!(
+                                        "Task {}: self-healer reducing connections {} -> {}",
+                                        id,
+                                        plan.connections,
+                                        new_conns
+                                    );
+                                    plan.connections = new_conns;
+                                }
+                                RecoveryAction::PauseAndRetry(dur) => {
+                                    log::info!(
+                                        "Task {}: self-healer pausing {:?} before retry",
+                                        id,
+                                        dur
+                                    );
+                                    healer_pause = Some(*dur);
+                                }
+                                RecoveryAction::RestartDownload => {
+                                    log::info!("Task {}: self-healer recommends full restart", id);
+                                }
+                                _ => {}
+                            }
+                        }
                     }
                     if let Ok(mut pe) = state.policy_engine.lock() {
                         let retry_decision = pe.decide_retry(&ctx, &error);
                         pe.record_decision(&retry_decision, &error);
                     }
+                }
+                if healer_abort {
+                    return Err(error);
                 }
                 if let Ok(mut trackers) = state.engine_trackers.lock() {
                     if let Some(tracker) = trackers.get_mut(id) {
@@ -1505,7 +1570,11 @@ fn run_libcurl_download(
                 last_error = error;
                 if attempt + 1 < retry_policy.attempts {
                     let hinted = retry_after.swap(0, Ordering::Relaxed);
-                    let backoff_delay = if hinted > 0 {
+                    // Use the self-healer's recommended pause if available,
+                    // otherwise fall back to Retry-After header or exponential backoff.
+                    let backoff_delay = if let Some(pause) = healer_pause {
+                        pause
+                    } else if hinted > 0 {
                         Duration::from_secs(hinted)
                     } else {
                         retry_policy.delay_for_attempt(attempt as u32 + 1)

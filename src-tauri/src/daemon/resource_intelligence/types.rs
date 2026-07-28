@@ -36,97 +36,15 @@ pub enum ResourceType {
     Unknown,
 }
 
-// ─────────────────────────── Network Intelligence ────────────────────────────
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct NetworkDiagnostics {
-    pub dns_resolution: Option<DnsResolution>,
-    pub tcp_connect_duration: Option<Duration>,
-    pub tls_handshake_duration: Option<Duration>,
-    pub ttfb: Option<Duration>,
-    pub total_probe_duration: Option<Duration>,
-    pub selected_address: Option<String>,
-    pub alpn: Option<String>,
-    pub http_version: Option<String>,
-    pub connection_errors: Vec<ConnectionError>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DnsResolution {
-    pub ipv4_addresses: Vec<String>,
-    pub ipv6_addresses: Vec<String>,
-    pub selected_address: String,
-    pub resolution_duration: Duration,
-    pub address_preference: AddressPreference,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum AddressPreference {
-    Ipv4Preferred,
-    Ipv6Preferred,
-    BestLatency,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ConnectionError {
-    pub phase: ConnectionPhase,
-    pub message: String,
-    pub os_error: Option<i32>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ConnectionPhase {
-    Dns,
-    TcpConnect,
-    TlsHandshake,
-    HttpNegotiation,
-}
-
-// ─────────────────────────── TLS Intelligence ────────────────────────────────
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct TlsDiagnostics {
-    pub tls_version: Option<String>,
-    pub cipher: Option<String>,
-    pub certificate_valid: Option<bool>,
-    pub certificate_expiry: Option<String>,
-    pub certificate_chain_depth: Option<u32>,
-    pub hostname_verified: Option<bool>,
-    pub ocsp_status: Option<String>,
-    pub tls_error: Option<TlsError>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TlsError {
-    pub code: Option<i32>,
-    pub message: String,
-    pub classification: TlsErrorClassification,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum TlsErrorClassification {
-    CertificateExpired,
-    CertificateRevoked,
-    CertificateUntrusted,
-    HostnameMismatch,
-    ProtocolVersion,
-    CipherSuite,
-    HandshakeTimeout,
-    Unknown,
-}
-
 // ─────────────────────────── Redirect Intelligence ───────────────────────────
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RedirectChain {
     pub hops: Vec<RedirectHop>,
-    pub loop_detected: bool,
-    pub too_many_redirects: bool,
     pub security_downgrade: bool,
     pub scheme_upgrade: bool,
     pub cross_origin: bool,
     pub host_changes: Vec<String>,
-    pub expiration_risk: bool,
     pub final_url: Option<String>,
 }
 
@@ -152,10 +70,8 @@ pub struct ResourceIdentity {
     pub etag: Option<String>,
     pub last_modified: Option<String>,
     pub digest_sha256: Option<String>,
-    pub content_md5: Option<String>,
     pub file_name: String,
     pub file_type: String,
-    pub fingerprint: Option<String>,
 }
 
 // ─────────────────────────── Capability Detection ────────────────────────────
@@ -170,6 +86,11 @@ pub struct ServerCapabilities {
     pub http2_multiplexing: CapabilityState,
     pub content_length_reliable: CapabilityState,
     pub detected_connections: Option<u32>,
+    /// RFC 6249 mirror URLs discovered from `Link: <url>; rel=duplicate`
+    /// headers during the HTTP probe. These feed into the mirror failover
+    /// system so the download engine can switch to an alternate source if
+    /// the primary fails.
+    pub link_mirrors: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -219,12 +140,8 @@ impl Default for ServerProfile {
 pub struct StabilityAnalysis {
     pub response_stability: f64,
     pub connection_stability: f64,
-    pub timeout_frequency: f64,
-    pub speed_variance: f64,
     pub error_rate: f64,
     pub rate_limiting_detected: bool,
-    pub retry_frequency: f64,
-    pub connection_failure_frequency: f64,
     pub overall_stability: f64,
 }
 
@@ -236,12 +153,8 @@ pub struct ResolutionError {
     pub phase: ErrorPhase,
     pub message: String,
     pub http_status: Option<u16>,
-    pub curl_code: Option<i32>,
-    pub curl_message: Option<String>,
-    pub os_error: Option<i32>,
     pub retryable: bool,
     pub retry_after: Option<Duration>,
-    pub user_action_required: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -284,7 +197,6 @@ pub struct RetryDecision {
     pub attempt_count: u32,
     pub strategy: RetryStrategy,
     pub reason: String,
-    pub budget_remaining: u32,
     pub circuit_breaker_active: bool,
 }
 
@@ -307,7 +219,6 @@ impl Default for RetryDecision {
             attempt_count: 0,
             strategy: RetryStrategy::DoNotRetry,
             reason: "No error recorded".to_string(),
-            budget_remaining: 0,
             circuit_breaker_active: false,
         }
     }
@@ -321,11 +232,7 @@ pub enum DownloadStrategy {
     SingleConnection,
     Segmented,
     AdaptiveSegmented,
-    ResumeExisting,
     Authenticated,
-    ExternalResolver,
-    ProxyRequired,
-    NetworkFallback,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -344,7 +251,6 @@ pub struct ProbeResult {
     pub headers: HashMap<String, String>,
     pub duration: Duration,
     pub final_url: Option<String>,
-    pub body_preview: Option<Vec<u8>>,
     pub error: Option<String>,
     pub redirect_hop: Option<RedirectHop>,
 }
@@ -354,7 +260,6 @@ pub enum ProbeMethod {
     Head,
     GetRange,
     Get,
-    GetZeroRange,
 }
 
 // ─────────────────────────── Request Diagnostics ─────────────────────────────
@@ -375,10 +280,7 @@ pub struct RequestDiagnostics {
 pub struct ResolutionReport {
     pub url_intel: Option<UrlIntelligence>,
     pub request_diagnostics: RequestDiagnostics,
-    pub response_metadata: Option<ResourceIdentity>,
     pub redirect_chain: RedirectChain,
-    pub network_diagnostics: NetworkDiagnostics,
-    pub tls_diagnostics: TlsDiagnostics,
     pub resource_identity: Option<ResourceIdentity>,
     pub server_capabilities: ServerCapabilities,
     pub stability: StabilityAnalysis,
@@ -398,10 +300,7 @@ impl Default for ResolutionReport {
         Self {
             url_intel: None,
             request_diagnostics: RequestDiagnostics::default(),
-            response_metadata: None,
             redirect_chain: RedirectChain::default(),
-            network_diagnostics: NetworkDiagnostics::default(),
-            tls_diagnostics: TlsDiagnostics::default(),
             resource_identity: None,
             server_capabilities: ServerCapabilities::default(),
             stability: StabilityAnalysis::default(),
@@ -423,30 +322,5 @@ pub enum ResolutionPhase {
     #[default]
     Initial,
     Probing,
-    Analyzing,
     Complete,
-    Failed,
-}
-
-// ─────────────────────────── Download Plan ───────────────────────────────────
-
-#[derive(Debug, Clone)]
-pub struct DownloadPlan {
-    pub url: String,
-    pub strategy: DownloadStrategy,
-    pub connections: u32,
-    pub resumable: bool,
-    pub file_size: u64,
-    pub file_name: String,
-    pub content_type: Option<String>,
-    pub etag: Option<String>,
-    pub last_modified: Option<String>,
-    pub digest_sha256: Option<String>,
-    pub mirrors: Vec<String>,
-    pub mirror_priorities: Vec<u32>,
-    pub referer: Option<String>,
-    pub rate_limit_bps: Option<u64>,
-    pub confidence: f64,
-    pub built_at: std::time::Instant,
-    pub report_hash: u64,
 }
