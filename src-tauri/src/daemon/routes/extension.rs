@@ -98,7 +98,7 @@ pub(super) fn read_browser_integration_state(data_dir: &str) -> (bool, bool) {
     let path = std::path::Path::new(data_dir).join("config.json");
     let raw = match std::fs::read_to_string(&path) {
         Ok(r) => r,
-        Err(_) => return (true, false),
+        Err(_) => return (false, false),
     };
     let cfg = match serde_json::from_str::<serde_json::Value>(&raw) {
         Ok(v) => v,

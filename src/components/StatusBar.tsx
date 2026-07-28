@@ -121,7 +121,7 @@ export const StatusBar: React.FC = () => {
     if (!isAnyBrowserEnabled) return 'disconnected';
     if (browserHealth && browserHealth.enabled && browserHealth.paired) return 'connected';
     if (browserHealth && browserHealth.enabled) return 'degraded';
-    return 'degraded';
+    return 'disconnected';
   }, [isAnyBrowserEnabled, browserHealth]);
 
   const handleSpeedClick = (e: React.MouseEvent) => {
