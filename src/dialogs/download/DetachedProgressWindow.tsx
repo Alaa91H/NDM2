@@ -27,13 +27,13 @@ export const DetachedProgressWindow: React.FC<{ taskId: string }> = ({ taskId })
     if (isTauri())
       void getCurrentWindow()
         .minimize()
-        .catch((e) => logger.warn('DetachedProgressWindow', 'minimize failed', e));
+        .catch((e: unknown) => { logger.warn('DetachedProgressWindow', 'minimize failed', e); });
   };
   const close = () => {
     if (isTauri())
       void getCurrentWindow()
         .close()
-        .catch((e) => logger.warn('DetachedProgressWindow', 'close failed', e));
+        .catch((e: unknown) => { logger.warn('DetachedProgressWindow', 'close failed', e); });
   };
 
   // Keep the OS window title in sync with the file being downloaded.
@@ -42,7 +42,7 @@ export const DetachedProgressWindow: React.FC<{ taskId: string }> = ({ taskId })
     const title = task ? `${task.name} — ${t('app_name')}` : t('app_name');
     void getCurrentWindow()
       .setTitle(title)
-      .catch((e) => logger.warn('DetachedProgressWindow', 'setTitle failed', e));
+      .catch((e: unknown) => { logger.warn('DetachedProgressWindow', 'setTitle failed', e); });
   }, [task, t]);
 
   return (

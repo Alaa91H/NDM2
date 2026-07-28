@@ -42,14 +42,6 @@ export interface FileOperationResult {
   changed?: boolean;
 }
 
-interface UpdateCheckResult {
-  currentVersion: string;
-  latestVersion: string;
-  hasUpdate: boolean;
-  releaseUrl: string;
-  installerUrl: string;
-}
-
 export interface VpnRouteValidation {
   ok: boolean;
   message: string;
