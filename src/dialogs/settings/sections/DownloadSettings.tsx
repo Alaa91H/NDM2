@@ -1,13 +1,11 @@
-/* src/dialogs/settings/sections/GeneralAndDownloads.tsx */
+/* src/dialogs/settings/sections/DownloadSettings.tsx */
 import React, { useState, useEffect } from 'react';
 import type { AppSettings } from '../../../types/desktop-ui.types';
-import { Switch, SelectField, Checkbox, Button } from '../../../components/primitives';
-import { Settings, Folder, RefreshCw, AlertTriangle, Play, FileText, Volume2 } from 'lucide-react';
-import { WORLD_LANGUAGES } from '../../../lib/languages';
+import { SelectField, Checkbox, Button } from '../../../components/primitives';
+import { Folder, RefreshCw, AlertTriangle, Play, FileText, Volume2 } from 'lucide-react';
 import { useToastActions, useI18n } from '../../../store/selectors';
 import { tauriClient } from '../../../api/tauriClient';
 
-import { extractErrorMessage } from '../../../utils/formatUtils';
 interface Props {
   settings: AppSettings;
   updateSetting: (section: keyof AppSettings, key: string, value: unknown) => void;
@@ -16,7 +14,7 @@ interface Props {
   onResetAll: () => void;
 }
 
-export const GeneralAndDownloads: React.FC<Props> = ({
+export const DownloadSettings: React.FC<Props> = ({
   settings,
   updateSetting,
   onTestNotification,
@@ -25,16 +23,6 @@ export const GeneralAndDownloads: React.FC<Props> = ({
 }) => {
   const { addToast } = useToastActions();
   const t = useI18n();
-  const [updateChecking, setUpdateChecking] = useState(false);
-  const [updateDownloading, setUpdateDownloading] = useState(false);
-  const [updateProgress, setUpdateProgress] = useState<{ downloaded: number; total: number } | null>(null);
-  const [updateResult, setUpdateResult] = useState<{
-    hasUpdate: boolean;
-    currentVersion: string;
-    latestVersion: string;
-    performUpdate?: () => Promise<void>;
-  } | null>(null);
-  // Placeholder showing the expected default path (resolved on mount)
   const [defaultPathHint, setDefaultPathHint] = useState('');
 
   useEffect(() => {
@@ -81,7 +69,6 @@ export const GeneralAndDownloads: React.FC<Props> = ({
       addToast('warning', t('settings_check_permissions'), 'Set a default download folder first.');
       return;
     }
-    // Try to open the folder in Explorer as a lightweight permission check.
     const ok = await tauriClient.openInExplorer(folder).catch(() => false);
     if (ok) {
       addToast('success', t('settings_check_permissions'), `Folder is accessible: ${folder}`);
@@ -99,174 +86,8 @@ export const GeneralAndDownloads: React.FC<Props> = ({
     other: t('settings_cat_other'),
   };
 
-  const handleCheckUpdates = async () => {
-    setUpdateChecking(true);
-    try {
-      const result = await tauriClient.checkTauriUpdate((downloaded, total) => {
-        setUpdateProgress({ downloaded, total });
-      });
-      setUpdateResult(result);
-      if (result.hasUpdate) {
-        addToast(
-          'info',
-          t('settings_update_available'),
-          t('settings_update_available_msg', { version: result.latestVersion }),
-        );
-      } else {
-        addToast(
-          'success',
-          t('settings_update_current'),
-          t('settings_update_current_msg', { version: result.currentVersion }),
-        );
-      }
-    } catch (error) {
-      addToast('error', t('settings_update_failed'), extractErrorMessage(error, t('settings_update_failed_msg')));
-    } finally {
-      setUpdateChecking(false);
-    }
-  };
-
-  const handleOpenUpdate = async () => {
-    if (!updateResult?.performUpdate) return;
-    setUpdateDownloading(true);
-    try {
-      await updateResult.performUpdate();
-    } catch (error) {
-      addToast('error', t('settings_update_failed'), extractErrorMessage(error, 'Update installation failed.'));
-      setUpdateDownloading(false);
-      setUpdateProgress(null);
-    }
-  };
-
   return (
     <div className="space-y-6 text-left animate-in fade-in duration-200">
-      <div className="space-y-4">
-        <div className="flex items-center gap-2 border-b border-[var(--border-color)] pb-2">
-          <Settings className="w-4 h-4 text-[var(--accent-primary)]" />
-          <h3 className="text-sm font-extrabold text-[var(--accent-primary)]">{t('settings_general_system_title')}</h3>
-        </div>
-
-        <div className="bg-[var(--bg-hover)]/25 p-3 rounded-lg border border-[var(--border-color)] divide-y divide-[var(--border-color)]/40">
-          {[
-            {
-              label: t('settings_launch_startup'),
-              checked: settings.general.runOnStartup,
-              onChange: (v: boolean) => {
-                updateSetting('general', 'runOnStartup', v);
-              },
-            },
-            {
-              label: t('settings_minimize_tray'),
-              checked: settings.general.showTrayIcon,
-              onChange: (v: boolean) => {
-                updateSetting('general', 'showTrayIcon', v);
-              },
-            },
-            {
-              label: t('settings_monitor_clipboard'),
-              checked: settings.general.monitorClipboard,
-              onChange: (v: boolean) => {
-                updateSetting('general', 'monitorClipboard', v);
-              },
-            },
-            {
-              label: t('settings_confirm_delete'),
-              checked: settings.general.confirmOnDelete,
-              onChange: (v: boolean) => {
-                updateSetting('general', 'confirmOnDelete', v);
-              },
-            },
-            {
-              label: t('settings_check_updates'),
-              checked: settings.general.checkUpdates,
-              onChange: (v: boolean) => {
-                updateSetting('general', 'checkUpdates', v);
-              },
-            },
-          ].map((item) => (
-            <div key={item.label} className="flex items-center justify-between py-2.5">
-              <span className="text-xs font-bold text-[var(--text-primary)]">{item.label}</span>
-              <Switch checked={item.checked} onChange={item.onChange} />
-            </div>
-          ))}
-        </div>
-
-        <div className="bg-[var(--bg-hover)]/30 p-3.5 rounded-lg border border-[var(--border-color)] space-y-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="space-y-1">
-              <span className="text-xs font-extrabold text-[var(--text-primary)]">
-                {t('settings_unsigned_updates')}
-              </span>
-              <p className="text-[10px] text-[var(--text-muted)] leading-relaxed">
-                {t('settings_unsigned_updates_desc')}
-              </p>
-            </div>
-            <div className="flex gap-2 shrink-0">
-              <Button
-                type="button"
-                onClick={() => {
-                  void handleCheckUpdates();
-                }}
-                disabled={updateChecking || updateDownloading}
-                variant="secondary"
-                size="md"
-                icon={RefreshCw}
-                className="text-[var(--info)] hover:text-[var(--info)]"
-              >
-                {updateChecking ? t('settings_checking_updates') : t('settings_check_now')}
-              </Button>
-              {updateResult?.hasUpdate && (
-                <Button
-                  type="button"
-                  onClick={() => {
-                    void handleOpenUpdate();
-                  }}
-                  disabled={updateDownloading}
-                  variant="primary"
-                  size="md"
-                >
-                  {updateDownloading
-                    ? updateProgress
-                      ? `Downloading... ${String(Math.round((updateProgress.downloaded / updateProgress.total) * 100))}%`
-                      : 'Downloading...'
-                    : t('settings_install_update')}
-                </Button>
-              )}
-            </div>
-          </div>
-          {updateResult && (
-            <p className="text-[10px] text-[var(--text-secondary)] font-mono">
-              {t('settings_update_versions', {
-                current: updateResult.currentVersion,
-                latest: updateResult.latestVersion,
-              })}
-            </p>
-          )}
-        </div>
-
-        <div className="grid grid-cols-1 gap-4">
-          <SelectField
-            label={t('settings_interface_language')}
-            value={settings.extra.language || 'en'}
-            onChange={(e) => {
-              updateSetting('extra', 'language', e.target.value || 'en');
-            }}
-            options={WORLD_LANGUAGES}
-          />
-          <SelectField
-            label={t('settings_timezone_format')}
-            value={settings.extra.timezone}
-            onChange={(e) => {
-              updateSetting('extra', 'timezone', e.target.value);
-            }}
-            options={[
-              { value: 'system', label: t('settings_timezone_system') },
-              { value: 'utc', label: 'UTC' },
-            ]}
-          />
-        </div>
-      </div>
-
       <div className="space-y-4">
         <div className="flex items-center gap-2 border-b border-[var(--border-color)] pb-2">
           <Folder className="w-4 h-4 text-[var(--success)]" />
@@ -274,7 +95,6 @@ export const GeneralAndDownloads: React.FC<Props> = ({
         </div>
 
         <div className="space-y-3">
-          {/* Default folder with folder-picker button */}
           <div className="flex flex-col gap-1">
             <label className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wide">
               {t('settings_default_folder')}
@@ -303,7 +123,6 @@ export const GeneralAndDownloads: React.FC<Props> = ({
             </div>
           </div>
 
-          {/* Temp folder with folder-picker button */}
           <div className="flex flex-col gap-1">
             <label className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wide">
               {t('settings_temp_folder')}

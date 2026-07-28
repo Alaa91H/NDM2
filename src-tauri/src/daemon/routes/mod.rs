@@ -5,6 +5,7 @@ pub(crate) mod engine;
 pub(crate) mod extension;
 pub(crate) mod external_tools;
 pub(crate) mod probes;
+pub(crate) mod telegram_routes;
 
 use crate::daemon::state::SharedState;
 use axum::Router;
@@ -21,6 +22,7 @@ pub(crate) fn register_routes(router: Router<SharedState>) -> Router<SharedState
     let router = extension::register_routes(router);
     let router = external_tools::register_routes(router);
     let router = probes::register_routes(router);
+    let router = telegram_routes::register_routes(router);
     diagnostics::register_routes(router)
 }
 

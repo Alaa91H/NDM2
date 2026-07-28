@@ -21,7 +21,6 @@ use crate::daemon::state::SharedState;
 use crate::daemon::types::CreateDownloadBody;
 use crate::lock_or_err;
 
-#[allow(dead_code)]
 pub async fn handle_telegram_config(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let cfg = lock_or_err!(state.telegram_config).clone();
     let masked = if cfg.token.is_empty() {
@@ -43,7 +42,6 @@ pub async fn handle_telegram_config(State(state): State<SharedState>) -> Json<se
     }))
 }
 
-#[allow(dead_code)]
 pub async fn handle_telegram_update_config(
     State(state): State<SharedState>,
     Json(body): Json<serde_json::Value>,
@@ -75,7 +73,6 @@ pub async fn handle_telegram_update_config(
     Json(serde_json::json!({"ok": true}))
 }
 
-#[allow(dead_code)]
 pub async fn handle_telegram_test(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let cfg = lock_or_err!(state.telegram_config).clone();
     if cfg.token.is_empty() {
@@ -468,7 +465,6 @@ pub async fn telegram_notify(state: &SharedState, text: &str) {
     }
 }
 
-#[allow(dead_code)]
 pub async fn handle_telegram_send_file(
     State(state): State<SharedState>,
     Json(body): Json<serde_json::Value>,

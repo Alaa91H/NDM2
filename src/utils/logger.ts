@@ -169,3 +169,49 @@ export function levelBadgeBg(level: LogLevel): string {
       return 'bg-[var(--danger)]/10 border-[var(--danger)]/30';
   }
 }
+
+export function exportLogsAsJson(entries: LogEntry[], filters: { level: string; source: string }): string {
+  const exportData = {
+    exportedAt: new Date().toISOString(),
+    application: 'NOVA Download Manager',
+    totalEntries: entries.length,
+    filters,
+    entries: entries.map((e) => ({
+      timestamp: new Date(e.timestamp).toISOString(),
+      level: e.level,
+      source: e.source,
+      message: e.message,
+      data: e.data,
+    })),
+  };
+  return JSON.stringify(exportData, null, 2);
+}
+
+export function exportLogsAsText(entries: LogEntry[], filters: { level: string; source: string }): string {
+  const lines = [
+    'NOVA Download Manager - Application Logs',
+    `Exported: ${new Date().toISOString()}`,
+    `Total entries: ${String(entries.length)}`,
+    `Filter: level=${filters.level}, source=${filters.source}`,
+    '',
+    '='.repeat(120),
+    '',
+    ...entries.map(
+      (e) =>
+        `[${formatLogTimestamp(e.timestamp)}] [${e.level.toUpperCase().padEnd(5)}] [${e.source}] ${e.message}`,
+    ),
+  ];
+  return lines.join('\n');
+}
+
+export function downloadAsFile(content: string, filename: string, mimeType: string) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
