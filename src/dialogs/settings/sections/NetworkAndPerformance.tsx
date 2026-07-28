@@ -1,6 +1,6 @@
 ﻿/* src/dialogs/settings/sections/NetworkAndPerformance.tsx */
-import React, { useState } from 'react';
-import { Globe, RefreshCw, ShieldCheck } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { Globe, RefreshCw, ShieldCheck, Server, Network } from 'lucide-react';
 import type { AppSettings } from '../../../types/desktop-ui.types';
 import { Checkbox, FormRow, SelectField, Switch, TextField } from '../../../components/primitives';
 import { useI18n } from '../../../store/selectors';
@@ -11,10 +11,69 @@ interface Props {
   onAddToast: (type: 'success' | 'error' | 'warning' | 'info', title: string, message: string) => void;
 }
 
+const DNS_PRESETS: Record<string, { primary: string; secondary: string; description: string } | undefined> = {
+  system:       { primary: '',           secondary: '',           description: 'Use operating system DNS settings' },
+  cloudflare:   { primary: '1.1.1.1',    secondary: '1.0.0.1',    description: 'Fast & privacy-focused (1.1.1.1)' },
+  google:       { primary: '8.8.8.8',    secondary: '8.8.4.4',    description: 'Reliable public DNS by Google' },
+  opendns:      { primary: '208.67.222.222', secondary: '208.67.220.220', description: 'Cisco Umbrella / Parental controls' },
+  quad9:        { primary: '9.9.9.9',    secondary: '149.112.112.112', description: 'Security-focused, blocks threats' },
+  comodo:       { primary: '8.26.56.26',  secondary: '8.20.247.20',  description: 'Comodo Secure DNS with malware filtering' },
+  adguard:      { primary: '94.140.14.14', secondary: '94.140.15.15', description: 'AdGuard DNS — ad/tracker blocking' },
+  cleanbrowsing: { primary: '185.228.168.9', secondary: '185.228.169.9', description: 'CleanBrowsing — family-friendly filter' },
+  custom:       { primary: '',           secondary: '',           description: 'Manually specify DNS servers' },
+};
+
+const DNS_MODE_OPTIONS = [
+  { value: 'system',        label: 'System Default' },
+  { value: 'cloudflare',    label: 'Cloudflare (1.1.1.1)' },
+  { value: 'google',        label: 'Google DNS (8.8.8.8)' },
+  { value: 'opendns',       label: 'OpenDNS (208.67.222.222)' },
+  { value: 'quad9',         label: 'Quad9 (9.9.9.9)' },
+  { value: 'comodo',        label: 'Comodo Secure (8.26.56.26)' },
+  { value: 'adguard',       label: 'AdGuard DNS (94.140.14.14)' },
+  { value: 'cleanbrowsing', label: 'CleanBrowsing (185.228.168.9)' },
+  { value: 'custom',        label: 'Custom — manual entry' },
+];
+
 export const NetworkAndPerformance: React.FC<Props> = ({ settings, updateSetting, onAddToast }) => {
   const t = useI18n();
   const [proxyTestStatus, setProxyTestStatus] = useState<'idle' | 'testing' | 'pass' | 'fail'>('idle');
   const [proxyErrorMessage, setProxyErrorMessage] = useState('');
+  const [dnsCustomPrimary, setDnsCustomPrimary] = useState(
+    () => settings.extra.dnsCustomResolver.split(',')[0] ?? '',
+  );
+  const [dnsCustomSecondary, setDnsCustomSecondary] = useState(
+    () => settings.extra.dnsCustomResolver.split(',')[1] ?? '',
+  );
+
+  const activeDnsPreset = useMemo(
+    () => DNS_PRESETS[settings.extra.dnsResolver] ?? DNS_PRESETS.custom,
+    [settings.extra.dnsResolver],
+  );
+
+  const handleDnsModeChange = (mode: string) => {
+    updateSetting('extra', 'dnsResolver', mode);
+    const preset = DNS_PRESETS[mode];
+    if (preset && mode !== 'custom') {
+      const servers = [preset.primary, preset.secondary].filter(Boolean).join(',');
+      updateSetting('connection', 'dnsServers', servers);
+      if (mode !== 'system') {
+        updateSetting('extra', 'dnsCustomResolver', servers);
+      }
+    }
+  };
+
+  const handleDnsCustomApply = () => {
+    const servers = [dnsCustomPrimary, dnsCustomSecondary].filter(Boolean).join(',');
+    updateSetting('extra', 'dnsCustomResolver', servers);
+    updateSetting('connection', 'dnsServers', servers);
+    onAddToast('success', 'DNS', 'Custom DNS servers applied.');
+  };
+
+  const handleDnsTest = () => {
+    const servers = settings.connection.defaults.dnsServers || settings.extra.dnsCustomResolver || 'system';
+    onAddToast('info', 'DNS Test', `Testing DNS: ${servers}. Check connectivity to confirm resolution.`);
+  };
 
   const handleTestProxy = () => {
     setProxyTestStatus('testing');
@@ -237,6 +296,98 @@ export const NetworkAndPerformance: React.FC<Props> = ({ settings, updateSetting
               </div>
 
               <p className="text-[10px] text-[var(--text-muted)] leading-relaxed">{t('settings_vpn_note')}</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── DNS ── */}
+      <div className="space-y-4">
+        <div className="flex items-center gap-2 border-b border-[var(--border-color)] pb-2">
+          <Network className="w-4 h-4 text-[var(--accent-primary)]" />
+          <h3 className="text-sm font-extrabold text-[var(--accent-primary)]">DNS Configuration</h3>
+        </div>
+
+        <div className="bg-[var(--bg-hover)]/30 p-3.5 rounded-lg border border-[var(--border-color)] space-y-3">
+          <SelectField
+            label="DNS Provider"
+            value={settings.extra.dnsResolver}
+            onChange={(e) => { handleDnsModeChange(e.target.value); }}
+            options={DNS_MODE_OPTIONS}
+          />
+
+          {settings.extra.dnsResolver !== 'system' && (
+            <div className="space-y-3 pt-2 border-t border-[var(--border-color)]/50 animate-in slide-in-from-top-2 duration-150">
+              <div className="bg-[var(--bg-hover)]/50 px-2.5 py-2 rounded border border-[var(--border-color)]/50">
+                <p className="text-[10px] text-[var(--text-muted)] font-mono">{activeDnsPreset.description}</p>
+                {settings.extra.dnsResolver !== 'custom' && (
+                  <p className="text-[11px] text-[var(--accent-primary)] font-mono mt-1">
+                    {[activeDnsPreset.primary, activeDnsPreset.secondary].filter(Boolean).join(', ')}
+                  </p>
+                )}
+              </div>
+
+              {settings.extra.dnsResolver === 'custom' && (
+                <div className="grid grid-cols-2 gap-3 p-2.5 bg-[var(--bg-hover)]/50 rounded border border-[var(--border-color)]/50">
+                  <TextField
+                    label="Primary DNS"
+                    value={dnsCustomPrimary}
+                    onChange={(e) => { setDnsCustomPrimary(e.target.value); }}
+                    placeholder="e.g. 1.1.1.1"
+                    style={{ direction: 'ltr', textAlign: 'left' }}
+                  />
+                  <TextField
+                    label="Secondary DNS"
+                    value={dnsCustomSecondary}
+                    onChange={(e) => { setDnsCustomSecondary(e.target.value); }}
+                    placeholder="e.g. 1.0.0.1"
+                    style={{ direction: 'ltr', textAlign: 'left' }}
+                  />
+                  <div className="col-span-2 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={handleDnsCustomApply}
+                      className="px-3 py-1.5 bg-[var(--accent-primary)]/10 border border-[var(--accent-border)] text-[var(--accent-primary)] rounded text-[10px] font-bold hover:bg-[var(--accent-primary)]/20 transition-all cursor-pointer"
+                    >
+                      Apply Custom DNS
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <FormRow label="DNS over HTTPS">
+                  <Switch
+                    checked={settings.extra.dnsOverHttps}
+                    onChange={(v) => { updateSetting('extra', 'dnsOverHttps', v); }}
+                  />
+                </FormRow>
+                <FormRow label="Cache timeout (sec)">
+                  <input
+                    type="number"
+                    min={0}
+                    max={86400}
+                    value={settings.extra.dnsCacheTimeoutSec}
+                    onChange={(e) => {
+                      const val = Math.max(0, Math.min(86400, Number(e.target.value) || 0));
+                      updateSetting('extra', 'dnsCacheTimeoutSec', val);
+                    }}
+                    className="w-20 bg-[var(--bg-input)] border border-[var(--border-color)] rounded px-2 py-1 text-[10px] font-mono text-[var(--text-primary)] focus:border-[var(--accent-primary)] focus:outline-none text-left"
+                    style={{ direction: 'ltr' }}
+                  />
+                </FormRow>
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={handleDnsTest}
+                  className="px-3 py-1.5 bg-[var(--info-bg)] border border-[var(--info-border)] text-[var(--info)] rounded text-[10px] font-bold hover:bg-[var(--info-bg)] transition-all cursor-pointer flex items-center gap-1"
+                >
+                  <Server className="w-3 h-3" />
+                  Test DNS
+                </button>
+              </div>
             </div>
           )}
         </div>

@@ -429,6 +429,8 @@ export interface AppSettings {
     userAgent: string;
     dnsResolver: string;
     dnsCustomResolver: string;
+    dnsOverHttps: boolean;
+    dnsCacheTimeoutSec: number;
     forceIpv4: boolean;
     vpnEnabled: boolean;
     vpnMode: 'system' | 'proxy' | 'bind';

@@ -163,6 +163,8 @@ export const initialSettings: AppSettings = {
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) NOVA/0.1.0',
     dnsResolver: 'system',
     dnsCustomResolver: '',
+    dnsOverHttps: false,
+    dnsCacheTimeoutSec: 300,
     forceIpv4: false,
     vpnEnabled: false,
     vpnMode: 'system',
