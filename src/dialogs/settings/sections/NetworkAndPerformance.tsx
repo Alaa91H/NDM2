@@ -1,9 +1,10 @@
 ﻿/* src/dialogs/settings/sections/NetworkAndPerformance.tsx */
 import React, { useState, useMemo } from 'react';
-import { Globe, RefreshCw, ShieldCheck, Server, Network } from 'lucide-react';
+import { Globe, RefreshCw, ShieldCheck, Server, Network, Activity, Zap, Clock, XCircle } from 'lucide-react';
 import type { AppSettings } from '../../../types/desktop-ui.types';
 import { Checkbox, FormRow, SelectField, Switch, TextField } from '../../../components/primitives';
 import { useI18n } from '../../../store/selectors';
+import { novaClient } from '../../../api/novaClient';
 
 interface Props {
   settings: AppSettings;
@@ -47,7 +48,7 @@ export const NetworkAndPerformance: React.FC<Props> = ({ settings, updateSetting
   );
 
   const activeDnsPreset = useMemo(
-    () => DNS_PRESETS[settings.extra.dnsResolver] ?? DNS_PRESETS.custom,
+    () => DNS_PRESETS[settings.extra.dnsResolver] ?? { primary: '', secondary: '', description: '' },
     [settings.extra.dnsResolver],
   );
 
@@ -74,6 +75,36 @@ export const NetworkAndPerformance: React.FC<Props> = ({ settings, updateSetting
     const servers = settings.connection.defaults.dnsServers || settings.extra.dnsCustomResolver || 'system';
     onAddToast('info', 'DNS Test', `Testing DNS: ${servers}. Check connectivity to confirm resolution.`);
   };
+
+  const [pingResults, setPingResults] = useState<Array<{ name: string; ip: string; latencyMs: number | null }> | null>(null);
+  const [pingLoading, setPingLoading] = useState(false);
+
+  const handlePingAll = async () => {
+    setPingLoading(true);
+    setPingResults(null);
+    try {
+      const data = await novaClient.pingDnsProviders();
+      setPingResults(data.results);
+      const reachable = data.results.filter((r) => r.latencyMs !== null).length;
+      onAddToast(
+        'info',
+        'DNS Ping',
+        `Pinged ${String(data.results.length)} providers, ${String(reachable)} reachable.`,
+      );
+    } catch {
+      onAddToast('error', 'DNS Ping', 'Failed to ping DNS providers.');
+    } finally {
+      setPingLoading(false);
+    }
+  };
+
+  const bestPing = pingResults
+    ? pingResults.reduce<{ name: string; latencyMs: number } | null>((best, r) => {
+        if (r.latencyMs === null) return best;
+        if (!best || r.latencyMs < best.latencyMs) return { name: r.name, latencyMs: r.latencyMs };
+        return best;
+      }, null)
+    : null;
 
   const handleTestProxy = () => {
     setProxyTestStatus('testing');
@@ -387,7 +418,63 @@ export const NetworkAndPerformance: React.FC<Props> = ({ settings, updateSetting
                   <Server className="w-3 h-3" />
                   Test DNS
                 </button>
+                <button
+                  type="button"
+                  onClick={() => void handlePingAll()}
+                  disabled={pingLoading}
+                  className="px-3 py-1.5 bg-[var(--bg-hover)] border border-[var(--border-color)] text-[var(--text-secondary)] rounded text-[10px] font-bold hover:bg-[var(--border-color)]/20 transition-all cursor-pointer flex items-center gap-1 disabled:opacity-50"
+                >
+                  {pingLoading ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Activity className="w-3 h-3" />}
+                  Ping All Providers
+                </button>
               </div>
+
+              {pingResults && (
+                <div className="pt-1 animate-in fade-in duration-200">
+                  <table className="w-full text-[10px] font-mono border-collapse">
+                    <thead>
+                      <tr className="border-b border-[var(--border-color)]/50">
+                        <th className="text-left py-1.5 pr-2 text-[var(--text-muted)] font-bold uppercase tracking-wider">Provider</th>
+                        <th className="text-left py-1.5 pr-2 text-[var(--text-muted)] font-bold uppercase tracking-wider">IP</th>
+                        <th className="text-right py-1.5 text-[var(--text-muted)] font-bold uppercase tracking-wider">Latency</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pingResults.map((r) => {
+                        const isBest = bestPing && r.name === bestPing.name && r.latencyMs !== null;
+                        return (
+                          <tr key={r.name} className={`border-b border-[var(--border-color)]/20 ${isBest ? 'bg-[var(--success-bg)]/20' : ''}`}>
+                            <td className="py-1.5 pr-2 text-[var(--text-primary)] flex items-center gap-1">
+                              {isBest && <Zap className="w-2.5 h-2.5 text-[var(--success)]" />}
+                              {r.name}
+                            </td>
+                            <td className="py-1.5 pr-2 text-[var(--text-muted)]">{r.ip}</td>
+                            <td className={`py-1.5 text-right ${r.latencyMs === null ? 'text-[var(--danger)]' : r.latencyMs < 50 ? 'text-[var(--success)]' : r.latencyMs < 150 ? 'text-[var(--warning)]' : 'text-[var(--danger)]'}`}>
+                              {r.latencyMs !== null ? (
+                                <span className="flex items-center justify-end gap-1">
+                                  <Clock className="w-2.5 h-2.5" />
+                                  {`${r.latencyMs.toFixed(1)} ms`}
+                                </span>
+                              ) : (
+                                <span className="flex items-center justify-end gap-1">
+                                  <XCircle className="w-2.5 h-2.5" />
+                                  Timeout
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  {bestPing && (
+                    <p className="text-[9px] text-[var(--success)] font-bold mt-2 flex items-center gap-1">
+                      <Zap className="w-2.5 h-2.5" />
+                      Fastest: {bestPing.name} — {bestPing.latencyMs.toFixed(1)} ms
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>

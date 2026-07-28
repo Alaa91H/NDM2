@@ -830,6 +830,12 @@ export const novaClient = {
     return request('/api/stats', undefined, 5000);
   },
 
+  async pingDnsProviders(): Promise<{
+    results: Array<{ name: string; ip: string; latencyMs: number | null }>;
+  }> {
+    return request('/api/dns/ping-all', { method: 'POST' }, 30000);
+  },
+
 };
 
 async function request<T>(path: string, init?: RequestInit, timeoutMs = 2500): Promise<T> {

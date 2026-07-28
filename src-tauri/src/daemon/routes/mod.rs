@@ -1,5 +1,6 @@
 pub(crate) mod common;
 pub(crate) mod diagnostics;
+pub(crate) mod dns_routes;
 pub(crate) mod downloads;
 pub(crate) mod engine;
 pub(crate) mod extension;
@@ -22,6 +23,7 @@ pub(crate) fn register_routes(router: Router<SharedState>) -> Router<SharedState
     let router = extension::register_routes(router);
     let router = external_tools::register_routes(router);
     let router = probes::register_routes(router);
+    let router = dns_routes::register_routes(router);
     let router = telegram_routes::register_routes(router);
     diagnostics::register_routes(router)
 }
