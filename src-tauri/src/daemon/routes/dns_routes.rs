@@ -38,15 +38,19 @@ async fn ping_ip(ip: &str) -> Option<f64> {
 
     #[cfg(target_os = "windows")]
     let output = std::process::Command::new("ping")
-        .arg("-n").arg("1")
-        .arg("-w").arg("2000")
+        .arg("-n")
+        .arg("1")
+        .arg("-w")
+        .arg("2000")
         .arg(ip)
         .output();
 
     #[cfg(not(target_os = "windows"))]
     let output = std::process::Command::new("ping")
-        .arg("-c").arg("1")
-        .arg("-W").arg("2")
+        .arg("-c")
+        .arg("1")
+        .arg("-W")
+        .arg("2")
         .arg(ip)
         .output();
 
