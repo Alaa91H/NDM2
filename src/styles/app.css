@@ -55,51 +55,15 @@ body {
   border-color: var(--border-color-hover);
 }
 
-.acrylic-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-sm);
-  transition: all var(--transition-speed) var(--transition-bezier);
-  contain: layout style;
-}
-
-.acrylic-card:hover {
-  box-shadow: var(--shadow-md);
-  border-color: var(--border-color-hover);
-}
-
 /* Custom animations and glowing elements */
 .accent-glow {
   box-shadow: 0 0 12px var(--accent-glow);
 }
 
-.accent-border-glow {
-  border-color: var(--accent-primary);
-  box-shadow: 0 0 8px var(--accent-glow);
-}
-
 /* Spacers & Padding utility helpers based on Density Mode */
-.density-p {
-  padding: var(--spacing-container);
-}
-
 .density-py {
   padding-top: var(--spacing-row);
   padding-bottom: var(--spacing-row);
-}
-
-.density-px {
-  padding-left: var(--spacing-container);
-  padding-right: var(--spacing-container);
-}
-
-.density-gap {
-  gap: var(--spacing-row);
-}
-
-.density-gap-lg {
-  gap: var(--spacing-container);
 }
 
 /* Desktop Task Table Layout Styling */
@@ -111,8 +75,7 @@ body {
 }
 
 .desktop-table-header th,
-.desktop-table-row td,
-.sort-icon-box {
+.desktop-table-row td {
   border-radius: 0px !important;
 }
 
@@ -238,102 +201,19 @@ body {
   }
 }
 
-/* Toast slide-out animation */
-.toast-exit {
-  animation: toast-out 200ms ease-in forwards;
-}
-
-@keyframes toast-out {
-  to {
-    opacity: 0;
-    transform: translateX(100%);
-  }
-}
-
-/* Drag overlay feedback */
-.drag-overlay {
-  animation: drag-lift 150ms ease-out;
-  box-shadow: 0 8px 25px -5px var(--overlay-bg);
-}
-
-@keyframes drag-lift {
-  from {
-    opacity: 0.5;
-    transform: scale(0.95);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1.02);
-  }
-}
-
-/* Sidebar nav item transition */
-.nav-item-enter {
-  animation: nav-fade-in 150ms ease-out;
-}
-
-@keyframes nav-fade-in {
-  from {
-    opacity: 0;
-    transform: translateX(-4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
 /* Text sizes mapped to Density mode */
 .text-ui {
   font-size: var(--font-size-ui);
 }
 
-.text-title {
-  font-size: var(--font-size-title);
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-
-/* Segment thread blocks visualizer */
-.segment-block {
-  height: 10px;
-  border-radius: 1px;
-  background: var(--segment-track);
-  position: relative;
-  overflow: hidden;
-  contain: layout style;
-}
-
-.segment-block-fill {
-  height: 100%;
-  background: var(--accent-primary);
-  transition: width 300ms ease-out;
-  will-change: width;
-}
-
-/* Tooltip and Menus styled elegantly */
-.context-menu {
-  background: var(--bg-surface-elevated);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-xs);
-  box-shadow: var(--shadow-lg);
-  padding: 2px;
-}
-
 /* Global Desktop-Style High-Density Dropdowns, Context Menus, and Popups */
-.context-menu,
-.dropdown-menu,
 [class*='popup-menu'] {
   border-radius: var(--radius-xs) !important;
   padding: 2px !important;
   box-shadow: var(--shadow-lg) !important;
 }
 
-.context-menu button,
-.dropdown-menu button,
 [class*='popup-menu'] button,
-.context-menu a,
-.dropdown-menu a,
 [class*='popup-menu'] a {
   padding-top: 3.5px !important;
   padding-bottom: 3.5px !important;
@@ -345,8 +225,6 @@ body {
   border-radius: var(--radius-xs) !important;
 }
 
-.context-menu button svg,
-.dropdown-menu button svg,
 [class*='popup-menu'] button svg {
   width: 11px !important;
   height: 11px !important;
@@ -435,8 +313,7 @@ footer button {
 .flex.gap-2,
 .flex.gap-2\.5,
 .flex.gap-3,
-[class*='footer'] .flex,
-.dialog-footer {
+[class*='footer'] .flex {
   gap: 8px !important;
 }
 
@@ -466,28 +343,22 @@ footer .truncate {
 [class*='dialog'],
 [class*='Modal'],
 [class*='modal'],
-.dialog-panel,
 .glass-panel,
-.card,
 [class*='card'],
 [class*='panel'],
-.context-menu,
-.dropdown-menu,
 [class*='menu'] {
   border-radius: 20px !important;
 }
 
 /* Override standard utility classes to be beautifully curved */
 .rounded,
-.rounded-sm,
 .rounded-md {
   border-radius: 10px;
 }
 .rounded-lg {
   border-radius: 14px;
 }
-.rounded-xl,
-.rounded-2xl {
+.rounded-xl {
   border-radius: 18px;
 }
 

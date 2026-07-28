@@ -79,7 +79,13 @@ const ColumnConfigPanel: React.FC<ColumnConfigPanelProps> = ({
   }, [colOrder, setVisibleCols]);
 
   const hideAll = useCallback(() => {
-    setVisibleCols((prev) => ({ ...prev, name: true }));
+    setVisibleCols((prev) => {
+      const next: Record<string, boolean> = {};
+      for (const k of Object.keys(prev)) {
+        next[k] = k === 'name';
+      }
+      return next;
+    });
   }, [setVisibleCols]);
 
   const resetDefaults = useCallback(() => {

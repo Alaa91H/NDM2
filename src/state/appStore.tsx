@@ -6,6 +6,7 @@ import { tauriClient, getDaemonUrl, getDaemonToken } from '../api/tauriClient';
 import { novaClient, setApiBase, setAuthToken } from '../api/novaClient';
 import { isLanguageLoaded, loadLanguage } from '../lib/i18n/translations';
 import { playAppSound } from '../utils/sound';
+import { logger } from '../utils/logger';
 import { isDetachedWindow } from '../utils/windowMode';
 
 import { taskStore, mergeDaemonTasks } from '../store/taskStore';
@@ -13,7 +14,6 @@ import { queueStore } from '../store/queueStore';
 import { settingsStore } from '../store/settingsStore';
 import { bridgeStore } from '../store/bridgeStore';
 import { uiStore } from '../store/uiStore';
-import { logger } from '../utils/logger';
 
 const buildNovaDefaultPaths = (downloadsDir: string): AppSettings['saveAndCategories'] => {
   const sep = downloadsDir.includes('\\') ? '\\' : '/';
@@ -345,7 +345,7 @@ function EffectsProvider({ children }: { children: ReactNode }) {
               fileUploadLimitMb: s.extra.tgFileUploadLimitMb,
             })
             .catch((e: unknown) => {
-              console.warn('updateTelegramConfig failed', e);
+              logger.warn('appStore', 'updateTelegramConfig failed', e);
             });
         }, 300);
         pendingCleanup = () => { window.clearTimeout(timer); };
@@ -573,7 +573,7 @@ function EffectsProvider({ children }: { children: ReactNode }) {
         }
       })
       .catch((error: unknown) => {
-        console.warn('unsigned update check failed', error);
+        logger.warn('appStore', 'unsigned update check failed', error);
       });
   }, []);
 
@@ -631,7 +631,7 @@ function pushBrowserConfig(status: string) {
       userAgent: s.extra.userAgent,
     })
     .catch((e: unknown) => {
-      console.warn('configureBrowserExtension failed', e);
+      logger.warn('appStore', 'configureBrowserExtension failed', e);
     });
 }
 

@@ -42,7 +42,13 @@ const TaskCheckboxAndIconInner: React.FC<TaskCheckboxAndIconProps> = ({
         <input
           type="checkbox"
           checked={isChecked}
-          onChange={() => {}}
+          onChange={(e) => {
+            e.stopPropagation();
+            handleToggleCheckTask(taskId, {
+              stopPropagation: () => {},
+              shiftKey: (e.nativeEvent as KeyboardEvent | MouseEvent).shiftKey ?? false,
+            } as unknown as React.MouseEvent);
+          }}
           className="rounded-none border-[var(--border-color)] text-[var(--accent-primary)] focus-visible:ring-[var(--accent-primary)] cursor-pointer h-3.5 w-3.5 shrink-0"
         />
       </div>

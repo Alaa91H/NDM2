@@ -10,15 +10,12 @@ use super::*;
 use crate::daemon::direct::ConnectionLimits;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum MultiErrorKind {
     Perform,
     SocketAction,
     Wait,
     Timeout,
-    MessageCollection,
     SocketAssignment,
-    TooManyHandles,
 }
 
 impl std::fmt::Display for MultiErrorKind {
@@ -28,31 +25,10 @@ impl std::fmt::Display for MultiErrorKind {
             Self::SocketAction => write!(f, "multi socket action"),
             Self::Wait => write!(f, "multi wait"),
             Self::Timeout => write!(f, "multi timeout"),
-            Self::MessageCollection => write!(f, "multi message collection"),
             Self::SocketAssignment => write!(f, "socket assignment"),
-            Self::TooManyHandles => write!(f, "too many handles"),
         }
     }
 }
-
-#[derive(Clone, Debug)]
-#[allow(dead_code)]
-pub(crate) struct MultiActionError {
-    pub kind: MultiErrorKind,
-    pub message: String,
-    pub handle_index: Option<usize>,
-}
-
-impl std::fmt::Display for MultiActionError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.handle_index {
-            Some(idx) => write!(f, "[{}] {}: {}", idx, self.kind, self.message),
-            None => write!(f, "{}: {}", self.kind, self.message),
-        }
-    }
-}
-
-impl std::error::Error for MultiActionError {}
 
 fn wrap_multi_error(kind: MultiErrorKind, source: String) -> String {
     format!("libcurl {kind}: {source}")
@@ -89,7 +65,7 @@ impl CurlMultiGuard {
         Ok(handle)
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn handle_count(&self) -> usize {
         self.handle_count
     }
@@ -136,37 +112,9 @@ mod tests {
         assert_eq!(MultiErrorKind::Wait.to_string(), "multi wait");
         assert_eq!(MultiErrorKind::Timeout.to_string(), "multi timeout");
         assert_eq!(
-            MultiErrorKind::MessageCollection.to_string(),
-            "multi message collection"
-        );
-        assert_eq!(
             MultiErrorKind::SocketAssignment.to_string(),
             "socket assignment"
         );
-        assert_eq!(
-            MultiErrorKind::TooManyHandles.to_string(),
-            "too many handles"
-        );
-    }
-
-    #[test]
-    fn multi_action_error_display_with_index() {
-        let err = MultiActionError {
-            kind: MultiErrorKind::Perform,
-            message: "test error".to_string(),
-            handle_index: Some(2),
-        };
-        assert_eq!(err.to_string(), "[2] multi perform: test error");
-    }
-
-    #[test]
-    fn multi_action_error_display_without_index() {
-        let err = MultiActionError {
-            kind: MultiErrorKind::SocketAction,
-            message: "socket failed".to_string(),
-            handle_index: None,
-        };
-        assert_eq!(err.to_string(), "multi socket action: socket failed");
     }
 
     #[test]

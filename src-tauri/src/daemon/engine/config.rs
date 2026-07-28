@@ -5,6 +5,7 @@ use std::time::Duration;
 /// at startup or adapted at runtime by the Download Intelligence Engine. No value
 /// here is ever exposed to the user as a setting.
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct EngineConfig {
     pub max_connections_per_download: u32,
     pub max_total_connections: u32,
@@ -129,6 +130,7 @@ impl EngineConfig {
     }
 
     /// Update thresholds based on live measurements. Called by the DIE.
+    #[allow(dead_code)]
     pub fn update_from_profile(&mut self, per_connection_ceiling: u64, median_rtt_us: u64) {
         if per_connection_ceiling > 0 {
             self.speed_high_threshold = (per_connection_ceiling as f64 * 0.8) as u64;

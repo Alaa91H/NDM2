@@ -57,6 +57,7 @@ impl ThreadPool {
         }
     }
 
+    #[cfg(test)]
     pub fn spawn<F: FnOnce() + Send + 'static>(&self, task: F) {
         if let Some(tx) = &self.tx {
             let _ = tx.send(Box::new(task));
@@ -71,6 +72,7 @@ impl ThreadPool {
         self.max_size
     }
 
+    #[cfg(test)]
     pub fn shutdown(mut self) {
         drop(self.tx.take());
         for handle in self.handles.drain(..) {

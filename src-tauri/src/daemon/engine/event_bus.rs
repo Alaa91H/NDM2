@@ -283,6 +283,7 @@ impl EventBus {
         }
     }
 
+    #[allow(dead_code)]
     pub fn unsubscribe(&self, id: SubscriberId) -> bool {
         if let Ok(mut inner) = self.inner.lock() {
             let before = inner.subscribers.len();

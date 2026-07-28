@@ -1,5 +1,4 @@
 pub mod curl;
-pub mod curl_capabilities;
 pub mod diagnostics;
 pub mod direct;
 pub mod engine;
@@ -237,9 +236,6 @@ pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
                         crate::daemon::engine::self_healing::SelfHealer::new(pe_ref),
                     ))
                 },
-                capability_discovery: Arc::new(Mutex::new(
-                    crate::daemon::engine::capability_discovery::CapabilityDiscovery::new(),
-                )),
                 die_orchestrator: Arc::new(Mutex::new(
                     crate::daemon::engine::die_orchestrator::DieOrchestrator::new(),
                 )),

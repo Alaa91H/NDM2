@@ -25,6 +25,7 @@ impl ToolId {
         }
     }
 
+    #[allow(dead_code)]
     pub fn description(&self) -> &'static str {
         match self {
             ToolId::Ffmpeg => "Media Processing Engine",
@@ -222,6 +223,7 @@ pub struct ToolPathCandidate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct InstallProgress {
     pub tool_id: String,
     pub phase: InstallPhase,
@@ -230,6 +232,7 @@ pub struct InstallProgress {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub enum InstallPhase {
     Downloading,
     Verifying,
@@ -271,6 +274,7 @@ impl Default for ToolRegistry {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ToolSource {
     pub name: &'static str,
     pub base_url: &'static str,
@@ -279,6 +283,7 @@ pub struct ToolSource {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct PlatformPattern {
     pub os: &'static str,
     pub arch: &'static str,
@@ -286,7 +291,9 @@ pub struct PlatformPattern {
     pub executable_name: &'static str,
 }
 
+#[allow(dead_code)]
 pub const FFMPEG_MIN_VERSION: &str = "5.0";
+#[allow(dead_code)]
 pub const YTDLP_MIN_VERSION: &str = "2024.01.01";
 
 pub trait ExternalTool: Send + Sync {
@@ -305,6 +312,7 @@ pub trait ExternalTool: Send + Sync {
     }
 }
 
+#[allow(dead_code)]
 pub struct ProcessSpec {
     pub program: String,
     pub args: Vec<String>,

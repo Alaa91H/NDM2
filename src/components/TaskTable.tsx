@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { logger } from '../utils/logger';
 import {
   Square,
   Trash2,
@@ -201,7 +202,7 @@ export const TaskTable: React.FC = () => {
       label: t('menu_copy_url'),
       icon: <Copy className="w-3.5 h-3.5" />,
       onClick: () => {
-        void writeClipboardText(task.url).catch(() => {});
+        void writeClipboardText(task.url).catch((e) => logger.warn('TaskTable', 'writeClipboardText failed', e));
       },
     });
     // Refresh URL: open the source URL in the system browser to capture a

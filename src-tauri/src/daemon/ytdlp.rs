@@ -576,11 +576,6 @@ fn push_cookie_args(args: &mut Vec<String>, cookies: &str) {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn build_ytdlp_args(body: &CreateDownloadBody) -> Result<Vec<String>, String> {
-    build_ytdlp_args_with_engines(body, None)
-}
-
 pub(crate) fn build_ytdlp_args_with_engines(
     body: &CreateDownloadBody,
     ffmpeg_bin: Option<&str>,
@@ -1162,7 +1157,7 @@ mod tests {
             ..Default::default()
         };
 
-        let args = build_ytdlp_args(&media_body(media_options)).unwrap();
+        let args = build_ytdlp_args_with_engines(&media_body(media_options), None).unwrap();
 
         assert!(has_pair(
             &args,

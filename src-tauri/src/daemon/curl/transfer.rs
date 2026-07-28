@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use ::curl::easy::{Easy2, HttpVersion};
+use ::curl::easy::Easy2;
 
 use super::*;
 use crate::daemon::direct::{
@@ -1026,7 +1026,6 @@ fn run_segmented_libcurl(
                 segments: Some(segment_scheduler.clone()),
                 retry_state: crate::daemon::engine::retry::RetryState::new(),
                 adaptive_engine: Some(adaptive_engine),
-                telemetry_bus: telemetry_bus.clone(),
             },
         );
     }

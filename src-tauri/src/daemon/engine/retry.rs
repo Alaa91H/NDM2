@@ -77,6 +77,7 @@ impl RetryPolicy {
         }
     }
 
+    #[allow(dead_code)]
     pub fn should_retry(&self, attempt: u32) -> bool {
         attempt < self.max_retries
     }

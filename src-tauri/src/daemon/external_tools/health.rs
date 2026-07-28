@@ -4,6 +4,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct HealthReport {
     pub tool_id: ToolId,
     pub status: ToolStatus,
@@ -133,6 +134,7 @@ fn run_version_check(tool: &dyn ExternalTool, path: &std::path::Path) -> Result<
     Ok(stdout)
 }
 
+#[allow(dead_code)]
 pub fn probe_capabilities(tool: &dyn ExternalTool, path: &std::path::Path) -> Vec<String> {
     if !path.exists() {
         return Vec::new();

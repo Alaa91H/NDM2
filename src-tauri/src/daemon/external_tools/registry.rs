@@ -5,6 +5,7 @@ use std::path::PathBuf;
 const REGISTRY_FILENAME: &str = "external_tools.json";
 
 #[derive(Debug, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct PersistedRegistry {
     pub registry: ToolRegistry,
 }

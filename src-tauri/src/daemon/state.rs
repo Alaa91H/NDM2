@@ -9,10 +9,8 @@ use crate::daemon::persist::DownloadStats;
 use crate::daemon::resource_intelligence::ResourceIntelligenceEngine;
 
 use crate::daemon::engine::adaptive::AdaptiveEngine;
-use crate::daemon::engine::adaptive::TelemetryBus;
 use crate::daemon::engine::adaptive_connections::AdaptiveConnectionManager;
 use crate::daemon::engine::bandwidth::BandwidthManager;
-use crate::daemon::engine::capability_discovery::CapabilityDiscovery;
 use crate::daemon::engine::die_orchestrator::DieOrchestrator;
 use crate::daemon::engine::dynamic_segments::DynamicSegmentScheduler;
 use crate::daemon::engine::event_bus::EventBus;
@@ -38,7 +36,6 @@ pub struct TaskEngineTracker {
     pub segments: Option<DynamicSegmentScheduler>,
     pub retry_state: RetryState,
     pub adaptive_engine: Option<AdaptiveEngine>,
-    pub telemetry_bus: Arc<TelemetryBus>,
 }
 
 const ENGINE_CACHE_TTL_SECS: u64 = 120;
@@ -83,8 +80,6 @@ pub struct AppState {
     pub policy_engine: Arc<Mutex<PolicyEngine>>,
     /// Self-Healing subsystem — auto-recovery for all failure modes.
     pub self_healer: Arc<Mutex<SelfHealer>>,
-    /// Capability Discovery — runtime probing of server capabilities.
-    pub capability_discovery: Arc<Mutex<CapabilityDiscovery>>,
     /// Die Orchestrator — host-level connection coordination and profile-driven limits.
     pub die_orchestrator: Arc<Mutex<DieOrchestrator>>,
     /// Resource Manager — unified memory/disk/thread pressure monitoring.

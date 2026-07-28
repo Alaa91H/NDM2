@@ -5,6 +5,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct ProcessOutput {
     pub stdout: String,
     pub stderr: String,
@@ -13,6 +14,7 @@ pub struct ProcessOutput {
     pub duration: Duration,
 }
 
+#[allow(dead_code)]
 pub fn run_tool(
     spec: &ProcessSpec,
     working_dir: Option<&PathBuf>,
@@ -66,7 +68,7 @@ pub fn run_tool(
                         let _ = child.wait();
                         return Err(format!(
                             "Process timed out after {:?}",
-                            spec.timeout.unwrap()
+                            spec.timeout.unwrap_or(Duration::from_secs(300))
                         ));
                     }
                 }
@@ -89,6 +91,7 @@ pub fn run_tool(
     })
 }
 
+#[allow(dead_code)]
 pub fn run_tool_capture(
     program: &str,
     args: &[&str],

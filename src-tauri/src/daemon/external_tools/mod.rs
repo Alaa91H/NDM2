@@ -304,11 +304,13 @@ impl ExternalToolManager {
         resolver.resolve_capability(capability_id)
     }
 
+    #[allow(dead_code)]
     pub fn ytdlp_path(&self) -> Option<String> {
         let resolver = lock_or_err!(self.resolver);
         resolver.tool_path(ToolId::YtDlp)
     }
 
+    #[allow(dead_code)]
     pub fn ffmpeg_path(&self) -> Option<String> {
         let resolver = lock_or_err!(self.resolver);
         resolver.tool_path(ToolId::Ffmpeg)

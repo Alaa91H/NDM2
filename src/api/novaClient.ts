@@ -255,7 +255,7 @@ export const novaClient = {
         currentTasks = merged;
         onDownloads(currentTasks);
       } catch (parseErr) {
-        console.warn('NovaClient: could not parse delta event', parseErr);
+        logger.warn('NovaClient', 'could not parse delta event', parseErr);
       }
     };
 
@@ -267,7 +267,7 @@ export const novaClient = {
         currentTasks = tasks;
         onDownloads(tasks);
       } catch (parseErr) {
-        console.warn('NovaClient: could not parse download event', parseErr);
+        logger.warn('NovaClient', 'could not parse download event', parseErr);
       }
     };
 
@@ -870,7 +870,7 @@ async function request<T>(path: string, init?: RequestInit, timeoutMs = 2500): P
           const payload = (await response.json()) as { error?: string } | null;
           if (payload?.error) message = payload.error;
         } catch (parseErr) {
-          console.warn('NovaClient: could not parse error body', parseErr);
+          logger.warn('NovaClient', 'could not parse error body', parseErr);
         }
         logger.error('NovaClient', `${method} ${path} failed: ${message}`);
         throw new Error(message);

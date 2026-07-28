@@ -48,11 +48,13 @@ impl ResourceManager {
         }
     }
 
+    #[allow(dead_code)]
     pub fn update_network(&mut self, speed: u64, connections: u32) {
         let pressure = self.current_memory_pressure();
         self.buffer_manager.recommend(speed, connections, pressure);
     }
 
+    #[allow(dead_code)]
     pub fn current_memory_pressure(&self) -> f64 {
         if self.total_memory_mb == 0 {
             return 0.0;
@@ -103,6 +105,7 @@ impl ResourceManager {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct UnifiedSnapshot {
     pub cpu_count: u32,
     pub cpu_usage_pct: f32,
@@ -118,6 +121,7 @@ pub struct UnifiedSnapshot {
     pub max_threads: u32,
 }
 
+#[allow(dead_code)]
 impl UnifiedSnapshot {
     pub fn is_memory_pressured(&self) -> bool {
         self.memory_pressure > 0.85

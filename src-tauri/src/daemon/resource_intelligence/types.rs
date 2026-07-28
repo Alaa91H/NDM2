@@ -291,6 +291,7 @@ pub struct ResolutionReport {
     pub recommended_strategy: DownloadStrategy,
     pub strategy_rationale: StrategyRationale,
     pub resolution_phase: ResolutionPhase,
+    #[allow(dead_code)]
     pub started_at: std::time::Instant,
     pub elapsed: Duration,
 }

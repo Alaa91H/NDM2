@@ -83,6 +83,7 @@ impl CapabilityResolver {
         }
     }
 
+    #[allow(dead_code)]
     pub fn all_capabilities(&self) -> Vec<CapabilityAvailability> {
         let mut all_caps: Vec<String> = Vec::new();
         for installation in self.installations.values() {
@@ -99,10 +100,12 @@ impl CapabilityResolver {
             .collect()
     }
 
+    #[allow(dead_code)]
     pub fn get_installed_tool(&self, tool_id: ToolId) -> Option<&ToolInstallation> {
         self.installations.get(&tool_id)
     }
 
+    #[allow(dead_code)]
     pub fn tool_path(&self, tool_id: ToolId) -> Option<String> {
         self.installations
             .get(&tool_id)
@@ -118,6 +121,7 @@ impl Default for CapabilityResolver {
     }
 }
 
+#[allow(dead_code)]
 pub fn get_feature_requirements(feature: &str) -> Vec<(&'static str, ToolId)> {
     match feature {
         "media.merge"

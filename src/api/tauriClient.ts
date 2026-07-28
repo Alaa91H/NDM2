@@ -1,4 +1,5 @@
 import type { AppSettings } from '../types/desktop-ui.types';
+import { logger } from '../utils/logger';
 import { novaClient } from './novaClient';
 
 interface FileWithPath extends File {
@@ -41,7 +42,7 @@ export interface FileOperationResult {
   changed?: boolean;
 }
 
-export interface UpdateCheckResult {
+interface UpdateCheckResult {
   currentVersion: string;
   latestVersion: string;
   hasUpdate: boolean;
@@ -135,7 +136,7 @@ export const tauriClient = {
       await invoke('restart_daemon');
       return true;
     } catch (e) {
-      console.warn('tauriClient: restartDaemon failed', e);
+      logger.warn('tauriClient', 'restartDaemon failed', e);
       return false;
     }
   },
@@ -173,7 +174,7 @@ export const tauriClient = {
         },
       };
     } catch (e) {
-      console.warn('Tauri updater check failed:', e);
+      logger.warn('tauriClient', 'checkTauriUpdate failed', e);
       throw e;
     }
   },
@@ -186,11 +187,11 @@ export const tauriClient = {
       try {
         const parsed = new URL(url);
         if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:' && parsed.protocol !== 'mailto:') {
-          console.warn('openExternalUrl: blocked non-http(s) URL', parsed.protocol);
+          logger.warn('tauriClient', 'openExternalUrl: blocked non-http(s) URL', parsed.protocol);
           return false;
         }
       } catch {
-        console.warn('openExternalUrl: invalid URL');
+        logger.warn('tauriClient', 'openExternalUrl: invalid URL');
         return false;
       }
       window.open(url, '_blank', 'noopener,noreferrer');
@@ -359,7 +360,7 @@ export const tauriClient = {
       await invoke('open_file', { path: filePath });
       return true;
     } catch (e) {
-      console.warn('tauriClient: openDownloadedFile failed', e);
+      logger.warn('tauriClient', 'openDownloadedFile failed', e);
       return false;
     }
   },
@@ -369,7 +370,7 @@ export const tauriClient = {
       await invoke('reveal_file', { path: filePath });
       return true;
     } catch (e) {
-      console.warn('tauriClient: revealDownloadedFile failed', e);
+      logger.warn('tauriClient', 'revealDownloadedFile failed', e);
       return false;
     }
   },
@@ -395,7 +396,7 @@ export const tauriClient = {
       await invoke('scan_downloaded_file', { path: filePath });
       return true;
     } catch (e) {
-      console.warn('tauriClient: scanDownloadedFile failed', e);
+      logger.warn('tauriClient', 'scanDownloadedFile failed', e);
       return false;
     }
   },

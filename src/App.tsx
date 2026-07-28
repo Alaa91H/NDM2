@@ -3,6 +3,7 @@ import { AppStoreProvider } from './state/appStore';
 import { AppShell } from './components/AppShell';
 import { EngineCapabilityProvider } from './capabilities/EngineCapabilityContext';
 import { DetachedProgressWindow } from './dialogs/download/DetachedProgressWindow';
+import { logger } from './utils/logger';
 import { detachedMode, detachedTaskId } from './utils/windowMode';
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
@@ -14,7 +15,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
     return { hasError: true };
   }
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error('ErrorBoundary caught:', error, info);
+    logger.error('App', 'ErrorBoundary caught', { error: error.message, info });
   }
   render() {
     if (this.state.hasError) {

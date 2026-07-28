@@ -1,11 +1,13 @@
 use std::time::{Duration, Instant};
 
 /// Sliding window for tracking recent samples.
+#[allow(dead_code)]
 struct SlidingWindow {
     samples: Vec<f64>,
     capacity: usize,
 }
 
+#[allow(dead_code)]
 impl SlidingWindow {
     fn new(capacity: usize) -> Self {
         Self {
@@ -36,6 +38,7 @@ impl SlidingWindow {
 
 /// Dynamic chunk manager that continuously adapts chunk/buffer sizes
 /// based on network speed, disk speed, RTT, remaining size, and memory pressure.
+#[allow(dead_code)]
 pub struct ChunkManager {
     current_chunk_bytes: u64,
     min_chunk: u64,
@@ -48,6 +51,7 @@ pub struct ChunkManager {
     last_adjustment: Instant,
 }
 
+#[allow(dead_code)]
 impl ChunkManager {
     pub fn new(total_size: u64) -> Self {
         let min_chunk = 32 * 1024;

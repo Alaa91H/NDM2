@@ -522,7 +522,7 @@ export interface ToastItem {
   action?: { label: string; onClick: () => void };
 }
 
-export interface AppStoreState {
+interface AppStoreState {
   tasks: DownloadItem[];
   queues: Queue[];
   selectedTaskId: string | null;

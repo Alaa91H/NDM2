@@ -7,6 +7,7 @@ use crate::daemon::engine::policy_engine::{
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum HealthStatus {
     Healthy,
     Degraded { reason: String },
@@ -15,6 +16,7 @@ pub enum HealthStatus {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct HealthSnapshot {
     pub status: HealthStatus,
     pub uptime_secs: u64,
@@ -24,6 +26,7 @@ pub struct HealthSnapshot {
     pub active_warnings: Vec<String>,
 }
 
+#[allow(dead_code)]
 struct FailureRecord {
     timestamp: Instant,
     error: String,
@@ -32,6 +35,7 @@ struct FailureRecord {
     succeeded: bool,
 }
 
+#[allow(dead_code)]
 pub struct SelfHealer {
     policy_engine: Arc<Mutex<PolicyEngine>>,
     failure_history: VecDeque<FailureRecord>,
@@ -83,7 +87,7 @@ impl SelfHealer {
         }
 
         let decision = {
-            let pe = self.policy_engine.lock().unwrap();
+            let pe = self.policy_engine.lock().unwrap_or_else(|e| e.into_inner());
             pe.decide_recovery(ctx)
         };
 
@@ -98,6 +102,7 @@ impl SelfHealer {
         decision
     }
 
+    #[allow(dead_code)]
     pub fn on_success(&mut self, host: &str) {
         self.recovery_counts.remove(host);
     }
@@ -115,6 +120,7 @@ impl SelfHealer {
         recent < self.max_recoveries_per_minute
     }
 
+    #[allow(dead_code)]
     pub fn health_status(&self) -> HealthStatus {
         let recent_failures = self
             .failure_history
@@ -139,6 +145,7 @@ impl SelfHealer {
         }
     }
 
+    #[allow(dead_code)]
     pub fn snapshot(&self) -> HealthSnapshot {
         let active_warnings = self
             .recovery_counts
@@ -165,15 +172,18 @@ impl SelfHealer {
         }
     }
 
+    #[allow(dead_code)]
     pub fn reset_host(&mut self, host: &str) {
         self.recovery_counts.remove(host);
         self.failure_history.retain(|r| r.host != host);
     }
 
+    #[allow(dead_code)]
     pub fn total_recoveries(&self) -> u32 {
         self.total_recoveries
     }
 
+    #[allow(dead_code)]
     pub fn host_failure_count(&self, host: &str) -> u32 {
         self.recovery_counts.get(host).copied().unwrap_or(0)
     }

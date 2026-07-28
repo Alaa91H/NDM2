@@ -1,5 +1,6 @@
 use crate::daemon::external_tools::types::ToolId;
 use crate::daemon::state::SharedState;
+use crate::lock_or_err;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
@@ -38,7 +39,7 @@ pub fn register_routes(router: Router<SharedState>) -> Router<SharedState> {
 }
 
 async fn handle_list_tools(State(state): State<SharedState>) -> Json<serde_json::Value> {
-    let manager = state.external_tools.lock().unwrap();
+    let manager = lock_or_err!(state.external_tools);
     let tool_states = manager.all_tool_states();
     drop(manager);
 
@@ -52,7 +53,7 @@ async fn handle_get_tool(
     Path(tool_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let id = parse_tool_id(&tool_id)?;
-    let manager = state.external_tools.lock().unwrap();
+    let manager = lock_or_err!(state.external_tools);
     let tool_state = manager.tool_state(id);
     drop(manager);
 
@@ -64,7 +65,7 @@ async fn handle_discover(
     Path(tool_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let id = parse_tool_id(&tool_id)?;
-    let manager = state.external_tools.lock().unwrap();
+    let manager = lock_or_err!(state.external_tools);
     let installation = manager.discover(id);
     drop(manager);
 
@@ -82,7 +83,7 @@ async fn handle_health_check(
     Path(tool_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let id = parse_tool_id(&tool_id)?;
-    let manager = state.external_tools.lock().unwrap();
+    let manager = lock_or_err!(state.external_tools);
     let installation = manager.check_health(id);
     drop(manager);
 
@@ -98,7 +99,7 @@ async fn handle_check_updates(
     Path(tool_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let id = parse_tool_id(&tool_id)?;
-    let manager = state.external_tools.lock().unwrap();
+    let manager = lock_or_err!(state.external_tools);
     let update_info = manager.check_for_updates(id);
     drop(manager);
 
@@ -116,7 +117,7 @@ async fn handle_update(
     Path(tool_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let id = parse_tool_id(&tool_id)?;
-    let manager = state.external_tools.lock().unwrap();
+    let manager = lock_or_err!(state.external_tools);
     match manager.update(id) {
         Ok(path) => {
             let installation = manager.discover(id);
@@ -169,7 +170,7 @@ async fn handle_set_path(
         }
     }
 
-    let manager = state.external_tools.lock().unwrap();
+    let manager = lock_or_err!(state.external_tools);
     match manager.set_custom_path(id, path) {
         Ok(installation) => {
             drop(manager);
@@ -195,7 +196,7 @@ async fn handle_uninstall(
     Path(tool_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let id = parse_tool_id(&tool_id)?;
-    let manager = state.external_tools.lock().unwrap();
+    let manager = lock_or_err!(state.external_tools);
     match manager.uninstall(id) {
         Ok(()) => {
             drop(manager);
@@ -217,7 +218,7 @@ async fn handle_check_capability(
     State(state): State<SharedState>,
     Path(capability_id): Path<String>,
 ) -> Json<serde_json::Value> {
-    let manager = state.external_tools.lock().unwrap();
+    let manager = lock_or_err!(state.external_tools);
     let availability = manager.resolve_capability(&capability_id);
     drop(manager);
 
@@ -230,7 +231,7 @@ async fn handle_check_capability(
 }
 
 async fn handle_health_all(State(state): State<SharedState>) -> Json<serde_json::Value> {
-    let manager = state.external_tools.lock().unwrap();
+    let manager = lock_or_err!(state.external_tools);
     let installations = manager.discover_all();
     drop(manager);
 

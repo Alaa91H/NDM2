@@ -171,7 +171,7 @@ pub struct CurlTransferConfig {
 }
 
 impl CurlTransferConfig {
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn new() -> Self {
         Self::default()
     }
@@ -309,7 +309,7 @@ impl CurlTransferConfig {
         }
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn f64_(&self, key: &str) -> Option<f64> {
         match key {
             "backoffMultiplier" => self.backoff_multiplier,
@@ -370,6 +370,7 @@ impl CurlTransferConfig {
         }
     }
 
+    #[allow(dead_code)]
     pub fn connection_limits(&self, requested: u32, max_connections: u32) -> ConnectionLimits {
         let requested = requested.max(1).min(max_connections) as usize;
         let max_connections = max_connections.max(1) as usize;
@@ -396,6 +397,7 @@ impl CurlTransferConfig {
         }
     }
 
+    #[allow(dead_code)]
     pub fn connection_limits_for_url(
         &self,
         requested: u32,
@@ -423,7 +425,7 @@ impl CurlTransferConfig {
         requested.min(max_useful).max(1).min(max_connections)
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn to_hashmap(&self) -> HashMap<String, Value> {
         let mut map = HashMap::new();
         macro_rules! insert_str {

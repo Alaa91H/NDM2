@@ -5,12 +5,14 @@ use super::adaptive::profile_store::UnifiedProfileStore;
 use super::config::global_config;
 use super::resource_manager::ResourceManager;
 
+#[allow(dead_code)]
 pub struct DieOrchestrator {
     pub resource_manager: Arc<Mutex<ResourceManager>>,
     pub profile_store: Arc<Mutex<UnifiedProfileStore>>,
     host_connections: HashMap<String, u32>,
 }
 
+#[allow(dead_code)]
 impl DieOrchestrator {
     pub fn new() -> Self {
         Self {

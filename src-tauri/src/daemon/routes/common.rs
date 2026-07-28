@@ -115,7 +115,6 @@ pub(super) struct ContentRangeParsed {
     pub(super) start: Option<u64>,
     pub(super) end: Option<u64>,
     pub(super) total: Option<u64>,
-    pub(super) unsatisfied: bool,
 }
 
 impl ContentRangeParsed {
@@ -134,7 +133,6 @@ impl ContentRangeParsed {
                 start: None,
                 end: None,
                 total,
-                unsatisfied: true,
             });
         }
         let (range_part, total_part) = rest.split_once('/')?;
@@ -157,7 +155,6 @@ impl ContentRangeParsed {
                 start,
                 end,
                 total,
-                unsatisfied: false,
             });
         }
         None

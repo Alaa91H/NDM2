@@ -1,7 +1,6 @@
 pub mod adaptive;
 pub mod adaptive_connections;
 pub mod bandwidth;
-pub mod capability_discovery;
 pub mod checksum;
 pub mod chunk_manager;
 pub mod config;

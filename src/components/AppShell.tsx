@@ -2,6 +2,7 @@
 import React, { useEffect, useState, useRef, lazy, Suspense } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow, ProgressBarStatus } from '@tauri-apps/api/window';
+import { logger } from '../utils/logger';
 import {
   useTaskData,
   useTaskSelectors,
@@ -159,13 +160,13 @@ const AppShellInner: React.FC = () => {
     const win = getCurrentWindow();
     const active = tasks.filter((task) => task.status === 'downloading' && task.sizeBytes > 0);
     if (active.length === 0) {
-      void win.setProgressBar({ status: ProgressBarStatus.None }).catch(() => {});
+      void win.setProgressBar({ status: ProgressBarStatus.None }).catch((e) => logger.warn('AppShell', 'setProgressBar(None) failed', e));
       return;
     }
     const totalSize = active.reduce((sum, task) => sum + task.sizeBytes, 0);
     const totalDone = active.reduce((sum, task) => sum + task.downloadedBytes, 0);
     const pct = totalSize > 0 ? Math.min(100, Math.max(0, Math.round((totalDone / totalSize) * 100))) : 0;
-    void win.setProgressBar({ status: ProgressBarStatus.Normal, progress: pct }).catch(() => {});
+    void win.setProgressBar({ status: ProgressBarStatus.Normal, progress: pct }).catch((e) => logger.warn('AppShell', 'setProgressBar(Normal) failed', e));
   }, [tasks]);
 
   // Refresh the engine control surface (bandwidth, queue, profiles, mirrors,
@@ -551,7 +552,7 @@ const AppShellInner: React.FC = () => {
               if (isTauri()) {
                 void getCurrentWindow()
                   .minimize()
-                  .catch(() => {});
+                  .catch((e) => logger.warn('AppShell', 'minimize failed', e));
               }
             }}
             className="h-full px-3 hover:bg-[var(--bg-hover)] transition-colors flex items-center justify-center cursor-pointer"
@@ -565,7 +566,7 @@ const AppShellInner: React.FC = () => {
               if (isTauri()) {
                 void getCurrentWindow()
                   .toggleMaximize()
-                  .catch(() => {});
+                  .catch((e) => logger.warn('AppShell', 'toggleMaximize failed', e));
               }
             }}
             className="h-full px-3 hover:bg-[var(--bg-hover)] transition-colors flex items-center justify-center cursor-pointer"
@@ -583,7 +584,7 @@ const AppShellInner: React.FC = () => {
               if (isTauri()) {
                 void getCurrentWindow()
                   .close()
-                  .catch(() => {});
+                  .catch((e) => logger.warn('AppShell', 'close failed', e));
               }
             }}
             className="h-full px-3 hover:bg-[var(--danger)] hover:text-white transition-colors flex items-center justify-center cursor-pointer"
@@ -596,7 +597,7 @@ const AppShellInner: React.FC = () => {
       </div>
 
       <div className="flex-1 flex min-h-0 overflow-hidden relative">
-        {/* 2. Main Workspace Layout — downloads view or a full page (settings / lists) */}
+        {/* 2. Main Workspace Layout ï¿½ downloads view or a full page (settings / lists) */}
         <div className="flex-1 flex flex-col h-full overflow-hidden">
           {activePage === 'settings' ? (
             <Suspense

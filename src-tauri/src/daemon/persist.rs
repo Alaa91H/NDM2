@@ -264,9 +264,6 @@ mod tests {
                     crate::daemon::engine::self_healing::SelfHealer::new(pe),
                 ))
             },
-            capability_discovery: std::sync::Arc::new(std::sync::Mutex::new(
-                crate::daemon::engine::capability_discovery::CapabilityDiscovery::new(),
-            )),
             die_orchestrator: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::daemon::engine::die_orchestrator::DieOrchestrator::new(),
             )),

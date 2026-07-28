@@ -160,6 +160,7 @@ impl ResourceIntelligenceEngine {
 
     /// Build a minimal resolution report for immediate task display.
     /// Runs only URL analysis — no network calls.
+    #[allow(dead_code)]
     pub fn minimal_resolve(url: &str) -> ResolutionReport {
         let url_intel = url_intel::analyze_url(url);
         ResolutionReport {

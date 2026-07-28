@@ -206,37 +206,10 @@ export function useI18n() {
 // ── Engine integration selectors ─────────────────────────────────────────
 // These give UI components typed, subscription-based access to the engine
 // control surface (bandwidth, rate limit, queue, profiles, retry policy,
-// mirrors, plugins, stats, and per-task telemetry) backed by engineStore.
+// engine subsystems — currently only useEngineAdaptive is consumed.
+// The store remains in place so future components can subscribe.
 
 import { useEngineStore } from './engineStore';
-
-export function useEngineBandwidth() {
-  return useStore(useEngineStore, (s) => s.bandwidth);
-}
-
-export function useEngineRateLimit() {
-  return useStore(useEngineStore, (s) => s.rateLimit);
-}
-
-export function useEngineProfiles() {
-  return useStore(useEngineStore, (s) => s.profiles);
-}
-
-export function useEngineRetryPolicy() {
-  return useStore(useEngineStore, (s) => s.retryPolicy);
-}
-
-export function useEngineMirrors() {
-  return useStore(useEngineStore, (s) => s.mirrors);
-}
-
-export function useEnginePlugins() {
-  return useStore(useEngineStore, (s) => s.plugins);
-}
-
-export function useEngineCache() {
-  return useStore(useEngineStore, (s) => s.cache);
-}
 
 export function useEngineAdaptive(taskId: string | null) {
   return useStore(useEngineStore, (s) => (taskId ? s.adaptive[taskId] : undefined));

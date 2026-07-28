@@ -1094,55 +1094,53 @@ pub async fn handle_v1_analyze_progress(
         .unwrap_or("")
         .trim()
         .to_string();
-    let context = body.get("context").cloned().unwrap_or_else(|| json!({}));
+    let _context = body.get("context").cloned().unwrap_or_else(|| json!({}));
 
     let stream = async_stream::stream! {
         if url.is_empty() || url.starts_with('-') || !(url.starts_with("http://") || url.starts_with("https://")) {
             yield Ok::<Event, Infallible>(Event::default()
                 .json_data(json!({"stage": "error", "message": "Invalid url"}))
-                .unwrap());
+                .expect("valid json"));
             return;
         }
         if let Err(e) = crate::daemon::utils::is_safe_target_url(&url) {
             yield Ok::<Event, Infallible>(Event::default()
                 .json_data(json!({"stage": "error", "message": e}))
-                .unwrap());
+                .expect("valid json"));
             return;
         }
 
         yield Ok::<Event, Infallible>(Event::default()
             .json_data(json!({"stage": "http.probing", "url": &url}))
-            .unwrap());
+            .expect("valid json"));
 
         let http_meta = http_probe_for_analyze(&state, &url).await;
         if let Some(ref meta) = http_meta {
             yield Ok::<Event, Infallible>(Event::default()
                 .json_data(json!({"stage": "http.done", "meta": meta}))
-                .unwrap());
+                .expect("valid json"));
         }
 
         yield Ok::<Event, Infallible>(Event::default()
             .json_data(json!({"stage": "ytdlp.probing", "url": &url}))
-            .unwrap());
+            .expect("valid json"));
 
         let ytdlp_result = ytdlp_probe_for_analyze(&state, &url).await;
         if let Some(ref info) = ytdlp_result {
             let format_count = info.get("formats").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
             yield Ok::<Event, Infallible>(Event::default()
                 .json_data(json!({"stage": "ytdlp.done", "formatCount": format_count, "title": info.get("title")}))
-                .unwrap());
+                .expect("valid json"));
         } else {
             yield Ok::<Event, Infallible>(Event::default()
                 .json_data(json!({"stage": "ytdlp.done", "formatCount": 0}))
-                .unwrap());
+                .expect("valid json"));
         }
 
-        // Build the full result (reuse the analyze logic above)
-        let _full_body = json!({"url": &url, "context": &context});
         // For the final event, emit a synthetic completion with the URL
         yield Ok::<Event, Infallible>(Event::default()
             .json_data(json!({"stage": "complete", "url": &url, "hint": "Fetch full result via /v1/analyze"}))
-            .unwrap());
+            .expect("valid json"));
     };
 
     Sse::new(stream).keep_alive(
