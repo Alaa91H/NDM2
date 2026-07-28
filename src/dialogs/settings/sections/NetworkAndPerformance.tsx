@@ -71,9 +71,25 @@ export const NetworkAndPerformance: React.FC<Props> = ({ settings, updateSetting
     onAddToast('success', 'DNS', 'Custom DNS servers applied.');
   };
 
-  const handleDnsTest = () => {
-    const servers = settings.connection.defaults.dnsServers || settings.extra.dnsCustomResolver || 'system';
-    onAddToast('info', 'DNS Test', `Testing DNS: ${servers}. Check connectivity to confirm resolution.`);
+  const handleDnsTest = async () => {
+    try {
+      const data = await novaClient.pingDnsProviders();
+      const resolver = settings.extra.dnsResolver;
+      const preset = DNS_PRESETS[resolver];
+      const currentIp = resolver === 'custom'
+        ? settings.extra.dnsCustomResolver.split(',')[0]
+        : (preset?.primary || '');
+      const match = currentIp ? data.results.find((r) => r.ip === currentIp) : null;
+      if (match && match.latencyMs !== null) {
+        onAddToast('success', 'DNS Test', `${resolver}: ${match.ip} — ${match.latencyMs.toFixed(1)} ms`);
+      } else if (match) {
+        onAddToast('warning', 'DNS Test', `${resolver}: ${match.ip} — timed out`);
+      } else {
+        onAddToast('info', 'DNS Test', 'Use "Ping All Providers" to test all DNS servers.');
+      }
+    } catch {
+      onAddToast('error', 'DNS Test', 'Failed to test DNS.');
+    }
   };
 
   const [pingResults, setPingResults] = useState<Array<{ name: string; ip: string; latencyMs: number | null }> | null>(null);
@@ -412,7 +428,7 @@ export const NetworkAndPerformance: React.FC<Props> = ({ settings, updateSetting
               <div className="flex items-center gap-2 pt-1">
                 <button
                   type="button"
-                  onClick={handleDnsTest}
+                  onClick={() => { void handleDnsTest(); }}
                   className="px-3 py-1.5 bg-[var(--info-bg)] border border-[var(--info-border)] text-[var(--info)] rounded text-[10px] font-bold hover:bg-[var(--info-bg)] transition-all cursor-pointer flex items-center gap-1"
                 >
                   <Server className="w-3 h-3" />

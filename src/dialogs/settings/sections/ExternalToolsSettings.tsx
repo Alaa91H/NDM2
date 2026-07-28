@@ -348,7 +348,7 @@ export const ExternalToolsSettings: React.FC<Props> = ({ onAddToast }) => {
               <button
                 type="button"
                 onClick={() => void handleSetPath(tool.id)}
-                disabled={isActionRunning(tool.id, 'setpath') || !customPaths[tool.id].trim()}
+                disabled={isActionRunning(tool.id, 'setpath') || !(customPaths[tool.id] || '').trim()}
                 className="px-2 py-1.5 bg-[var(--accent-primary)]/10 border border-[var(--accent-border)] text-[var(--accent-primary)] rounded text-[10px] font-bold hover:bg-[var(--accent-primary)]/20 transition-all cursor-pointer disabled:opacity-50 shrink-0"
               >
                 {isActionRunning(tool.id, 'setpath') ? 'Setting...' : 'Set Path'}

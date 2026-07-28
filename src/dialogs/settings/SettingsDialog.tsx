@@ -12,7 +12,6 @@ import {
   Webhook,
   Bot,
   Package,
-  Activity,
   ScrollText,
   Database,
 } from 'lucide-react';
@@ -39,7 +38,7 @@ import { TorrentSettings } from './sections/TorrentSettings';
 import { IntegrationsSettings } from './sections/IntegrationsSettings';
 import { TelegramBotSettings } from './sections/TelegramBotSettings';
 import { ExternalToolsSettings } from './sections/ExternalToolsSettings';
-import { DiagnosticsStatus } from './sections/DiagnosticsStatus';
+
 import { LoggingSettings } from './sections/LoggingSettings';
 import { BackupResetSettings } from './sections/BackupResetSettings';
 
@@ -54,7 +53,6 @@ type SettingsTabId =
   | 'integrations'
   | 'telegram'
   | 'external_tools'
-  | 'diagnostics'
   | 'logging'
   | 'backup';
 
@@ -138,7 +136,7 @@ export const SettingsDialog: React.FC = () => {
     { id: 'integrations', label: 'Integrations', icon: Webhook, keywords: ['integration', 'webhook', 'smtp', 'email', 'notification'] },
     { id: 'telegram', label: 'Telegram Bot', icon: Bot, keywords: ['telegram', 'bot', 'tg', 'chat', 'command', 'cli'] },
     { id: 'external_tools', label: 'External Tools', icon: Package, keywords: ['external', 'tool', 'yt-dlp', 'ytdlp', 'ffmpeg', 'install', 'update'] },
-    { id: 'diagnostics', label: 'Diagnostics', icon: Activity, keywords: ['diagnostics', 'daemon', 'bridge', 'engine', 'capability'] },
+
     { id: 'logging', label: 'Logging', icon: ScrollText, keywords: ['logging', 'log', 'debug', 'trace', 'error'] },
     { id: 'backup', label: 'Backup & Reset', icon: Database, keywords: ['backup', 'restore', 'export', 'import', 'factory', 'reset'] },
   ];
@@ -253,9 +251,7 @@ export const SettingsDialog: React.FC = () => {
             <TelegramBotSettings settings={localSettings} updateSetting={updateLocalSetting} onAddToast={addToast} />
           )}
           {activeTab === 'external_tools' && <ExternalToolsSettings onAddToast={addToast} />}
-          {activeTab === 'diagnostics' && (
-            <DiagnosticsStatus settings={localSettings} onAddToast={addToast} />
-          )}
+
           {activeTab === 'logging' && (
             <LoggingSettings settings={localSettings} updateSetting={updateLocalSetting} />
           )}
