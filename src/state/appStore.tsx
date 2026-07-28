@@ -233,6 +233,7 @@ function EffectsProvider({ children }: { children: ReactNode }) {
           await refreshDaemonUrl();
           const info = await tauriClient.checkDaemonHealth();
           markConnected(info);
+          logger.info('AppStore', `Daemon connected: ${info.status}`, { version: info.version, pid: info.pid });
           uiStore
             .getState()
             .addToast(
@@ -254,6 +255,7 @@ function EffectsProvider({ children }: { children: ReactNode }) {
             const delay = Math.min(100 * (1 << attempt), 2000);
             await new Promise((r) => setTimeout(r, delay));
           } else {
+            logger.error('AppStore', 'Daemon connection failed after 40 attempts', { error: e instanceof Error ? e.message : String(e) });
             bridgeStore
               .getState()
               .setBridge({ status: 'degraded', version: 'NOVA daemon unavailable', pid: 0, speedLimit: null });
@@ -382,17 +384,17 @@ function EffectsProvider({ children }: { children: ReactNode }) {
       if (shouldRunCompletionActions) {
         const currentSettings = settingsStore.getState().settings;
         newlyCompletedTasks.forEach((task) => {
+          logger.info('AppStore', `Download completed: ${task.name}`, { id: task.id, size: task.sizeBytes });
           if (currentSettings.sounds.enabled) {
             playAppSound(currentSettings, 'complete');
-            void tauriClient.triggerNativeNotification('Download complete', `"${task.name}" finished downloading.`);
           }
+          void tauriClient.triggerNativeNotification('Download complete', `"${task.name}" finished downloading.`);
           if (!task.savePath) return;
           if (currentSettings.extra.virusScan) void tauriClient.scanDownloadedFile(task.savePath);
           if (currentSettings.extra.openOnComplete) void tauriClient.openDownloadedFile(task.savePath);
           if (currentSettings.extra.openFolderOnComplete) void tauriClient.revealDownloadedFile(task.savePath);
         });
         if (
-          currentSettings.sounds.enabled &&
           newlyCompletedTasks.length > 0 &&
           !daemonTasks.some((t) => t.status === 'downloading' || t.status === 'queued')
         ) {

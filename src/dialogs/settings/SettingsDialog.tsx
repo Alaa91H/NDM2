@@ -12,6 +12,7 @@ import {
 import type { AppSettings, AppThemeSettings } from '../../types/desktop-ui.types';
 import { initialSettings } from '../../initialData';
 import { playAppSound } from '../../utils/sound';
+import { tauriClient } from '../../api/tauriClient';
 
 // Import subcomponents
 import { GeneralAndDownloads } from './sections/GeneralAndDownloads';
@@ -103,16 +104,8 @@ export const SettingsDialog: React.FC = () => {
   };
 
   const handleTestNotification = () => {
-    if (localSettings.sounds.enabled) {
-      playAppSound(localSettings, 'complete');
-      try {
-        const audio = new Audio('/sounds/success_chime.wav');
-        audio.volume = 0.5;
-        audio.play().catch(() => {});
-      } catch {
-        // Audio playback unavailable � nothing to do.
-      }
-    }
+    playAppSound(localSettings, 'complete');
+    void tauriClient.triggerNativeNotification('Test notification', 'This is a test from NOVA Download Manager.');
   };
 
   // Search keyword map to auto-switch or highlight tabs

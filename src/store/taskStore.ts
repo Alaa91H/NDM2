@@ -4,6 +4,8 @@ import { novaClient } from '../api/novaClient';
 import { tauriClient } from '../api/tauriClient';
 import { bridgeStore } from './bridgeStore';
 import { extractErrorMessage } from '../utils/formatUtils';
+import { logger } from '../utils/logger';
+import { playAppSound } from '../utils/sound';
 import { uiStore } from './uiStore';
 import { queueStore } from './queueStore';
 import { settingsStore } from './settingsStore';
@@ -114,6 +116,7 @@ export const taskStore = create<TaskState>()((set, get) => ({
       return null;
     }
     try {
+      logger.info('TaskStore', `Creating download: ${newItem.url}`, { name: newItem.name, engine: newItem.engine });
       const normalizedTask = {
         ...(await novaClient.createDownload({ ...newItem, startImmediately: downloadImmediately })),
       };
@@ -124,9 +127,13 @@ export const taskStore = create<TaskState>()((set, get) => ({
       uiStore
         .getState()
         .addToast('success', 'Download added', `"${normalizedTask.name}" was added to the download queue.`);
-      if (downloadImmediately) uiStore.getState().openDialog('activeProgress', normalizedTask);
+      if (downloadImmediately) {
+        playAppSound(settingsStore.getState().settings, 'start');
+        uiStore.getState().openDialog('activeProgress', normalizedTask);
+      }
       return normalizedTask;
     } catch (error) {
+      logger.error('TaskStore', `Failed to create download: ${newItem.url}`, { error: extractErrorMessage(error, 'Unknown error') });
       bridgeStore.getState().setIsDegradedMode(true);
       uiStore
         .getState()
@@ -142,10 +149,12 @@ export const taskStore = create<TaskState>()((set, get) => ({
       return;
     }
     try {
+      logger.info('TaskStore', `Pausing download: ${targetItem.name}`, { id });
       const normalizedTask = { ...(await novaClient.pauseDownload(id)) };
       set((p) => ({ tasks: p.tasks.map((item) => (item.id === id ? normalizedTask : item)) }));
       uiStore.getState().addToast('info', 'Download stopped', `"${normalizedTask.name}" was stopped.`);
     } catch (error) {
+      logger.error('TaskStore', `Failed to pause download ${id}`, { error: extractErrorMessage(error, 'Unknown error') });
       uiStore
         .getState()
         .addToast('error', 'NOVA daemon', extractErrorMessage(error, 'The local engine could not stop the download.'));
@@ -159,6 +168,7 @@ export const taskStore = create<TaskState>()((set, get) => ({
       return;
     }
     try {
+      logger.info('TaskStore', `Resuming download: ${targetItem.name}`, { id });
       const normalizedTask = { ...(await novaClient.resumeDownload(id)) };
       set((p) => ({ tasks: p.tasks.map((item) => (item.id === id ? normalizedTask : item)) }));
       if (normalizedTask.id !== id) {
@@ -186,6 +196,7 @@ export const taskStore = create<TaskState>()((set, get) => ({
       return;
     }
     try {
+      logger.info('TaskStore', `Deleting download: ${targetItem.name}`, { id, deleteDisk });
       await novaClient.deleteDownload(id, deleteDisk);
       let diskMessage = '';
       if (deleteDisk) {

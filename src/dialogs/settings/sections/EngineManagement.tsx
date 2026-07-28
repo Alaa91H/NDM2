@@ -270,22 +270,20 @@ export const EngineManagement: React.FC = () => {
 
         {/* Buttons */}
         <div className="flex flex-wrap gap-2">
-          {engine === 'ytdlp' && (
-            <button
-              onClick={() => {
-                void handleDownload(engine);
-              }}
-              disabled={isBusy}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-bold rounded-lg bg-[var(--accent-primary)] text-white hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-50 disabled:cursor-wait"
-            >
-              {state.status === 'downloading' ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <Download className="w-3.5 h-3.5" />
-              )}
-              {state.status === 'downloading' ? 'Downloading...' : state.available ? 'Re-download' : 'Download'}
-            </button>
-          )}
+          <button
+            onClick={() => {
+              void handleDownload(engine);
+            }}
+            disabled={isBusy}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-bold rounded-lg bg-[var(--accent-primary)] text-white hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-50 disabled:cursor-wait"
+          >
+            {state.status === 'downloading' ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Download className="w-3.5 h-3.5" />
+            )}
+            {state.status === 'downloading' ? 'Downloading...' : state.available ? 'Re-download' : 'Download'}
+          </button>
           <button
             onClick={() => {
               void handleVerify(engine);
@@ -393,10 +391,11 @@ export const EngineManagement: React.FC = () => {
       <div className="flex items-start gap-2 p-3 bg-[var(--bg-hover)]/20 rounded-lg border border-[var(--border-color)]/30">
         <AlertCircle className="w-4 h-4 text-[var(--info)] shrink-0 mt-0.5" />
         <div className="text-[10px] text-[var(--text-muted)] leading-relaxed">
-          <strong className="text-[var(--text-secondary)]">Note:</strong> yt-dlp can be downloaded and updated directly
-          from this page. FFmpeg must be installed via your system package manager (e.g.{' '}
+          <strong className="text-[var(--text-secondary)]">Note:</strong> Both yt-dlp and FFmpeg can be downloaded and
+          updated directly from this page. Downloaded binaries are stored in the app's extensions folder and
+          auto-detected on startup. You can also install them via your system package manager (e.g.{' '}
           <code className="font-mono">winget install ffmpeg</code> or{' '}
-          <code className="font-mono">apt install ffmpeg</code>), or you can specify a custom path in the Media Download
+          <code className="font-mono">apt install ffmpeg</code>), or specify a custom path in the Media Download
           settings tab.
         </div>
       </div>

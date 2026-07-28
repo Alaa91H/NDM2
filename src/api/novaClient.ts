@@ -1,4 +1,5 @@
 import type { DownloadItem } from '../types/desktop-ui.types';
+import { logger } from '../utils/logger';
 import type { DiagnosticData } from './tauriClient';
 
 export interface NovaHealth {
@@ -327,6 +328,7 @@ export const novaClient = {
       source.addEventListener('downloads-delta', handleDelta as EventListener);
       source.onerror = (event) => {
         onError?.(event);
+        logger.warn('NovaClient', `SSE connection error, reconnecting in ${String(retryDelay)}ms`);
         // Close current source and schedule reconnection with exponential backoff
         if (source) {
           source.removeEventListener('downloads', handleFullAndUpdate as EventListener);
@@ -343,6 +345,7 @@ export const novaClient = {
       source.onopen = () => {
         retryDelay = 500;
         lastEventTime = Date.now();
+        logger.info('NovaClient', 'SSE stream connected');
       };
     };
 
@@ -1119,6 +1122,8 @@ export const novaClient = {
 };
 
 async function request<T>(path: string, init?: RequestInit, timeoutMs = 2500): Promise<T> {
+  const method = init?.method ?? 'GET';
+  logger.debug('NovaClient', `${method} ${path}`);
   const doFetch = async (abortSignal?: AbortSignal): Promise<T> => {
     const controller = new AbortController();
     const timer = window.setTimeout(() => {
@@ -1150,6 +1155,7 @@ async function request<T>(path: string, init?: RequestInit, timeoutMs = 2500): P
         } catch (parseErr) {
           console.warn('NovaClient: could not parse error body', parseErr);
         }
+        logger.error('NovaClient', `${method} ${path} failed: ${message}`);
         throw new Error(message);
       }
 
@@ -1169,6 +1175,7 @@ async function request<T>(path: string, init?: RequestInit, timeoutMs = 2500): P
     return await doFetch(retryController.signal);
   } catch (err) {
     if (err instanceof Error && !err.message.includes('HTTP 4')) {
+      logger.warn('NovaClient', `Retrying ${method} ${path} after transient error: ${err.message}`);
       await new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, 500);
         retryController.signal.addEventListener(

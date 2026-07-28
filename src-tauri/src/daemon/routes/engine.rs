@@ -1094,10 +1094,21 @@ async fn handle_engine_download(
             )
         }
         "ffmpeg" => {
-            return Json(serde_json::json!({
-                "ok": false,
-                "error": "FFmpeg cannot be auto-downloaded. Please provide a path in Settings > Media Download > FFmpeg Binary Path, or install it via your system package manager."
-            }));
+            let url = if cfg!(windows) {
+                "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+            } else if cfg!(target_os = "macos") {
+                "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-macosarm64-gpl.zip"
+            } else {
+                "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
+            };
+            (
+                url.to_string(),
+                bin_dir.join(if cfg!(windows) {
+                    "ffmpeg.exe"
+                } else {
+                    "ffmpeg"
+                }),
+            )
         }
         _ => {
             return Json(serde_json::json!({
@@ -1136,18 +1147,71 @@ async fn handle_engine_download(
                 }
             }
 
-            if let Err(e) = std::fs::write(&dest, &bytes) {
-                return Json(serde_json::json!({
-                    "ok": false,
-                    "error": format!("Failed to write binary: {e}")
-                }));
-            }
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                if let Ok(mut perms) = std::fs::metadata(&dest).map(|m| m.permissions()) {
-                    perms.set_mode(0o755);
-                    let _ = std::fs::set_permissions(&dest, perms);
+            // For FFmpeg, extract the binary from the zip archive.
+            if engine == "ffmpeg" {
+                let cursor = std::io::Cursor::new(&bytes);
+                match zip::ZipArchive::new(cursor) {
+                    Ok(mut archive) => {
+                        let mut found = false;
+                        for i in 0..archive.len() {
+                            if let Ok(mut file) = archive.by_index(i) {
+                                let name = file.name().to_string();
+                                let is_ffmpeg = if cfg!(windows) {
+                                    name.ends_with("ffmpeg.exe")
+                                } else {
+                                    name.ends_with("/ffmpeg") || name == "ffmpeg"
+                                };
+                                if is_ffmpeg {
+                                    let mut content = Vec::new();
+                                    if std::io::Read::read_to_end(&mut file, &mut content).is_ok() {
+                                        if let Err(e) = std::fs::write(&dest, &content) {
+                                            return Json(serde_json::json!({
+                                                "ok": false,
+                                                "error": format!("Failed to write ffmpeg binary: {e}")
+                                            }));
+                                        }
+                                        #[cfg(unix)]
+                                        {
+                                            use std::os::unix::fs::PermissionsExt;
+                                            if let Ok(mut perms) = std::fs::metadata(&dest).map(|m| m.permissions()) {
+                                                perms.set_mode(0o755);
+                                                let _ = std::fs::set_permissions(&dest, perms);
+                                            }
+                                        }
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if !found {
+                            return Json(serde_json::json!({
+                                "ok": false,
+                                "error": "ffmpeg binary not found in the downloaded archive"
+                            }));
+                        }
+                    }
+                    Err(e) => {
+                        return Json(serde_json::json!({
+                            "ok": false,
+                            "error": format!("Failed to open downloaded archive: {e}")
+                        }));
+                    }
+                }
+            } else {
+                if let Err(e) = std::fs::write(&dest, &bytes) {
+                    return Json(serde_json::json!({
+                        "ok": false,
+                        "error": format!("Failed to write binary: {e}")
+                    }));
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Ok(mut perms) = std::fs::metadata(&dest).map(|m| m.permissions()) {
+                        perms.set_mode(0o755);
+                        let _ = std::fs::set_permissions(&dest, perms);
+                    }
                 }
             }
             let mut version_cmd = std::process::Command::new(&dest);
