@@ -15,7 +15,6 @@ import {
   Activity,
   ScrollText,
   Database,
-  Terminal,
 } from 'lucide-react';
 import {
   useDialogData,
@@ -43,7 +42,6 @@ import { ExternalToolsSettings } from './sections/ExternalToolsSettings';
 import { DiagnosticsStatus } from './sections/DiagnosticsStatus';
 import { LoggingSettings } from './sections/LoggingSettings';
 import { BackupResetSettings } from './sections/BackupResetSettings';
-import { AdvancedSettings } from './sections/AdvancedSettings';
 
 type SettingsTabId =
   | 'general'
@@ -58,8 +56,7 @@ type SettingsTabId =
   | 'external_tools'
   | 'diagnostics'
   | 'logging'
-  | 'backup'
-  | 'advanced';
+  | 'backup';
 
 type SettingsDialogPayload = {
   tab?: SettingsTabId;
@@ -144,7 +141,6 @@ export const SettingsDialog: React.FC = () => {
     { id: 'diagnostics', label: 'Diagnostics', icon: Activity, keywords: ['diagnostics', 'daemon', 'bridge', 'engine', 'capability'] },
     { id: 'logging', label: 'Logging', icon: ScrollText, keywords: ['logging', 'log', 'debug', 'trace', 'error'] },
     { id: 'backup', label: 'Backup & Reset', icon: Database, keywords: ['backup', 'restore', 'export', 'import', 'factory', 'reset'] },
-    { id: 'advanced', label: 'Advanced', icon: Terminal, keywords: ['advanced', 'port', 'bind', 'experimental', 'header', 'dynamic'] },
   ];
 
   const filteredTabs = searchQuery
@@ -269,9 +265,6 @@ export const SettingsDialog: React.FC = () => {
               onAddToast={addToast}
               onFactoryReset={handleResetAllSilent}
             />
-          )}
-          {activeTab === 'advanced' && (
-            <AdvancedSettings settings={localSettings} updateSetting={updateLocalSetting} />
           )}
         </div>
       </div>

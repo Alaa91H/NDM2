@@ -25,7 +25,7 @@ export const ExternalToolsSettings: React.FC<Props> = ({ onAddToast }) => {
   const [actionStates, setActionStates] = useState<Record<string, string>>({});
   const [customPaths, setCustomPaths] = useState<Record<string, string>>({});
   const [updateInfo, setUpdateInfo] = useState<
-    Record<string, { available: boolean; latestVersion?: string }>
+    Record<string, { available: boolean; latestVersion?: string } | undefined>
   >({});
 
   const loadTools = useCallback(async () => {
@@ -273,11 +273,11 @@ export const ExternalToolsSettings: React.FC<Props> = ({ onAddToast }) => {
             )}
 
             {/* Update info */}
-            {updateInfo[tool.id].available && (
+            {updateInfo[tool.id]?.available && (
               <div className="flex items-center gap-2 p-2 bg-[var(--info-bg)] border border-[var(--info-border)] rounded">
                 <Download className="w-3.5 h-3.5 text-[var(--info)]" />
                 <span className="text-[10px] font-bold text-[var(--info)]">
-                  Update available: v{updateInfo[tool.id].latestVersion}
+                  Update available: v{updateInfo[tool.id]?.latestVersion}
                 </span>
                 <button
                   type="button"
