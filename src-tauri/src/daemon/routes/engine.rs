@@ -1173,7 +1173,9 @@ async fn handle_engine_download(
                                         #[cfg(unix)]
                                         {
                                             use std::os::unix::fs::PermissionsExt;
-                                            if let Ok(mut perms) = std::fs::metadata(&dest).map(|m| m.permissions()) {
+                                            if let Ok(mut perms) =
+                                                std::fs::metadata(&dest).map(|m| m.permissions())
+                                            {
                                                 perms.set_mode(0o755);
                                                 let _ = std::fs::set_permissions(&dest, perms);
                                             }

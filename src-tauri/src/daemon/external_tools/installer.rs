@@ -87,9 +87,21 @@ fn check_ffmpeg_latest(http: &reqwest::Client, os: &str) -> Result<UpdateInfo, S
                                 .unwrap_or("");
 
                             let matches_platform = match os {
-                                "windows" => name.contains("win64") && name.contains("ffmpeg-master") && name.ends_with(".zip"),
-                                "linux" => name.contains("linux64") && name.contains("ffmpeg-master") && name.ends_with(".tar.xz"),
-                                "macos" => name.contains("macos") && name.contains("ffmpeg-master") && name.ends_with(".zip"),
+                                "windows" => {
+                                    name.contains("win64")
+                                        && name.contains("ffmpeg-master")
+                                        && name.ends_with(".zip")
+                                }
+                                "linux" => {
+                                    name.contains("linux64")
+                                        && name.contains("ffmpeg-master")
+                                        && name.ends_with(".tar.xz")
+                                }
+                                "macos" => {
+                                    name.contains("macos")
+                                        && name.contains("ffmpeg-master")
+                                        && name.ends_with(".zip")
+                                }
                                 _ => false,
                             };
 
