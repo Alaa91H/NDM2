@@ -144,7 +144,7 @@ const ColumnConfigPanel: React.FC<ColumnConfigPanelProps> = ({
         <button
           type="button"
           onClick={() => {
-            const evt = new MouseEvent('click', { bubbles: true });
+            const evt = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true });
             document.body.dispatchEvent(evt);
           }}
           className="p-0.5 text-[var(--text-muted)] hover:text-[var(--text-primary)] rounded transition-colors cursor-pointer"

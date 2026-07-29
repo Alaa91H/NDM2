@@ -348,58 +348,59 @@ const RETRY_MIN_MS = 1_000;
 const RETRY_MAX_MS = 8_000;
 const HEALTHY_POLL_MS = 60_000;
 
+let fetchSeq = 0;
+
 export const EngineCapabilityProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [raw, setRaw] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
+    const seq = ++fetchSeq;
     setLoading(true);
     try {
       const capabilities = await novaClient.engineCapabilities();
+      if (seq !== fetchSeq) return;
       setRaw(capabilities);
       setError(null);
     } catch (err) {
+      if (seq !== fetchSeq) return;
       setError(err instanceof Error ? err.message : 'Engine capabilities are unavailable.');
     } finally {
-      setLoading(false);
+      if (seq === fetchSeq) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    // Use an object so post-await guards are opaque to static analysis.
     const ctrl = { cancelled: false };
     let timer: number | null = null;
     let retryDelay = RETRY_MIN_MS;
-    let everSucceeded = false;
 
     const tick = async () => {
       if (ctrl.cancelled) return;
+      const seq = ++fetchSeq;
       setLoading(true);
       try {
         const capabilities = await novaClient.engineCapabilities();
-        // ctrl.cancelled may flip to true during the await (cleanup unmount).
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-        if (ctrl.cancelled) return;
+        if (ctrl.cancelled || seq !== fetchSeq) return;
         setRaw(capabilities);
         setError(null);
-        everSucceeded = true;
         retryDelay = RETRY_MIN_MS;
         timer = window.setTimeout(() => {
           void tick();
         }, HEALTHY_POLL_MS);
       } catch (err) {
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-        if (ctrl.cancelled) return;
+        if (ctrl.cancelled || seq !== fetchSeq) return;
         setError(err instanceof Error ? err.message : 'Engine capabilities are unavailable.');
-        const next = everSucceeded ? HEALTHY_POLL_MS : Math.min(retryDelay * 2, RETRY_MAX_MS);
-        retryDelay = next;
+        retryDelay = Math.min(retryDelay * 2, RETRY_MAX_MS);
         timer = window.setTimeout(() => {
           void tick();
-        }, next);
+        }, retryDelay);
       } finally {
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-        if (!ctrl.cancelled) setLoading(false);
+        if (!ctrl.cancelled && seq === fetchSeq) setLoading(false);
       }
     };
 
@@ -411,7 +412,9 @@ export const EngineCapabilityProvider: React.FC<{ children: ReactNode }> = ({ ch
     };
   }, []);
 
-  const value = useMemo(() => buildSnapshot(raw, loading, error, refresh), [raw, loading, error, refresh]);
+  // refresh is stable (empty deps), so it is safe to exclude from deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const value = useMemo(() => buildSnapshot(raw, loading, error, refresh), [raw, loading, error]);
 
   return <EngineCapabilityContext.Provider value={value}>{children}</EngineCapabilityContext.Provider>;
 };

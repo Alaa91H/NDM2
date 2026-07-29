@@ -152,6 +152,8 @@ impl PriorityBandwidthQueue {
                 break;
             }
         }
+        drop(entries);
+        self.reallocate();
     }
 
     pub fn reallocate(&self) {
@@ -168,10 +170,19 @@ impl PriorityBandwidthQueue {
         let mut priority_counts: std::collections::HashMap<DownloadPriority, u32> =
             std::collections::HashMap::new();
         for entry in entries.iter() {
-            *priority_counts.entry(entry.priority).or_insert(0) += 1;
+            if entry.size_bytes > 0 {
+                *priority_counts.entry(entry.priority).or_insert(0) += 1;
+            }
+        }
+
+        if priority_counts.is_empty() {
+            return;
         }
 
         for entry in entries.iter() {
+            if entry.size_bytes == 0 {
+                continue;
+            }
             let share = entry.priority.bandwidth_share();
             let count = priority_counts.get(&entry.priority).copied().unwrap_or(1) as f64;
             let per_task = (total_bw as f64 * share / count) as u64;

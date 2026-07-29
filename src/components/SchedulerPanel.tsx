@@ -184,8 +184,8 @@ export const SchedulerPanel: React.FC = () => {
   const [shutdownOnComplete, setShutdownOnComplete] = useState<boolean>(selectedQueue.shutdownOnComplete);
   const [hangupOnComplete, setHangupOnComplete] = useState<boolean>(selectedQueue.hangupOnComplete);
   const [retryCount, setRetryCount] = useState<number>(selectedQueue.retryCount);
-  const [exitOnComplete, setExitOnComplete] = useState<boolean>(false);
-  const [retryDelay, setRetryDelay] = useState<number>(10);
+  const [exitOnComplete, setExitOnComplete] = useState<boolean>(selectedQueue.exitOnComplete ?? false);
+  const [retryDelay, setRetryDelay] = useState<number>(selectedQueue.retryDelay ?? 10);
   const [smartScheduleType, setSmartScheduleType] = useState<ScheduleType>(inferScheduleType(selectedQueue));
 
   const [activeTab, setActiveTab] = useState<TabId>('files');
@@ -211,7 +211,9 @@ export const SchedulerPanel: React.FC = () => {
     setOneTimeLimit(selectedQueue.oneTimeLimit || false);
     setShutdownOnComplete(selectedQueue.shutdownOnComplete || false);
     setHangupOnComplete(selectedQueue.hangupOnComplete || false);
+    setExitOnComplete(selectedQueue.exitOnComplete ?? false);
     setRetryCount(selectedQueue.retryCount || 10);
+    setRetryDelay(selectedQueue.retryDelay ?? 10);
   }
 
   React.useEffect(() => {
@@ -230,7 +232,9 @@ export const SchedulerPanel: React.FC = () => {
         oneTimeLimit,
         shutdownOnComplete,
         hangupOnComplete,
+        exitOnComplete,
         retryCount,
+        retryDelay,
       },
       true,
     );
@@ -247,7 +251,9 @@ export const SchedulerPanel: React.FC = () => {
     oneTimeLimit,
     shutdownOnComplete,
     hangupOnComplete,
+    exitOnComplete,
     retryCount,
+    retryDelay,
     selectedQueueId,
     updateQueue,
   ]);

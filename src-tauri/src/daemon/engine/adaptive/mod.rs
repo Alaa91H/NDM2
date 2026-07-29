@@ -208,13 +208,15 @@ impl TelemetryBus {
 
     pub fn set_alive(&self, conn_id: usize, alive: bool) {
         if conn_id < MAX_TRACKED_CONNECTIONS {
-            self.connections[conn_id]
+            let prev = self.connections[conn_id]
                 .alive
-                .store(alive, Ordering::Relaxed);
-            if alive {
-                self.active_conns.fetch_add(1, Ordering::Relaxed);
-            } else {
-                self.active_conns.fetch_sub(1, Ordering::Relaxed);
+                .swap(alive, Ordering::Relaxed);
+            if prev != alive {
+                if alive {
+                    self.active_conns.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    self.active_conns.fetch_sub(1, Ordering::Relaxed);
+                }
             }
         }
     }

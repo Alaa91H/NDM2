@@ -108,30 +108,24 @@ class Logger {
   }
 
   warn(source: string, message: string, data?: unknown) {
+    if (!this.enabled || !this.shouldLog('warn')) return;
     const entry: LogEntry = { timestamp: Date.now(), level: 'warn', source, message, data };
-    if (this.enabled && this.shouldLog('warn')) {
-      this.push(entry);
-      if (data !== undefined) {
-        console.warn(`[${source}] ${message}`, data);
-      } else {
-        console.warn(`[${source}] ${message}`);
-      }
-    } else if (!this.enabled) {
-      this.push(entry);
+    this.push(entry);
+    if (data !== undefined) {
+      console.warn(`[${source}] ${message}`, data);
+    } else {
+      console.warn(`[${source}] ${message}`);
     }
   }
 
   error(source: string, message: string, data?: unknown) {
+    if (!this.enabled || !this.shouldLog('error')) return;
     const entry: LogEntry = { timestamp: Date.now(), level: 'error', source, message, data };
-    if (this.enabled && this.shouldLog('error')) {
-      this.push(entry);
-      if (data !== undefined) {
-        console.error(`[${source}] ${message}`, data);
-      } else {
-        console.error(`[${source}] ${message}`);
-      }
-    } else if (!this.enabled) {
-      this.push(entry);
+    this.push(entry);
+    if (data !== undefined) {
+      console.error(`[${source}] ${message}`, data);
+    } else {
+      console.error(`[${source}] ${message}`);
     }
   }
 }

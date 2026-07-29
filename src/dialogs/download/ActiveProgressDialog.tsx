@@ -112,12 +112,15 @@ export const ActiveProgressDialog: React.FC<{ taskId?: string }> = ({ taskId }) 
   const { updateSettings } = useSettingsActions();
   const t = useI18n();
   const taskFromPayload = dialog.payload as DownloadItem | null | undefined;
-  // An explicit taskId (detached window) wins; otherwise fall back to the
-  // dialog payload, then to any actively downloading task.
-  const task =
-    (taskId ? tasks.find((tt) => tt.id === taskId) : null) ||
-    (taskFromPayload ? tasks.find((tt) => tt.id === taskFromPayload.id) || taskFromPayload : null) ||
-    tasks.find((tt) => tt.status === 'downloading');
+  // Always use the live store version of the task so progress bars and segment
+  // data update reactively. The payload acts only as a fallback identity hint
+  // before SSE delivers the first store update.
+  const liveTask = useMemo(() => {
+    const hintedId = taskId || taskFromPayload?.id;
+    if (hintedId) return tasks.find((tt) => tt.id === hintedId);
+    return tasks.find((tt) => tt.status === 'downloading');
+  }, [tasks, taskId, taskFromPayload?.id]);
+  const task = liveTask ?? taskFromPayload ?? null;
 
   const [activeTab, setActiveTab] = useState<'status' | 'speed'>('status');
   // Collapsed by default so the dialog opens compact; the toggle reveals the

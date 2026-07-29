@@ -41,10 +41,6 @@ pub(crate) async fn create_curl_task(
         body.resumable.unwrap_or(true),
     )?;
 
-    if lock_or_err!(state.task_snapshot).len() >= MAX_TASKS {
-        return Err("Maximum number of tasks reached. Complete or delete some tasks before creating new ones.".to_string());
-    }
-
     let (name, output_path) = destination_from_body(body, url);
     crate::daemon::direct::FileWriter::ensure_parent(&output_path)?;
     let fail_with_body_supported =
@@ -54,8 +50,17 @@ pub(crate) async fn create_curl_task(
     let id = Uuid::new_v4().to_string();
     let job = task_from_body(body, &id, name, &output_path, args, direct_options);
     let task = job.task.clone();
-    lock_or_err!(state.curl_jobs).insert(id.clone(), job);
-    lock_or_err!(state.task_snapshot).insert(id.clone(), task.clone());
+    // Hold curl_jobs + task_snapshot locks together so the capacity check
+    // and insertions are atomic w.r.t. concurrent create calls.
+    {
+        let mut jobs = lock_or_err!(state.curl_jobs);
+        let mut tasks = lock_or_err!(state.task_snapshot);
+        if tasks.len() >= MAX_TASKS {
+            return Err("Maximum number of tasks reached. Complete or delete some tasks before creating new ones.".to_string());
+        }
+        jobs.insert(id.clone(), job);
+        tasks.insert(id.clone(), task.clone());
+    }
     state.mark_dirty();
 
     if body.start_immediately.unwrap_or(true) {
@@ -410,7 +415,9 @@ pub(crate) async fn redownload_task(state: &SharedState, id: &str) -> Result<Tas
             job.cancel_token.store(true, Ordering::Release);
             job.run_generation.fetch_add(1, Ordering::Release);
             let path = std::path::PathBuf::from(&job.task.save_path);
-            let _ = std::fs::remove_file(&path);
+            if let Err(e) = std::fs::remove_file(&path) {
+                log::warn!("Task {id}: remove_file failed on redownload: {e}");
+            }
             remove_stale_parts_for(&path);
             clear_stale_validators(&mut job.direct_options);
             job.task.status = "queued".to_string();
@@ -457,7 +464,9 @@ pub(crate) async fn delete_task(
                 state.metadata_cache.remove(&url);
             }
             if delete_files {
-                let _ = std::fs::remove_file(&path);
+                if let Err(e) = std::fs::remove_file(&path) {
+                    log::warn!("delete_task: remove_file failed for media task {id}: {e}");
+                }
             }
             lock_or_err!(state.task_snapshot).remove(id);
             lock_or_err!(state.engine_trackers).remove(id);
@@ -468,11 +477,16 @@ pub(crate) async fn delete_task(
 
     {
         let mut jobs = lock_or_err!(state.curl_jobs);
-        if let Some(job) = jobs.remove(id) {
+        if let Some(job) = jobs.get_mut(id) {
             job.cancel_token.store(true, Ordering::Release);
             job.run_generation.fetch_add(1, Ordering::Release);
+        }
+        let job = jobs.remove(id);
+        if let Some(job) = job {
             let path = std::path::PathBuf::from(&job.task.save_path);
             let url = job.task.url.clone();
+            // Remove from snapshot before curl_jobs to prevent ghost task.
+            lock_or_err!(state.task_snapshot).remove(id);
             drop(jobs);
             state.priority_queue.remove(id);
             state.bandwidth_manager.remove_task_limit(id);
@@ -480,10 +494,11 @@ pub(crate) async fn delete_task(
                 state.metadata_cache.remove(&url);
             }
             if delete_files {
-                let _ = std::fs::remove_file(&path);
+                if let Err(e) = std::fs::remove_file(&path) {
+                    log::warn!("delete_task: remove_file failed for curl task {id}: {e}");
+                }
                 remove_stale_parts_for(&path);
             }
-            lock_or_err!(state.task_snapshot).remove(id);
             lock_or_err!(state.engine_trackers).remove(id);
             state.mark_dirty();
             return Ok(());

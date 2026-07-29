@@ -107,9 +107,19 @@ fn find_available_daemon_port(preferred_port: u16) -> u16 {
     }
 
     log::warn!(
-        "No free daemon port found near {}; falling back to the preferred port and letting the daemon report bind errors",
+        "No free daemon port found near {}; continuing scan across full ephemeral range",
         preferred_port
     );
+    // Scan the full ephemeral range (49152-65535) as last resort.
+    let mut port = 49152u16;
+    while port > 0 {
+        if TcpListener::bind((std::net::Ipv4Addr::new(127, 0, 0, 1), port)).is_ok() {
+            log::info!("Found free daemon port at {}", port);
+            return port;
+        }
+        port = port.saturating_add(1);
+    }
+    // Absolute last resort — let the bind fail naturally.
     preferred_port
 }
 
@@ -167,24 +177,11 @@ fn open_extension_folder(path: String) -> Result<(), String> {
 #[tauri::command]
 fn open_file(path: String) -> Result<(), String> {
     let target = validate_file_path(&path)?;
-    if !target.exists() {
-        return Err("Downloaded file was not found.".to_string());
-    }
-    if !target.is_file() {
-        return Err("The selected download path is not a file.".to_string());
-    }
-
-    // canonicalize() already returns \\?\ prefixed paths on Windows.
-    let unc_path = target
-        .canonicalize()
-        .map_err(|e| format!("Could not resolve file path: {e}"))?;
-
-    // Use explorer.exe which handles files directly without invoking cmd.exe shell,
-    // preventing command injection via filenames with metacharacters (&, |, etc).
+    // validate_file_path already canonicalizes, and explorer.exe handles \\?\ paths.
     let mut launcher = Command::new("explorer.exe");
     hide_command_window(&mut launcher);
     launcher
-        .arg(&unc_path)
+        .arg(&target)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -196,17 +193,12 @@ fn open_file(path: String) -> Result<(), String> {
 #[tauri::command]
 fn reveal_file(path: String) -> Result<(), String> {
     let target = validate_file_path(&path)?;
-    if target.exists() && target.is_dir() {
+    if target.is_dir() {
         return open_with_explorer(&target);
     }
 
-    if target.exists() && target.is_file() {
-        // canonicalize() already returns \\?\ prefixed paths on Windows.
-        let unc_path = target
-            .canonicalize()
-            .map_err(|e| format!("Could not resolve file path: {e}"))?;
-        let select_arg = format!("/select,{}", unc_path.display());
-
+    if target.is_file() {
+        let select_arg = format!("/select,{}", target.display());
         let mut launcher = Command::new("explorer.exe");
         hide_command_window(&mut launcher);
         launcher
@@ -355,15 +347,24 @@ fn check_tcp_endpoint(host: String, port: u16) -> Result<bool, String> {
         return Err("Host is required.".to_string());
     }
     let address = format!("{}:{}", host.trim(), port);
-    let mut resolved = address
-        .to_socket_addrs()
-        .map_err(|error| format!("Could not resolve endpoint: {error}"))?;
-    let Some(socket_addr) = resolved.next() else {
-        return Ok(false);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let dns_host = address.clone();
+    std::thread::spawn(move || {
+        let result = (|| -> Result<(std::net::SocketAddr, std::net::IpAddr), String> {
+            let mut resolved = dns_host
+                .to_socket_addrs()
+                .map_err(|e| e.to_string())?;
+            let socket_addr = resolved.next().ok_or_else(|| "No addresses resolved".to_string())?;
+            let ip = socket_addr.ip();
+            Ok((socket_addr, ip))
+        })();
+        let _ = tx.send(result);
+    });
+    let (socket_addr, ip) = match rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(Ok((addr, ip))) => (addr, ip),
+        Ok(Err(e)) => return Err(format!("Could not resolve endpoint: {e}")),
+        Err(_) => return Err("Could not resolve endpoint: timeout".to_string()),
     };
-    // Prevent SSRF: reject connections to internal/local addresses.
-    // Use the centralized is_internal_ip which handles IPv4-mapped IPv6.
-    let ip = socket_addr.ip();
     if crate::daemon::utils::is_internal_ip(ip) {
         return Err("Connections to internal/local addresses are not allowed".to_string());
     }
@@ -467,10 +468,13 @@ fn restart_daemon(
     daemon_url: tauri::State<DaemonUrl>,
 ) -> Result<(), String> {
     log::info!("NOVA daemon restart requested");
+    // Signal the running daemon to shut down gracefully (saves state, etc.).
+    crate::daemon::signal_shutdown();
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    // Also kill orphaned daemon processes on the port range.
     let our_pid = std::process::id();
     let preferred = requested_daemon_port();
     kill_old_daemon_range(our_pid, preferred);
-    std::thread::sleep(std::time::Duration::from_millis(600));
     let port = find_available_daemon_port(requested_daemon_port());
     set_daemon_url(&daemon_url, port);
     let resource_dir = app
@@ -494,7 +498,14 @@ fn restart_daemon(
 fn kill_old_daemon() {
     let our_pid = std::process::id();
     let preferred = requested_daemon_port();
-    std::thread::spawn(move || kill_old_daemon_range(our_pid, preferred));
+    std::thread::spawn(move || {
+        if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            kill_old_daemon_range(our_pid, preferred)
+        })) {
+            let msg = if let Some(s) = e.downcast_ref::<&str>() { s.to_string() } else if let Some(s) = e.downcast_ref::<String>() { s.clone() } else { "unknown".to_string() };
+            log::error!("kill_old_daemon thread panicked: {msg}");
+        }
+    });
 }
 
 /// Blocking: kills processes on a range of ports.
@@ -504,20 +515,20 @@ fn kill_old_daemon_range(our_pid: u32, preferred: u16) {
             break;
         };
         let script = format!(
-            "Get-NetTCPConnection -LocalPort {port} -State Listen -ErrorAction SilentlyContinue | ForEach-Object {{ \
+            "Get-NetTCPConnection -LocalPort {port} -State Listen -ErrorAction SilentlyContinue \
+             -ErrorVariable e | ForEach-Object {{ \
                 $p = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue; \
                 if ($p -and $p.Id -ne {our_pid}) {{ taskkill /F /PID $p.Id -ErrorAction SilentlyContinue }} \
             }}",
         );
         let mut command = Command::new("powershell");
         hide_command_window(&mut command);
-        command
+        let _ = command
             .args(["-NoProfile", "-NonInteractive", "-Command", &script])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .output()
-            .ok();
+            .output();
     }
 }
 
@@ -641,9 +652,8 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "quit" => {
                         log::info!("Shutting down NOVA daemon...");
-                        let pid = std::process::id();
-                        let pref = requested_daemon_port();
-                        kill_old_daemon_range(pid, pref);
+                        crate::daemon::signal_shutdown();
+                        std::thread::sleep(std::time::Duration::from_millis(800));
                         app.exit(0);
                     }
                     "show" => {
@@ -674,7 +684,9 @@ pub fn run() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let _ = window.hide();
+                if let Err(e) = window.hide() {
+                    log::error!("Failed to hide window: {e}");
+                }
                 api.prevent_close();
             }
         })

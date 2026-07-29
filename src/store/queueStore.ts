@@ -92,7 +92,9 @@ export const queueStore = create<QueueState>()((set, get) => ({
       oneTimeLimit: false,
       shutdownOnComplete: false,
       hangupOnComplete: false,
+      exitOnComplete: false,
       retryCount: 3,
+      retryDelay: 10,
       downloadOrder: [],
     };
     set((p) => ({ queues: [...p.queues, newQueue] }));
@@ -174,7 +176,9 @@ export const queueStore = create<QueueState>()((set, get) => ({
       oneTimeLimit: false,
       shutdownOnComplete: false,
       hangupOnComplete: false,
+      exitOnComplete: false,
       retryCount: 3,
+      retryDelay: 10,
       downloadOrder: [taskId],
     };
     set((p) => ({ queues: [...p.queues, newQueue] }));

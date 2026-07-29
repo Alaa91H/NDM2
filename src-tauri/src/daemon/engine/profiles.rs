@@ -157,11 +157,11 @@ impl DownloadProfile {
             AdaptiveConfig::default()
         };
         AdaptiveConfig {
-            min_connections: base.min_connections,
+            min_connections: self.default_connections.min(self.max_connections),
             max_connections: self.max_connections,
-            speed_high_threshold: (self.adaptive_config.speed_high_threshold_mbps * 1024.0 * 1024.0)
+            speed_high_threshold: (self.adaptive_config.speed_high_threshold_mbps * 125_000.0)
                 as u64,
-            speed_low_threshold: (self.adaptive_config.speed_low_threshold_kbps * 1024.0) as u64,
+            speed_low_threshold: (self.adaptive_config.speed_low_threshold_kbps * 125.0) as u64,
             ..base
         }
     }

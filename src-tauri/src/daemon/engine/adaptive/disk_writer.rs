@@ -63,11 +63,13 @@ impl AsyncDiskWriter {
     pub fn write(&self, segment_id: u32, offset: u64, data: Vec<u8>) {
         let len = data.len() as u64;
         self.pending_bytes.fetch_add(len, Ordering::Relaxed);
-        let _ = self.tx.send(WriteCommand::Data {
+        if self.tx.send(WriteCommand::Data {
             segment_id,
             offset,
             data,
-        });
+        }).is_err() {
+            self.pending_bytes.fetch_sub(len, Ordering::Relaxed);
+        }
     }
 
     pub fn flush(&self) {
@@ -92,6 +94,18 @@ impl AsyncDiskWriter {
     pub fn bytes_written(&self) -> u64 {
         self.bytes_written.load(Ordering::Relaxed)
     }
+}
+
+impl Drop for AsyncDiskWriter {
+    fn drop(&mut self) {
+        let _ = self.tx.send(WriteCommand::Shutdown);
+        if let Some(handle) = self.thread_handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+impl AsyncDiskWriter {
 
     fn writer_loop(
         rx: mpsc::Receiver<WriteCommand>,
@@ -104,13 +118,18 @@ impl AsyncDiskWriter {
         let mut needs_flush: bool = false;
 
         for (id, path) in &paths {
-            if let Ok(file) = OpenOptions::new()
+            match OpenOptions::new()
                 .create(true)
                 .write(true)
                 .truncate(false)
                 .open(path)
             {
-                files.insert(*id, file);
+                Ok(file) => {
+                    files.insert(*id, file);
+                }
+                Err(e) => {
+                    log::error!("disk_writer: failed to open segment {id} at {path}: {e}");
+                }
             }
         }
 
@@ -196,9 +215,15 @@ impl AsyncDiskWriter {
             {
                 let len = data.len() as u64;
                 if let Some(file) = files.get_mut(&segment_id) {
-                    if file.seek(SeekFrom::Start(offset)).is_ok() && file.write_all(&data).is_ok() {
+                    if let Err(e) = file.seek(SeekFrom::Start(offset)) {
+                        log::error!("disk_writer: seek failed for seg {segment_id}: {e}");
+                    } else if let Err(e) = file.write_all(&data) {
+                        log::error!("disk_writer: write failed for seg {segment_id}: {e}");
+                    } else {
                         bytes_written.fetch_add(len, Ordering::Relaxed);
                     }
+                } else {
+                    log::error!("disk_writer: no file handle for segment {segment_id}");
                 }
                 pending_bytes.fetch_sub(len, Ordering::Relaxed);
             }

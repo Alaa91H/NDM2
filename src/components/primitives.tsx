@@ -48,6 +48,7 @@ export const Button: React.FC<ButtonProps> = ({
     <button
       className={`${baseStyle} ${sizeStyles[size]} ${variantStyles[variant]} ${className}`}
       title={resolvedTitle}
+      disabled={disabled}
       aria-disabled={disabled ? true : undefined}
       {...rest}
     >
@@ -170,7 +171,7 @@ export const Switch: React.FC<SwitchProps> = ({ checked, onChange, label, id, di
         className={`relative w-8 h-4.5 rounded-full transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--bg-surface-elevated)] ${checked ? 'bg-[var(--accent-primary)]' : 'bg-[var(--border-color-hover)]'}`}
       >
         <span
-          className={`absolute top-0.5 bg-white w-3.5 h-3.5 rounded-full transition-transform duration-200 shadow-sm ${checked ? 'right-0.5 -translate-x-3.5' : 'right-0.5 translate-x-0'}`}
+          className={`absolute top-0.5 left-0.5 bg-white w-3.5 h-3.5 rounded-full transition-transform duration-200 shadow-sm ${checked ? 'translate-x-3.5' : 'translate-x-0'}`}
         />
       </button>
     </label>

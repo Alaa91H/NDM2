@@ -141,7 +141,7 @@ impl ServerProfile {
         }
         match self.rate_limit_cooldown_until {
             Some(cooldown) => Instant::now() < cooldown,
-            None => true,
+            None => false,
         }
     }
 

@@ -129,11 +129,13 @@ impl SegmentController {
         }
 
         if active_count == 1 && self.total_size > 0 {
-            let seg = self
+            let Some(seg) = self
                 .segments
                 .iter()
                 .find(|s| s.state == SegmentState::Active)
-                .unwrap();
+            else {
+                return None;
+            };
             let seg_id = seg.id;
             let seg_total = seg.total_bytes();
             let seg_speed = seg.speed;

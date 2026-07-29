@@ -133,8 +133,6 @@ impl ResourceMonitor {
 
     #[cfg(target_os = "windows")]
     fn estimate_cpu_usage_windows(&self) -> f32 {
-        use std::sync::atomic::{AtomicU64, Ordering};
-
         #[repr(C)]
         struct FileTime {
             dw_low_date_time: u32,
@@ -189,13 +187,13 @@ impl ResourceMonitor {
             return 0.0;
         }
 
-        static PREV_IDLE: AtomicU64 = AtomicU64::new(0);
-        static PREV_TOTAL: AtomicU64 = AtomicU64::new(0);
-
-        let prev_idle = PREV_IDLE.load(Ordering::Relaxed);
-        let prev_total = PREV_TOTAL.load(Ordering::Relaxed);
-        PREV_IDLE.store(idle_ticks, Ordering::Relaxed);
-        PREV_TOTAL.store(total, Ordering::Relaxed);
+        static PREV: std::sync::OnceLock<std::sync::Mutex<(u64, u64)>> =
+            std::sync::OnceLock::new();
+        let prev = PREV.get_or_init(|| std::sync::Mutex::new((0, 0)));
+        let mut guard = prev.lock().unwrap();
+        let (prev_idle, prev_total) = *guard;
+        *guard = (idle_ticks, total);
+        drop(guard);
 
         let d_idle = idle_ticks.saturating_sub(prev_idle);
         let d_total = total.saturating_sub(prev_total);

@@ -5,16 +5,11 @@ use std::time::Duration;
 /// at startup or adapted at runtime by the Download Intelligence Engine. No value
 /// here is ever exposed to the user as a setting.
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub struct EngineConfig {
     pub max_connections_per_download: u32,
     pub max_total_connections: u32,
     pub min_segment_bytes: u64,
     pub initial_segments: u32,
-    pub stall_threshold_ms: u64,
-    pub eval_interval_ms: u64,
-    pub speed_high_threshold: u64,
-    pub speed_low_threshold: u64,
     pub max_retries: u32,
     pub base_retry_delay_ms: u64,
     pub max_retry_delay_ms: u64,
@@ -55,11 +50,6 @@ impl EngineConfig {
         let min_segment_bytes = 256 * 1024;
         let initial_segments = cpus.clamp(1, 4);
 
-        let stall_threshold_ms = 5000;
-        let eval_interval_ms = 2000;
-        let speed_high_threshold = 5 * 1024 * 1024;
-        let speed_low_threshold = 100 * 1024;
-
         let max_retries = 5;
         let base_retry_delay_ms = 1000;
         let max_retry_delay_ms = 30_000;
@@ -84,10 +74,6 @@ impl EngineConfig {
             max_total_connections,
             min_segment_bytes,
             initial_segments,
-            stall_threshold_ms,
-            eval_interval_ms,
-            speed_high_threshold,
-            speed_low_threshold,
             max_retries,
             base_retry_delay_ms,
             max_retry_delay_ms,
@@ -129,19 +115,6 @@ impl EngineConfig {
         }
     }
 
-    /// Update thresholds based on live measurements. Called by the DIE.
-    #[allow(dead_code)]
-    pub fn update_from_profile(&mut self, per_connection_ceiling: u64, median_rtt_us: u64) {
-        if per_connection_ceiling > 0 {
-            self.speed_high_threshold = (per_connection_ceiling as f64 * 0.8) as u64;
-            self.speed_low_threshold = (per_connection_ceiling as f64 * 0.1) as u64;
-            self.min_segment_bytes = (per_connection_ceiling / 4).max(256 * 1024);
-        }
-        if median_rtt_us > 0 {
-            self.stall_threshold_ms = (median_rtt_us as f64 * 3.0 / 1000.0) as u64;
-            self.eval_interval_ms = (median_rtt_us as f64 * 2.0 / 1000.0) as u64;
-        }
-    }
 }
 
 fn total_system_memory_bytes() -> u64 {
@@ -173,7 +146,38 @@ fn total_system_memory_bytes() -> u64 {
             }
         }
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(content) = std::fs::read_to_string("/proc/meminfo") {
+            for line in content.lines() {
+                if line.starts_with("MemTotal:") {
+                    if let Some(kb_str) = line.split_whitespace().nth(1) {
+                        if let Ok(kb) = kb_str.parse::<u64>() {
+                            return kb * 1024;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        4 * 1024 * 1024 * 1024
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        if let Ok(output) = Command::new("sysctl")
+            .args(["-n", "hw.memsize"])
+            .output()
+        {
+            if let Ok(s) = String::from_utf8(output.stdout) {
+                if let Ok(bytes) = s.trim().parse::<u64>() {
+                    return bytes;
+                }
+            }
+        }
+        4 * 1024 * 1024 * 1024
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
     {
         4 * 1024 * 1024 * 1024
     }
@@ -222,18 +226,6 @@ mod tests {
         );
         assert_eq!(policy.backoff_multiplier, cfg.backoff_multiplier);
         assert!(policy.jitter);
-    }
-
-    #[test]
-    fn update_from_profile_adjusts_thresholds() {
-        let mut cfg = EngineConfig::detect();
-        let old_high = cfg.speed_high_threshold;
-        let old_low = cfg.speed_low_threshold;
-        cfg.update_from_profile(1_000_000, 50_000);
-        assert_ne!(cfg.speed_high_threshold, old_high);
-        assert_ne!(cfg.speed_low_threshold, old_low);
-        assert_eq!(cfg.speed_high_threshold, 800_000);
-        assert_eq!(cfg.speed_low_threshold, 100_000);
     }
 
     #[test]

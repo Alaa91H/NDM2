@@ -40,6 +40,7 @@ pub enum RuleAction {
     Reject { reason: String },
 }
 
+#[derive(Clone)]
 struct CompiledCondition {
     regex: Option<Regex>,
     condition: RuleCondition,
@@ -82,8 +83,12 @@ impl DownloadRuleEngine {
         }
         if let Ok(mut inner) = self.inner.lock() {
             inner.rules.push(rule.clone());
-            inner.rules.sort_by_key(|r| r.priority);
-            inner.compiled.push((rule.id, compiled_conditions));
+            inner.compiled.push((rule.id.clone(), compiled_conditions));
+            // Sort both vectors by priority using a permutation index
+            let mut indices: Vec<usize> = (0..inner.rules.len()).collect();
+            indices.sort_by_key(|&i| inner.rules[i].priority);
+            inner.rules = indices.iter().map(|&i| inner.rules[i].clone()).collect();
+            inner.compiled = indices.iter().map(|&i| inner.compiled[i].clone()).collect();
         }
     }
 
@@ -147,10 +152,9 @@ impl DownloadRuleEngine {
                     hostname.to_lowercase().contains(&text.to_lowercase())
                 }
                 RuleCondition::HeaderContains { header, value } => {
-                    let header_lower = header.to_lowercase();
                     let value_lower = value.to_lowercase();
                     headers.iter().any(|(k, v)| {
-                        k.to_lowercase().contains(&header_lower)
+                        k.eq_ignore_ascii_case(header)
                             && v.to_lowercase().contains(&value_lower)
                     })
                 }

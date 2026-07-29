@@ -17,7 +17,9 @@ export const initialQueues: Queue[] = [
     oneTimeLimit: false,
     shutdownOnComplete: false,
     hangupOnComplete: false,
+    exitOnComplete: false,
     retryCount: 3,
+    retryDelay: 10,
     downloadOrder: [],
   },
 ];

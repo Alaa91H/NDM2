@@ -204,10 +204,7 @@ pub async fn handle_queue_set_priority(
 
 pub async fn handle_bandwidth_get(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let task_stats: Vec<serde_json::Value> = {
-        let tasks = lock_or_err!(
-            state.task_snapshot,
-            Json(serde_json::json!({"ok": false, "error": "lock poisoned"}))
-        );
+        let tasks = lock_or_err!(state.task_snapshot);
         tasks
             .values()
             .filter(|t| t.status == "downloading")

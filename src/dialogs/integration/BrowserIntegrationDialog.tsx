@@ -71,7 +71,7 @@ export const BrowserIntegrationDialog: React.FC = () => {
           chrome: enabled,
           edge: enabled,
           firefox: enabled,
-          safari: false,
+          safari: enabled,
         },
       },
     });

@@ -2,6 +2,7 @@ use reqwest::Client as HttpClient;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
+use std::thread::JoinHandle;
 use std::time::Instant;
 
 use crate::daemon::external_tools::ExternalToolManager;
@@ -84,6 +85,10 @@ pub struct AppState {
     pub die_orchestrator: Arc<Mutex<DieOrchestrator>>,
     /// Resource Manager — unified memory/disk/thread pressure monitoring.
     pub resource_manager: Arc<Mutex<ResourceManager>>,
+    /// Signal for watchdog threads to exit during daemon shutdown.
+    pub shutdown_requested: AtomicBool,
+    /// Join handles for watchdog threads, joined on daemon shutdown.
+    pub watchdog_handles: Mutex<Vec<JoinHandle<()>>>,
 }
 
 impl AppState {

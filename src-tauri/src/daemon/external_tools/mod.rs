@@ -46,8 +46,8 @@ impl ExternalToolManager {
 
     pub fn discover(&self, tool_id: ToolId) -> ToolInstallation {
         let tool = self.tool_for_id(tool_id);
-        let reg = lock_or_err!(self.registry);
-        let installation = self.discover_inner(tool, &reg);
+        let mut reg = lock_or_err!(self.registry);
+        let installation = self.discover_inner(tool, &mut reg);
         drop(reg);
 
         let mut resolver = lock_or_err!(self.resolver);
@@ -57,7 +57,7 @@ impl ExternalToolManager {
         installation
     }
 
-    fn discover_inner(&self, tool: &dyn ExternalTool, reg: &ToolRegistry) -> ToolInstallation {
+    fn discover_inner(&self, tool: &dyn ExternalTool, reg: &mut ToolRegistry) -> ToolInstallation {
         let reg_entry = reg.tools.get(tool.id().as_str());
         let custom_path = reg_entry.map(|e| e.custom_path).unwrap_or(false);
         let installed_by_app = reg_entry.map(|e| e.installed_by_app).unwrap_or(false);
@@ -85,8 +85,6 @@ impl ExternalToolManager {
                         last_health_check: Some(chrono::Utc::now().to_rfc3339()),
                         health_ok: report.executable_works,
                     };
-                    let mut resolver = lock_or_err!(self.resolver);
-                    resolver.update_installation(installation.clone());
                     return installation;
                 }
             }
@@ -115,7 +113,6 @@ impl ExternalToolManager {
             };
 
             {
-                let mut reg_owned = lock_or_err!(self.registry);
                 let path_display = installation
                     .path
                     .as_ref()
@@ -123,19 +120,14 @@ impl ExternalToolManager {
                     .unwrap_or_default();
                 let ver_display = installation.version.as_ref().map(|v| v.to_string());
                 registry::register_tool(
-                    &mut reg_owned,
+                    reg,
                     tool.id().as_str(),
                     &path_display,
                     ver_display.as_deref(),
                     false,
                     false,
                 );
-                let _ = registry::save_registry(&self.data_dir, &reg_owned);
-            }
-
-            {
-                let mut resolver = lock_or_err!(self.resolver);
-                resolver.update_installation(installation.clone());
+                let _ = registry::save_registry(&self.data_dir, reg);
             }
 
             installation

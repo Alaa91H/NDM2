@@ -315,7 +315,9 @@ export interface Queue {
   oneTimeLimit: boolean;
   shutdownOnComplete: boolean;
   hangupOnComplete: boolean;
+  exitOnComplete?: boolean;
   retryCount: number;
+  retryDelay?: number;
   downloadOrder: string[]; // List of DownloadItem ids
 }
 

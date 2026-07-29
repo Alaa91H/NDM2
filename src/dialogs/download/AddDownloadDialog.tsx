@@ -47,52 +47,49 @@ export const AddDownloadDialog: React.FC = () => {
   const [savePath, setSavePath] = useState(settings.saveAndCategories.defaultFolder || '');
   const [defaultDownloadsDir, setDefaultDownloadsDir] = useState('');
   const [category, setCategory] = useState<FileType>('other');
-  const [queueId] = useState('main');
-  const [description] = useState('');
   const [connections, setConnections] = useState<number>(settings.connection.maxConnections);
   const [resumable, setResumable] = useState(true);
   const [referer, setReferer] = useState('');
-  const [userAgent] = useState(settings.extra.userAgent || '');
-  const [headers] = useState('');
-  const [cookies] = useState('');
-  const [proxy] = useState(buildConfiguredProxy);
-  const [speedLimitKbs] = useState<number>(
-    settings.connection.speedLimiter.enabled ? settings.connection.speedLimiter.maxSpeedKbs : 0,
-  );
-  const [retryCount] = useState<number>(settings.connection.defaults.retryCount);
-  const [retryDelaySec] = useState<number>(settings.connection.defaults.retryDelaySec);
-  const [timeoutSec] = useState<number>(settings.connection.defaults.timeoutSec);
-  const [connectTimeoutSec] = useState<number>(settings.connection.defaults.connectTimeoutSec);
-  const [allowOverwrite] = useState(settings.extra.duplicateAction === 'overwrite');
   const [infoFetched, setInfoFetched] = useState(false);
-  const [authType] = useState('');
-  const [authUsername] = useState('');
-  const [authPassword] = useState('');
-  const [oauth2Bearer] = useState('');
-  const [httpVersion] = useState(settings.connection.defaults.httpVersion);
-  const [insecure] = useState(settings.connection.defaults.insecure);
-  const [caCert] = useState(settings.connection.defaults.caCert);
-  const [clientCert] = useState(settings.connection.defaults.clientCert);
-  const [clientKey] = useState(settings.connection.defaults.clientKey);
-  const [tlsCiphers] = useState(settings.connection.defaults.ciphers);
-  const [tlsMin] = useState(settings.connection.defaults.tlsMin);
-  const [maxRedirs] = useState<number>(settings.connection.defaults.maxRedirs);
-  const [keepaliveTimeSec] = useState<number>(settings.connection.defaults.keepaliveTimeSec);
-  const [tcpNoDelay] = useState(false);
-  const [dnsServers] = useState(settings.connection.defaults.dnsServers);
-  const [noproxy] = useState('');
-  const [proxyUser] = useState(settings.connection.proxyUser || '');
-  const [proxyPassword] = useState(settings.connection.proxyPass || '');
-  const [proxyType] = useState(settings.connection.proxyType || '');
-  const [proxyTunnel] = useState(settings.connection.proxyTunnel || false);
-  const [ipResolve] = useState(settings.connection.defaults.ipResolve);
-  const [unrestrictedAuth] = useState(false);
-  const [freshConnect] = useState(false);
-  const [forbidReuse] = useState(false);
   const [isFetchingInfo, setIsFetchingInfo] = useState(false);
+
+  // Read-only snapshot captured at dialog open (immutable for this session)
+  const queueId = 'main';
+  const description = '';
+  const userAgent = settings.extra.userAgent || '';
+  const headers = '';
+  const cookies = '';
+  const proxy = buildConfiguredProxy();
+  const speedLimitKbs = settings.connection.speedLimiter.enabled ? settings.connection.speedLimiter.maxSpeedKbs : 0;
+  const retryCount = settings.connection.defaults.retryCount;
+  const retryDelaySec = settings.connection.defaults.retryDelaySec;
+  const timeoutSec = settings.connection.defaults.timeoutSec;
+  const connectTimeoutSec = settings.connection.defaults.connectTimeoutSec;
+  const allowOverwrite = settings.extra.duplicateAction === 'overwrite';
+  const authType = '';
+  const authUsername = '';
+  const authPassword = '';
+  const oauth2Bearer = '';
+  const httpVersion = settings.connection.defaults.httpVersion;
+  const insecure = settings.connection.defaults.insecure;
+  const caCert = settings.connection.defaults.caCert;
+  const clientCert = settings.connection.defaults.clientCert;
+  const clientKey = settings.connection.defaults.clientKey;
+  const tlsCiphers = settings.connection.defaults.ciphers;
+  const tlsMin = settings.connection.defaults.tlsMin;
+  const maxRedirs = settings.connection.defaults.maxRedirs;
+  const keepaliveTimeSec = settings.connection.defaults.keepaliveTimeSec;
+  const dnsServers = settings.connection.defaults.dnsServers;
+  const noproxy = '';
+  const proxyUser = settings.connection.proxyUser || '';
+  const proxyPassword = settings.connection.proxyPass || '';
+  const proxyType = settings.connection.proxyType || '';
+  const proxyTunnel = settings.connection.proxyTunnel || false;
+  const ipResolve = settings.connection.defaults.ipResolve;
   const [probeNonce, setProbeNonce] = useState(0);
   const [detectedUrlType, setDetectedUrlType] = useState<'media' | 'download' | 'unknown'>('unknown');
   const latestUrlRef = useRef('');
+  const submittingRef = useRef(false);
   // Tracks whether the user manually chose a save location; while false the
   // probe/category logic keeps the per-type default path in sync.
   const savePathEdited = useRef(false);
@@ -246,7 +243,6 @@ export const AddDownloadDialog: React.FC = () => {
               sourceAddress: isDirectOptionSupported('sourceAddress')
                 ? configuredSourceAddress || undefined
                 : undefined,
-              authType: isDirectOptionSupported('authType') ? authType || undefined : undefined,
               username: isDirectOptionSupported('username') ? authUsername.trim() || undefined : undefined,
               password: isDirectOptionSupported('password') ? authPassword.trim() || undefined : undefined,
               oauth2Bearer: isDirectOptionSupported('oauth2Bearer') ? oauth2Bearer.trim() || undefined : undefined,
@@ -376,14 +372,16 @@ export const AddDownloadDialog: React.FC = () => {
   };
 
   const handleSubmit = async (downloadImmediately: boolean) => {
-    // Always persist the original URL and let the download engine resolve the
-    // live target (following HTTP 3xx and HTML meta-refresh interstitials) at
-    // the start of every download and resume. Storing a pre-resolved mirror URL
-    // would bake in a time-limited token that goes stale on resume.
-    const submittedUrl = url.trim();
-    const effectiveReferer = referer.trim();
-
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     try {
+      // Always persist the original URL and let the download engine resolve the
+      // live target (following HTTP 3xx and HTML meta-refresh interstitials) at
+      // the start of every download and resume. Storing a pre-resolved mirror URL
+      // would bake in a time-limited token that goes stale on resume.
+      const submittedUrl = url.trim();
+      const effectiveReferer = referer.trim();
+
       const directBlock = engineCapabilities.directBlockedReason(submittedUrl);
       if (directBlock) {
         addToast('error', t('add_dl_direct_engine_unavailable'), directBlock);
@@ -439,7 +437,6 @@ export const AddDownloadDialog: React.FC = () => {
         connectTimeoutSec: connectTimeoutSec > 0 ? connectTimeoutSec : undefined,
         allowOverwrite: allowOverwrite || undefined,
         segmented: supportsSegmentedDownloads && effectiveConnections > 1 && resumable ? true : undefined,
-        authType: authType || undefined,
         username: authUsername.trim() || undefined,
         password: authPassword.trim() || undefined,
         oauth2Bearer: oauth2Bearer.trim() || undefined,
@@ -447,7 +444,6 @@ export const AddDownloadDialog: React.FC = () => {
         proxyPassword: proxyPassword.trim() || undefined,
         proxyType: proxyType || undefined,
         proxyTunnel: proxyTunnel || undefined,
-        unrestrictedAuth: unrestrictedAuth || undefined,
         ipResolve: ipResolve || undefined,
         httpVersion: httpVersion || undefined,
         insecure: insecure || undefined,
@@ -456,12 +452,9 @@ export const AddDownloadDialog: React.FC = () => {
         key: clientKey.trim() || undefined,
         ciphers: tlsCiphers.trim() || undefined,
         tlsMin: tlsMin || undefined,
-        maxRedirs: maxRedirs !== 20 ? maxRedirs : undefined,
+        maxRedirs: maxRedirs !== settings.connection.defaults.maxRedirs ? maxRedirs : undefined,
         keepaliveTimeSec: keepaliveTimeSec > 0 ? keepaliveTimeSec : undefined,
-        tcpNoDelay: tcpNoDelay || undefined,
         dnsServers: dnsServers.trim() || undefined,
-        freshConnect: freshConnect || undefined,
-        forbidReuse: forbidReuse || undefined,
       });
 
       const task = await addTask(
@@ -497,6 +490,8 @@ export const AddDownloadDialog: React.FC = () => {
         t('add_dl_direct_engine_unavailable'),
         err instanceof Error ? err.message : t('add_dl_vpn_routing_error'),
       );
+    } finally {
+      submittingRef.current = false;
     }
   };
 

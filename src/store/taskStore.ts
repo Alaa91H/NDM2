@@ -9,6 +9,7 @@ import { playAppSound } from '../utils/sound';
 import { uiStore } from './uiStore';
 import { queueStore } from './queueStore';
 import { settingsStore } from './settingsStore';
+import { useEngineStore } from './engineStore';
 
 const isNativeEngineTask = (task: DownloadItem) =>
   task.engine === 'curl' || task.engine === 'libcurl-multi' || task.engine === 'yt-dlp';
@@ -37,20 +38,31 @@ export const mergeDaemonTasks = (daemonTasks: DownloadItem[]): DownloadItem[] =>
  *  download progress). If all relevant fields match, we reuse the old
  *  reference to prevent unnecessary React re-renders. */
 function shallowEqualTask(a: DownloadItem, b: DownloadItem): boolean {
-  return (
-    a.status === b.status &&
-    a.downloadedBytes === b.downloadedBytes &&
-    a.speedBytesPerSec === b.speedBytesPerSec &&
-    a.sizeBytes === b.sizeBytes &&
-    a.timeLeftSeconds === b.timeLeftSeconds &&
-    a.elapsedSeconds === b.elapsedSeconds &&
-    a.engineStatus === b.engineStatus &&
-    a.errorMessage === b.errorMessage &&
-    a.name === b.name &&
-    a.savePath === b.savePath &&
-    a.connections === b.connections &&
-    a.retries === b.retries
-  );
+  if (
+    a.status !== b.status ||
+    a.downloadedBytes !== b.downloadedBytes ||
+    a.speedBytesPerSec !== b.speedBytesPerSec ||
+    a.sizeBytes !== b.sizeBytes ||
+    a.timeLeftSeconds !== b.timeLeftSeconds ||
+    a.elapsedSeconds !== b.elapsedSeconds ||
+    a.engineStatus !== b.engineStatus ||
+    a.errorMessage !== b.errorMessage ||
+    a.name !== b.name ||
+    a.savePath !== b.savePath ||
+    a.connections !== b.connections ||
+    a.retries !== b.retries
+  ) {
+    return false;
+  }
+  if (a.segments.length !== b.segments.length) return false;
+  for (let i = 0; i < a.segments.length; i++) {
+    const sa = a.segments[i];
+    const sb = b.segments[i];
+    if (sa.id !== sb.id || sa.progress !== sb.progress || sa.downloadedBytes !== sb.downloadedBytes || sa.totalBytes !== sb.totalBytes || sa.active !== sb.active || sa.speed !== sb.speed) {
+      return false;
+    }
+  }
+  return true;
 }
 
 interface TaskState {
@@ -207,8 +219,7 @@ export const taskStore = create<TaskState>()((set, get) => ({
       set((p) => ({ tasks: p.tasks.filter((t) => t.id !== id) }));
       if (uiStore.getState().selectedTaskId === id) uiStore.getState().setSelectedTaskId(null);
       // Clean up per-task telemetry to prevent unbounded memory growth.
-      const { removeTaskTelemetry } = await import('./engineStore').then((m) => m.useEngineStore.getState());
-      removeTaskTelemetry(id);
+      useEngineStore.getState().removeTaskTelemetry(id);
       uiStore
         .getState()
         .addToast('warning', 'Download removed', `"${targetItem.name}" was removed from the daemon.${diskMessage}`);

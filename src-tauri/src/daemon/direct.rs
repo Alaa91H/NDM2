@@ -210,10 +210,12 @@ impl SegmentPlanner {
     }
 
     pub fn plan(&self, total_size: u64, connections: u32, output_path: &Path) -> Vec<SegmentRange> {
+        const MAX_SEGMENTS: u32 = 256;
         let count = connections
             .max(1)
             .min(self.max_connections)
-            .min(total_size.max(1) as u32) as usize;
+            .min(MAX_SEGMENTS)
+            .min(u32::try_from(total_size.max(1)).unwrap_or(MAX_SEGMENTS)) as usize;
         let base = total_size / count as u64;
         let rem = total_size % count as u64;
         let file_base = output_path
@@ -286,7 +288,14 @@ impl FileWriter {
     }
 
     pub fn merge_parts(output_path: &Path, ranges: &[SegmentRange]) -> Result<u64, String> {
-        let tmp_path = output_path.with_extension("nova-merge-tmp");
+        // Include a random suffix to prevent collisions if two NOVA processes
+        // merge the same file concurrently or the same file is re-downloaded.
+        let random_suffix: u64 = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos() as u64
+            ^ (std::process::id() as u64) << 24;
+        let tmp_path = output_path.with_extension(format!("nova-merge-tmp-{:x}", random_suffix));
         let _ = std::fs::remove_file(&tmp_path);
         let mut out = OpenOptions::new()
             .create(true)
@@ -315,9 +324,12 @@ impl FileWriter {
         out.sync_all()
             .map_err(|e| format!("Could not fsync merged file: {e}"))?;
         drop(out);
-        let _ = std::fs::remove_file(output_path);
-        std::fs::rename(&tmp_path, output_path)
-            .map_err(|e| format!("Could not finalize merged file: {e}"))?;
+        if std::fs::rename(&tmp_path, output_path).is_err() {
+            std::fs::remove_file(output_path)
+                .map_err(|e| format!("Could not remove file for merge: {e}"))?;
+            std::fs::rename(&tmp_path, output_path)
+                .map_err(|e| format!("Could not finalize merged file: {e}"))?;
+        }
         if let Some(parent) = output_path
             .parent()
             .filter(|path| !path.as_os_str().is_empty())
@@ -481,15 +493,11 @@ pub fn record_host_ceiling(url: &str, ceiling: usize) {
     }
 }
 
-impl ConnectionLimits {}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EventLoopMode {
     WaitPerform,
     MultiSocket,
 }
-
-impl EventLoopMode {}
 
 #[derive(Clone, Debug, Default)]
 pub struct IntegrityMetadata {

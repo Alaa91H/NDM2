@@ -32,11 +32,10 @@ pub fn discover_tool(tool: &dyn ExternalTool, registry: &ToolRegistry) -> Vec<To
     }
 
     for name in tool.executable_names() {
-        if which_exists(name) {
-            let path = PathBuf::from(name);
-            if !candidates.iter().any(|c| c.path == path) {
+        if let Some(full_path) = which_on_path(name) {
+            if !candidates.iter().any(|c| c.path == full_path) {
                 candidates.push(ToolPathCandidate {
-                    path,
+                    path: full_path,
                     source: "PATH".to_string(),
                     exists: true,
                     is_executable: true,
@@ -78,14 +77,19 @@ fn is_executable_path(path: &std::path::Path) -> bool {
     }
 }
 
-fn which_exists(name: &str) -> bool {
+fn which_on_path(name: &str) -> Option<PathBuf> {
     let mut cmd = std::process::Command::new(if cfg!(windows) { "where" } else { "which" });
     crate::daemon::utils::hide_command_window(&mut cmd);
     if let Ok(output) = cmd.arg(name).output() {
-        output.status.success() && !output.stdout.is_empty()
-    } else {
-        false
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let line = stdout.lines().next().unwrap_or("").trim();
+            if !line.is_empty() {
+                return Some(PathBuf::from(line));
+            }
+        }
     }
+    None
 }
 
 #[cfg(test)]

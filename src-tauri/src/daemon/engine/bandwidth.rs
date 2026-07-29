@@ -75,18 +75,14 @@ impl BandwidthManager {
             return 0;
         }
         let global = self.effective_global_limit();
-        if global == 0 {
-            if let Ok(limits) = self.task_limits.lock() {
-                return limits.get(task_id).copied().unwrap_or(0);
-            }
-            return 0;
+        let per_task = self.task_limits.lock().ok()
+            .and_then(|limits| limits.get(task_id).copied());
+        match (global, per_task) {
+            (0, Some(t)) => t,
+            (0, None) => 0,
+            (g, Some(t)) => t.min(g),
+            (g, None) => g,
         }
-        if let Ok(limits) = self.task_limits.lock() {
-            if let Some(&per_task) = limits.get(task_id) {
-                return per_task.min(global);
-            }
-        }
-        global
     }
 
     pub fn set_global_limit(&self, kbps: u64) {

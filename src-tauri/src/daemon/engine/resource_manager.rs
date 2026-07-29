@@ -92,7 +92,38 @@ impl ResourceManager {
                 }
             }
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(target_os = "linux")]
+        {
+            if let Ok(content) = std::fs::read_to_string("/proc/meminfo") {
+                for line in content.lines() {
+                    if line.starts_with("MemTotal:") {
+                        if let Some(kb_str) = line.split_whitespace().nth(1) {
+                            if let Ok(kb) = kb_str.parse::<u64>() {
+                                return kb / 1024;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+            4096
+        }
+        #[cfg(target_os = "macos")]
+        {
+            use std::process::Command;
+            if let Ok(output) = Command::new("sysctl")
+                .args(["-n", "hw.memsize"])
+                .output()
+            {
+                if let Ok(s) = String::from_utf8(output.stdout) {
+                    if let Ok(bytes) = s.trim().parse::<u64>() {
+                        return bytes / (1024 * 1024);
+                    }
+                }
+            }
+            4096
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
         {
             4096
         }
@@ -128,7 +159,7 @@ impl UnifiedSnapshot {
     }
 
     pub fn is_disk_bottlenecked(&self) -> bool {
-        self.disk_write_mbps < 5 * 1024 * 1024 && self.disk_write_mbps > 0
+        self.disk_write_mbps < 5 && self.disk_write_mbps > 0
     }
 }
 

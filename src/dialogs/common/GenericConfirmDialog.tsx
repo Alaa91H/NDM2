@@ -15,8 +15,11 @@ export const GenericConfirmDialog: React.FC = () => {
   } = (dialog.payload || {}) as { message?: string; onConfirm?: () => void; isDanger?: boolean };
 
   const handleConfirm = () => {
-    if (onConfirm) onConfirm();
-    closeDialog();
+    try {
+      if (onConfirm) onConfirm();
+    } finally {
+      closeDialog();
+    }
   };
 
   return (

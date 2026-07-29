@@ -252,7 +252,7 @@ function EffectsProvider({ children }: { children: ReactNode }) {
           return true;
         } catch (e) {
           if (attempt < 39) {
-            const delay = Math.min(100 * (1 << attempt), 2000);
+            const delay = Math.min(100 * Math.pow(2, attempt), 2000);
             await new Promise((r) => setTimeout(r, delay));
           } else {
             logger.error('AppStore', 'Daemon connection failed after 40 attempts', { error: e instanceof Error ? e.message : String(e) });

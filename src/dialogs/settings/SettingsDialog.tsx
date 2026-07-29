@@ -86,16 +86,14 @@ export const SettingsDialog: React.FC = () => {
   const REJECTED_KEY_PATTERN = /[^a-zA-Z0-9_]/;
   const updateLocalSetting = (section: keyof AppSettings, key: string, value: unknown) => {
     if (REJECTED_KEY_PATTERN.test(key)) return;
-    setLocalSettings((prev) => {
-      const updated = { ...prev };
-      if (typeof updated[section] === 'object') {
-        (updated[section] as Record<string, unknown>)[key] = value;
-      } else {
-        (updated as Record<string, unknown>)[section] = value;
-      }
-      updateSettings(updated, true);
-      return updated;
-    });
+    const updated = { ...localSettings };
+    if (typeof updated[section] === 'object') {
+      (updated[section] as Record<string, unknown>)[key] = value;
+    } else {
+      (updated as Record<string, unknown>)[section] = value;
+    }
+    setLocalSettings(updated);
+    updateSettings(updated, true);
   };
 
   const handleResetDaemonTabSilent = () => {

@@ -11,27 +11,19 @@ pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) 
 /// and we always prefer availability over correctness after poison.
 #[macro_export]
 macro_rules! lock_or_err {
-    ($mutex:expr, $default:expr) => {
+    ($mutex:expr) => {
         match $mutex.lock() {
             Ok(guard) => guard,
             Err(poisoned) => {
-                log::warn!(
-                    "Mutex poisoned at {}:{}, recovering (previous holder may have panicked): {}",
+                log::error!(
+                    "Mutex poisoned at {}:{} ({}), recovering — data may be inconsistent",
                     file!(),
                     line!(),
                     poisoned
                 );
-                #[cfg(debug_assertions)]
-                log::debug!(
-                    "Poison backtrace: {}",
-                    std::backtrace::Backtrace::force_capture()
-                );
                 poisoned.into_inner()
             }
         }
-    };
-    ($mutex:expr) => {
-        lock_or_err!($mutex, ())
     };
 }
 
@@ -52,7 +44,12 @@ pub fn is_safe_target_url(raw: &str) -> Result<(), String> {
     if authority.contains('@') {
         return Err("SSRF blocked: URL contains userinfo (e.g. user@host)".to_string());
     }
-    let host = authority.split(':').next().unwrap_or("");
+    let host = authority
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .trim_start_matches('[')
+        .trim_end_matches(']');
     if host.is_empty() || host == "localhost" {
         return Err("Host is empty or localhost".to_string());
     }

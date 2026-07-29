@@ -722,13 +722,11 @@ pub(crate) fn apply_easy_options<H: Handler>(
             .map_err(|e| format!("Could not enable SSL host verification: {e}"))?;
     }
     if let Some(proxy_user) = plan.config.str_("proxyUser") {
+        easy.proxy_username(proxy_user)
+            .map_err(|e| format!("Could not configure proxy username: {e}"))?;
         if let Some(proxy_pass) = plan.config.str_("proxyPassword") {
-            let cred = format!("{}:{}", proxy_user, proxy_pass);
-            easy.proxy_username(&cred)
-                .map_err(|e| format!("Could not configure proxy credentials: {e}"))?;
-        } else {
-            easy.proxy_username(proxy_user)
-                .map_err(|e| format!("Could not configure proxy username: {e}"))?;
+            easy.proxy_password(proxy_pass)
+                .map_err(|e| format!("Could not configure proxy password: {e}"))?;
         }
     }
     if let Some(proxy_auth_val) = plan.config.str_("proxyAnyAuth") {
@@ -1074,10 +1072,14 @@ pub(crate) fn apply_easy_options<H: Handler>(
             .map_err(|e| format!("Could not configure max connection age: {e}"))?;
     }
     if let Some(range) = plan.config.str_("localPortRange") {
-        if let Some((start, _end)) = range.split_once('-') {
-            if let Ok(s) = start.trim().parse::<u16>() {
-                easy.local_port_range(s)
-                    .map_err(|err| format!("Could not configure local port range: {err}"))?;
+        if let Some((start_str, end_str)) = range.split_once('-') {
+            if let (Ok(lo), Ok(hi)) = (start_str.trim().parse::<u16>(), end_str.trim().parse::<u16>()) {
+                if hi >= lo {
+                    easy.set_local_port(lo)
+                        .map_err(|err| format!("Could not configure local port: {err}"))?;
+                    easy.local_port_range(hi - lo + 1)
+                        .map_err(|err| format!("Could not configure local port range: {err}"))?;
+                }
             }
         }
     }

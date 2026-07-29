@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::net::ToSocketAddrs;
 use std::path::Path;
 
 use super::*;
@@ -94,6 +95,56 @@ fn push_optional_arg(
     if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
         if !safe_value(value) {
             return Err(format!("Rejected unsafe value for {}", flag));
+        }
+        push_arg(args, flag, value);
+    }
+    Ok(())
+}
+
+/// Reject proxy URLs whose hostname resolves to an internal/private IP.
+/// Prevents SSRF through the --proxy / --preproxy curl flags.
+fn proxy_resolves_to_internal(proxy: &str) -> bool {
+    let host = if proxy.contains("://") {
+        match proxy.split("://").nth(1).and_then(|rest| {
+            if rest.contains('@') {
+                rest.split('@').nth(1)
+            } else {
+                Some(rest)
+            }
+        }) {
+            Some(h) => h.split(':').next().unwrap_or(h).trim_start_matches('[').trim_end_matches(']'),
+            None => return false,
+        }
+    } else {
+        // Scheme-less proxy: treat as host:port (curl accepts "host:port" shorthand).
+        proxy.split('@').last().unwrap_or(proxy).split(':').next().unwrap_or(proxy).trim_start_matches('[').trim_end_matches(']')
+    };
+    if host.is_empty() {
+        return true; // empty host is suspicious
+    }
+    // Try parsing as literal IP first
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return crate::daemon::utils::is_internal_ip(ip);
+    }
+    // Resolve hostname
+    if let Ok(mut addrs) = (host, 0).to_socket_addrs() {
+        addrs.any(|addr| crate::daemon::utils::is_internal_ip(addr.ip()))
+    } else {
+        false // unresolvable — let curl decide at runtime
+    }
+}
+
+fn push_optional_proxy_arg(
+    args: &mut Vec<String>,
+    flag: &str,
+    value: Option<&str>,
+) -> Result<(), String> {
+    if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
+        if !safe_value(value) {
+            return Err(format!("Rejected unsafe value for {}", flag));
+        }
+        if proxy_resolves_to_internal(value) {
+            return Err(format!("Rejected proxy pointing to internal address for {}", flag));
         }
         push_arg(args, flag, value);
     }
@@ -244,8 +295,8 @@ pub(crate) fn build_curl_args_with_capabilities(
 
     let mut referer_from_direct = None;
     if let Some(dopts) = &body.direct_options {
-        push_optional_arg(&mut args, "--proxy", direct_str(dopts, "proxy"))?;
-        push_optional_arg(&mut args, "--preproxy", direct_str(dopts, "preProxy"))?;
+        push_optional_proxy_arg(&mut args, "--proxy", direct_str(dopts, "proxy"))?;
+        push_optional_proxy_arg(&mut args, "--preproxy", direct_str(dopts, "preProxy"))?;
         push_optional_arg(&mut args, "--noproxy", direct_str(dopts, "noproxy"))?;
         push_optional_arg(
             &mut args,

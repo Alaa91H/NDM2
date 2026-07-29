@@ -175,13 +175,16 @@ pub fn start_ytdlp_process(state: &SharedState, id: &str) {
         {
             Ok(mut child) => {
                 let child_pid = child.id();
-                let stdout = child.stdout.take();
-                let stderr = child.stderr.take();
                 let state2 = state.clone();
                 let id2 = id.to_string();
-                std::thread::spawn(move || {
-                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        if let Some(r) = stdout {
+
+                // Read stdout and stderr concurrently to prevent deadlock
+                // when the pipe buffer fills (CRITICAL #18).
+                let stdout_handle = child.stdout.take().map(|r| {
+                    std::thread::spawn({
+                        let state2 = state2.clone();
+                        let id2 = id2.clone();
+                        move || {
                             let reader = BufReader::new(r);
                             for line in reader.lines().map_while(Result::ok) {
                                 if !line.is_empty() {
@@ -189,13 +192,30 @@ pub fn start_ytdlp_process(state: &SharedState, id: &str) {
                                 }
                             }
                         }
-                        if let Some(e) = stderr {
-                            let reader = BufReader::new(e);
+                    })
+                });
+                let stderr_handle = child.stderr.take().map(|r| {
+                    std::thread::spawn({
+                        let id2 = id2.clone();
+                        move || {
+                            let reader = BufReader::new(r);
                             for line in reader.lines().map_while(Result::ok) {
                                 if !line.is_empty() {
                                     log::debug!("yt-dlp [{}]: {}", id2, line);
                                 }
                             }
+                        }
+                    })
+                });
+
+                std::thread::spawn(move || {
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        // Join reader threads first to ensure pipes are drained
+                        if let Some(h) = stdout_handle {
+                            let _ = h.join();
+                        }
+                        if let Some(h) = stderr_handle {
+                            let _ = h.join();
                         }
 
                         let status = child.wait().ok();

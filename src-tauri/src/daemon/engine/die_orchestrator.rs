@@ -66,7 +66,7 @@ impl DieOrchestrator {
     }
 
     pub fn register_connection(&mut self, host: &str, count: u32) {
-        *self.host_connections.entry(host.to_string()).or_insert(0) = count;
+        *self.host_connections.entry(host.to_string()).or_insert(0) += count;
     }
 
     pub fn release_connections(&mut self, host: &str, count: u32) {

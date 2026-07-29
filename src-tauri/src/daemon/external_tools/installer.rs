@@ -47,8 +47,10 @@ pub fn check_latest_version(tool: &dyn ExternalTool, http: &reqwest::Client) -> 
 }
 
 fn check_ffmpeg_latest(http: &reqwest::Client, os: &str) -> Result<UpdateInfo, String> {
+    let handle = tokio::runtime::Handle::try_current()
+        .map_err(|_| "No tokio runtime available for async operation".to_string())?;
     let response = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async {
+        handle.block_on(async {
             http.get("https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest")
                 .header("User-Agent", "NOVA-DownloadManager")
                 .send()
@@ -58,8 +60,10 @@ fn check_ffmpeg_latest(http: &reqwest::Client, os: &str) -> Result<UpdateInfo, S
 
     match response {
         Ok(resp) => {
+            let handle = tokio::runtime::Handle::try_current()
+                .map_err(|_| "No tokio runtime available for async operation".to_string())?;
             let body = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async { resp.text().await })
+                handle.block_on(async { resp.text().await })
             });
             match body {
                 Ok(body) => {
@@ -129,8 +133,10 @@ fn check_ffmpeg_latest(http: &reqwest::Client, os: &str) -> Result<UpdateInfo, S
 }
 
 fn check_ytdlp_latest(http: &reqwest::Client, os: &str) -> Result<UpdateInfo, String> {
+    let handle = tokio::runtime::Handle::try_current()
+        .map_err(|_| "No tokio runtime available for async operation".to_string())?;
     let response = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async {
+        handle.block_on(async {
             http.get("https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest")
                 .header("User-Agent", "NOVA-DownloadManager")
                 .send()
@@ -140,8 +146,10 @@ fn check_ytdlp_latest(http: &reqwest::Client, os: &str) -> Result<UpdateInfo, St
 
     match response {
         Ok(resp) => {
+            let handle = tokio::runtime::Handle::try_current()
+                .map_err(|_| "No tokio runtime available for async operation".to_string())?;
             let body = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async { resp.text().await })
+                handle.block_on(async { resp.text().await })
             });
             match body {
                 Ok(body) => {

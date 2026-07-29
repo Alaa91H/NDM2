@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -149,7 +149,8 @@ struct EventBusInner {
     task_index: HashMap<String, Vec<usize>>,
     next_id: AtomicU64,
     max_log_size: usize,
-    publishing: AtomicBool,
+    publish_depth: usize,
+    pending_events: Vec<EngineEvent>,
 }
 
 #[derive(Clone)]
@@ -167,7 +168,8 @@ impl EventBus {
                 task_index: HashMap::new(),
                 next_id: AtomicU64::new(1),
                 max_log_size: 10_000,
-                publishing: AtomicBool::new(false),
+                publish_depth: 0,
+                pending_events: Vec::new(),
             })),
         }
     }
@@ -181,37 +183,33 @@ impl EventBus {
                 task_index: HashMap::new(),
                 next_id: AtomicU64::new(1),
                 max_log_size,
-                publishing: AtomicBool::new(false),
+                publish_depth: 0,
+                pending_events: Vec::new(),
             })),
         }
     }
 
     pub fn publish(&self, event: EngineEvent) {
-        // Prevent reentrant deadlock: if a subscriber calls publish() while we're
-        // already publishing, skip the nested event to avoid locking the Mutex twice.
-        let already_publishing = self
-            .inner
-            .lock()
-            .map(|inner| inner.publishing.swap(true, Ordering::AcqRel))
-            .unwrap_or(true);
-        if already_publishing {
-            log::warn!("EventBus: reentrant publish detected — dropping event to prevent deadlock");
-            return;
-        }
-
-        let task_id_opt = event.task_id().map(|s| s.to_string());
-        let ts_event = {
+        // Phase 1: lock + decide whether to store or queue
+        let (ts_event, subscriber_clone) = {
             let mut inner = match self.inner.lock() {
                 Ok(g) => g,
                 Err(_) => {
-                    self.inner
-                        .lock()
-                        .map(|i| i.publishing.store(false, Ordering::Release))
-                        .ok();
+                    log::error!("EventBus: mutex poisoned, dropping event");
                     return;
                 }
             };
+
+            if inner.publish_depth > 0 {
+                // Reentrant call: queue for processing after outer publish completes.
+                inner.pending_events.push(event);
+                return;
+            }
+
+            inner.publish_depth = 1;
+
             let id = inner.next_id.fetch_add(1, Ordering::Relaxed);
+            let task_id_opt = event.task_id().map(|s| s.to_string());
             let ts_event = TimestampedEvent {
                 id,
                 event,
@@ -219,6 +217,7 @@ impl EventBus {
                 timestamp_millis: chrono::Utc::now().timestamp_millis().max(0) as u128,
             };
 
+            // Rotate log if at capacity.
             if inner.event_log.len() >= inner.max_log_size {
                 let drain_count = inner.max_log_size / 4;
                 inner.event_log.drain(..drain_count);
@@ -238,19 +237,15 @@ impl EventBus {
                 inner.task_index.entry(tid.clone()).or_default().push(idx);
             }
             inner.event_log.push(ts_event.clone());
-            ts_event
+            let subscriber_clone = inner
+                .subscribers
+                .iter()
+                .map(|(_, s)| s.clone())
+                .collect::<Vec<_>>();
+            (ts_event, subscriber_clone)
         };
-        let subscriber_clone = self
-            .inner
-            .lock()
-            .map(|inner| {
-                inner
-                    .subscribers
-                    .iter()
-                    .map(|(_, s)| s.clone())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+
+        // Phase 2: notify subscribers outside the lock so they can safely call back.
         for sub in &subscriber_clone {
             let _ = catch_unwind(AssertUnwindSafe(|| sub(&ts_event))).map_err(|e| {
                 let msg = if let Some(s) = e.downcast_ref::<&str>() {
@@ -263,11 +258,22 @@ impl EventBus {
                 log::error!("EventBus: subscriber panicked: {msg}");
             });
         }
-        // Clear the publishing guard.
-        self.inner
-            .lock()
-            .map(|inner| inner.publishing.store(false, Ordering::Release))
-            .ok();
+
+        // Phase 3: drain any events that were queued re-entrantly.
+        let pending = {
+            let mut inner = match self.inner.lock() {
+                Ok(g) => g,
+                Err(poison) => {
+                    log::error!("EventBus: mutex poisoned after publish, recovering");
+                    poison.into_inner()
+                }
+            };
+            inner.publish_depth = 0;
+            std::mem::take(&mut inner.pending_events)
+        };
+        for evt in pending {
+            self.publish(evt);
+        }
     }
 
     pub fn subscribe<F>(&self, callback: F) -> SubscriberId

@@ -58,22 +58,28 @@ pub fn load(data_dir: &str) -> PersistedState {
 }
 
 fn build_snapshot(state: &AppState) -> PersistedState {
-    // Acquire all 4 locks in a single scope to get a consistent snapshot
-    // and minimize the window where locks are held separately.
-    let media_jobs = lock_or_err!(state.media_jobs);
-    let curl_jobs = lock_or_err!(state.curl_jobs);
-    let snapshot = lock_or_err!(state.task_snapshot);
-    let telegram_last_update_id = *lock_or_err!(state.telegram_last_update_id);
+    // Acquire locks in documented order (media_jobs → curl_jobs → task_snapshot)
+    // within a block scope so curl_jobs is released before download_stats,
+    // preventing AB-BA deadlock with transfer.rs (which locks download_stats → curl_jobs).
+    let (media_args, curl_args, tasks, telegram_last_update_id) = {
+        let media_jobs = lock_or_err!(state.media_jobs);
+        let curl_jobs = lock_or_err!(state.curl_jobs);
+        let snapshot = lock_or_err!(state.task_snapshot);
 
-    let media_args: HashMap<String, Vec<String>> = media_jobs
-        .iter()
-        .map(|(id, job)| (id.clone(), job.args.clone()))
-        .collect();
-    let curl_args: HashMap<String, Vec<String>> = curl_jobs
-        .iter()
-        .map(|(id, job)| (id.clone(), job.args.clone()))
-        .collect();
-    let tasks: Vec<Task> = snapshot.values().cloned().collect();
+        let media_args: HashMap<String, Vec<String>> = media_jobs
+            .iter()
+            .map(|(id, job)| (id.clone(), job.args.clone()))
+            .collect();
+        let curl_args: HashMap<String, Vec<String>> = curl_jobs
+            .iter()
+            .map(|(id, job)| (id.clone(), job.args.clone()))
+            .collect();
+        let tasks: Vec<Task> = snapshot.values().cloned().collect();
+        let telegram_last_update_id = *lock_or_err!(state.telegram_last_update_id);
+        (media_args, curl_args, tasks, telegram_last_update_id)
+    };
+    let scheduler_rules = state.scheduler.rules();
+    let stats = lock_or_err!(state.download_stats).clone();
 
     PersistedState {
         version: 1,
@@ -81,12 +87,8 @@ fn build_snapshot(state: &AppState) -> PersistedState {
         media_args,
         curl_args,
         telegram_last_update_id,
-        scheduler_rules: state.scheduler.rules(),
-        stats: state
-            .download_stats
-            .lock()
-            .map(|s| s.clone())
-            .unwrap_or_default(),
+        scheduler_rules,
+        stats,
     }
 }
 
@@ -106,17 +108,36 @@ pub fn save(state: &AppState) -> bool {
         log::error!("Failed to write temporary state file: {}", e);
         return false;
     }
+    match std::fs::File::open(&tmp_path) {
+        Ok(f) => {
+            if let Err(e) = f.sync_all() {
+                log::warn!("Failed to sync temporary state file to disk: {}", e);
+            }
+        }
+        Err(e) => {
+            log::error!("Failed to open temporary state file for fsync: {}", e);
+            let _ = std::fs::remove_file(&tmp_path);
+            return false;
+        }
+    }
     if let Err(e) = std::fs::rename(&tmp_path, &path) {
         log::error!("Failed to rename state file into place: {}", e);
         let _ = std::fs::remove_file(&tmp_path);
         return false;
+    }
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        if let Ok(dir) = std::fs::File::open(parent) {
+            let _ = dir.sync_all();
+        }
     }
     true
 }
 
 /// Immediately persist the download state (used during graceful shutdown).
 pub fn save_now(state: &AppState) {
-    let _ = save(state);
+    if !save(state) {
+        log::error!("Failed to persist download state during shutdown");
+    }
 }
 
 /// Periodically flush the download state to disk whenever something changed.
@@ -146,7 +167,7 @@ pub fn start_persistence_loop(state: SharedState) {
             };
 
             tokio::time::sleep(Duration::from_secs(interval)).await;
-            if state.persist_dirty.swap(false, Ordering::Relaxed) {
+            if state.persist_dirty.swap(false, Ordering::Acquire) {
                 let state_clone = state.clone();
                 let result = tokio::task::spawn_blocking(move || save(&state_clone)).await;
                 // If save failed (or panicked), re-arm the dirty flag so the
@@ -154,11 +175,11 @@ pub fn start_persistence_loop(state: SharedState) {
                 // would be silently lost forever.
                 match result {
                     Ok(false) => {
-                        state.persist_dirty.store(true, Ordering::Relaxed);
+                        state.persist_dirty.store(true, Ordering::Release);
                     }
                     Err(join_err) => {
                         log::error!("Persistence task panicked; will retry: {}", join_err);
-                        state.persist_dirty.store(true, Ordering::Relaxed);
+                        state.persist_dirty.store(true, Ordering::Release);
                     }
                     _ => {}
                 }
@@ -270,6 +291,8 @@ mod tests {
             resource_manager: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::daemon::engine::resource_manager::ResourceManager::new(),
             )),
+            shutdown_requested: std::sync::atomic::AtomicBool::new(false),
+            watchdog_handles: std::sync::Mutex::new(Vec::new()),
         }
     }
 

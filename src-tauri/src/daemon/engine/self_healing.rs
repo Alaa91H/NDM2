@@ -105,6 +105,9 @@ impl SelfHealer {
     #[allow(dead_code)]
     pub fn on_success(&mut self, host: &str) {
         self.recovery_counts.remove(host);
+        if let Some(last) = self.failure_history.iter_mut().rev().find(|r| r.host == host) {
+            last.succeeded = true;
+        }
     }
 
     fn can_recover(&self) -> bool {

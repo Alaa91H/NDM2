@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::daemon::direct::{ConnectionLimits, EventLoopMode, RetryPolicy};
+use crate::daemon::direct::{EventLoopMode, RetryPolicy};
 
 fn opt_str(map: &HashMap<String, Value>, key: &str) -> Option<String> {
     map.get(key)
@@ -18,8 +18,10 @@ fn opt_bool(map: &HashMap<String, Value>, key: &str) -> Option<bool> {
 }
 
 fn opt_u64(map: &HashMap<String, Value>, key: &str) -> Option<u64> {
-    map.get(key)
-        .and_then(|v| v.as_u64().or_else(|| v.as_f64().map(|n| n.max(0.0) as u64)))
+    map.get(key).and_then(|v| {
+        v.as_u64()
+            .or_else(|| v.as_f64().map(|n| n.max(0.0).round() as u64))
+    })
 }
 
 fn opt_f64(map: &HashMap<String, Value>, key: &str) -> Option<f64> {
@@ -40,7 +42,7 @@ fn opt_str_vec(map: &HashMap<String, Value>, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CurlTransferConfig {
     pub proxy: Option<String>,
     pub pre_proxy: Option<String>,
@@ -168,6 +170,21 @@ pub struct CurlTransferConfig {
     pub mirror_priorities: Vec<u32>,
     pub rie_strategy: Option<String>,
     pub rie_connections: Option<u32>,
+}
+
+impl Default for CurlTransferConfig {
+    fn default() -> Self {
+        // These defaults must match the From<&HashMap> impl (line ~736:
+        // segmented: opt_bool(map, "segmented").unwrap_or(true))
+        // since production always constructs via From.
+        Self {
+            location: true,
+            fail_with_body: true,
+            compressed: true,
+            segmented: true,
+            ..Self::from(&HashMap::new())
+        }
+    }
 }
 
 impl CurlTransferConfig {
@@ -361,56 +378,13 @@ impl CurlTransferConfig {
                 .retry_max_time_sec
                 .filter(|v| *v > 0)
                 .map(std::time::Duration::from_secs),
-            retry_all_errors: self.retry_all_errors.unwrap_or(true),
+            retry_all_errors: self.retry_all_errors.unwrap_or(false),
             backoff_multiplier: self.backoff_multiplier.unwrap_or(2.0).clamp(1.0, 10.0),
             max_delay: std::time::Duration::from_secs(
                 self.retry_max_delay_sec.unwrap_or(120).min(3600),
             ),
             jitter: self.retry_jitter.unwrap_or(true),
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn connection_limits(&self, requested: u32, max_connections: u32) -> ConnectionLimits {
-        let requested = requested.max(1).min(max_connections) as usize;
-        let max_connections = max_connections.max(1) as usize;
-        let total = self
-            .max_total_connections
-            .map(|v| v as usize)
-            .unwrap_or(requested)
-            .clamp(1, max_connections);
-        let per_host = self
-            .max_host_connections
-            .map(|v| v as usize)
-            .unwrap_or(requested)
-            .clamp(1, total);
-        let cache = self
-            .max_connection_cache
-            .or(self.max_connects)
-            .map(|v| v as usize)
-            .unwrap_or_else(|| total.saturating_mul(2).max(total))
-            .clamp(1, max_connections.saturating_mul(4).max(1));
-        ConnectionLimits {
-            total,
-            per_host,
-            cache,
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn connection_limits_for_url(
-        &self,
-        requested: u32,
-        max_connections: u32,
-        url: &str,
-    ) -> ConnectionLimits {
-        let mut limits = self.connection_limits(requested, max_connections);
-        if self.max_host_connections.is_none() {
-            if let Some(learned) = crate::daemon::direct::learned_host_ceiling(url) {
-                limits.per_host = learned.min(limits.total).max(1);
-            }
-        }
-        limits
     }
 
     pub fn bandwidth_aware_connections(
@@ -763,7 +737,7 @@ mod tests {
         let config = CurlTransferConfig::new();
         assert!(config.proxy.is_none());
         assert!(!config.insecure);
-        assert!(!config.compressed);
+        assert!(config.compressed);
         assert_eq!(config.form.len(), 0);
     }
 
@@ -845,7 +819,7 @@ mod tests {
         let policy = config.retry_policy();
         assert_eq!(policy.attempts, 1);
         assert_eq!(policy.delay.as_secs(), 2);
-        assert!(policy.retry_all_errors);
+        assert!(!policy.retry_all_errors);
         assert_eq!(policy.backoff_multiplier, 2.0);
         assert_eq!(policy.max_delay.as_secs(), 120);
         assert!(policy.jitter);
@@ -915,35 +889,32 @@ mod tests {
 
     #[test]
     fn config_connection_limits_direct() {
+        let limits = crate::daemon::engine::config::global_config()
+            .connection_limits_for(8, "https://example.com/file");
+        assert_eq!(limits.total, 8);
+        assert_eq!(limits.per_host, 8);
+        assert!(limits.cache >= 8);
+    }
+
+    #[test]
+    fn config_connection_fields_mapped_correctly() {
         let mut map = HashMap::new();
         map.insert("maxTotalConnections".to_string(), serde_json::json!(16));
         map.insert("maxHostConnections".to_string(), serde_json::json!(4));
         map.insert("maxConnectionCache".to_string(), serde_json::json!(32));
 
         let config = CurlTransferConfig::from(&map);
-        let limits = config.connection_limits(8, 32);
-        assert_eq!(limits.total, 16);
-        assert_eq!(limits.per_host, 4);
-        assert_eq!(limits.cache, 32);
+        assert_eq!(config.max_total_connections, Some(16));
+        assert_eq!(config.max_host_connections, Some(4));
+        assert_eq!(config.max_connection_cache, Some(32));
     }
 
     #[test]
-    fn config_connection_limits_clamps_to_max() {
-        let mut map = HashMap::new();
-        map.insert("maxTotalConnections".to_string(), serde_json::json!(999));
-
-        let config = CurlTransferConfig::from(&map);
-        let limits = config.connection_limits(4, 16);
-        assert_eq!(limits.total, 16);
-    }
-
-    #[test]
-    fn config_connection_limits_defaults_from_requested() {
+    fn config_connection_defaults() {
         let config = CurlTransferConfig::new();
-        let limits = config.connection_limits(8, 32);
-        assert_eq!(limits.total, 8);
-        assert_eq!(limits.per_host, 8);
-        assert_eq!(limits.cache, 16);
+        assert_eq!(config.max_total_connections, None);
+        assert_eq!(config.max_host_connections, None);
+        assert_eq!(config.max_connection_cache, None);
     }
 
     #[test]

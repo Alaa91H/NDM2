@@ -39,8 +39,20 @@ impl ThreadPool {
                     match task {
                         Ok(task_fn) => {
                             ac.fetch_add(1, Ordering::Relaxed);
-                            task_fn();
+                            let result = std::panic::catch_unwind(
+                                std::panic::AssertUnwindSafe(task_fn),
+                            );
                             ac.fetch_sub(1, Ordering::Relaxed);
+                            if let Err(panic) = result {
+                                let msg = if let Some(s) = panic.downcast_ref::<&str>() {
+                                    s.to_string()
+                                } else if let Some(s) = panic.downcast_ref::<String>() {
+                                    s.clone()
+                                } else {
+                                    "unknown".to_string()
+                                };
+                                log::error!("Worker thread task panicked: {msg}");
+                            }
                         }
                         Err(_) => break,
                     }
@@ -57,7 +69,7 @@ impl ThreadPool {
         }
     }
 
-    #[cfg(test)]
+    #[allow(dead_code)]
     pub fn spawn<F: FnOnce() + Send + 'static>(&self, task: F) {
         if let Some(tx) = &self.tx {
             let _ = tx.send(Box::new(task));

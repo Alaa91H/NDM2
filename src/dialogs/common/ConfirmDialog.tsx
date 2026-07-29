@@ -55,7 +55,7 @@ export const ConfirmDialog: React.FC = () => {
       <div className="flex justify-end gap-2 pt-3 border-t border-[var(--border-color)]">
         <DialogButton
           onClick={() => {
-            void handleConfirm();
+            handleConfirm().catch(() => {});
           }}
           variant="danger"
           icon={Trash2}

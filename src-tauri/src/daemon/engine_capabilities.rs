@@ -1604,7 +1604,7 @@ fn media_option_requested(media: &MediaDownloadOptions, key: &str) -> bool {
             .remux_format
             .as_deref()
             .is_some_and(|v| !v.trim().is_empty()),
-        "ffmpegEnabled" => media.ffmpeg_enabled.is_some(),
+        "ffmpegEnabled" => media.ffmpeg_enabled == Some(true),
         "ffmpegLocation" => media
             .ffmpeg_location
             .as_deref()

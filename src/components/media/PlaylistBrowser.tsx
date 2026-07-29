@@ -35,7 +35,11 @@ export const PlaylistBrowser: React.FC<PlaylistBrowserProps> = ({
           type="button"
           onClick={() => {
             onSelectAllChange(!selectAllPlaylist);
-            if (!selectAllPlaylist) onSelectedItemsChange(new Set(playlistResult.entries.map((e) => e.index)));
+            if (!selectAllPlaylist) {
+              onSelectedItemsChange(new Set(playlistResult.entries.map((e) => e.index)));
+            } else {
+              onSelectedItemsChange(new Set());
+            }
           }}
           className="flex items-center gap-1 text-[10px] text-[var(--info)] hover:text-[var(--info)] transition-colors cursor-pointer"
         >

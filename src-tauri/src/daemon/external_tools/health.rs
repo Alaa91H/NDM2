@@ -1,6 +1,9 @@
 use super::types::{ExternalTool, ToolId, ToolStatus};
 use crate::daemon::utils::hide_command_window;
+use std::io::Read;
 use std::process::Command;
+use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
@@ -89,24 +92,30 @@ fn run_version_check(tool: &dyn ExternalTool, path: &std::path::Path) -> Result<
 
     let deadline = Instant::now() + timeout;
 
-    let output = loop {
+    // Read stdout and stderr concurrently to prevent pipe-buffer deadlock
+    let (tx, rx) = mpsc::channel();
+    let stdout_thread = child.stdout.take().map(|mut r| {
+        let tx = tx.clone();
+        thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = r.read_to_end(&mut buf);
+            let _ = tx.send(("stdout", buf));
+        })
+    });
+    let stderr_thread = child.stderr.take().map(|mut r| {
+        let tx = tx.clone();
+        thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = r.read_to_end(&mut buf);
+            let _ = tx.send(("stderr", buf));
+        })
+    });
+    // Drop the original sender so the channel closes when reader threads finish
+    drop(tx);
+
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(status)) => {
-                use std::io::Read;
-                let mut stdout_buf = Vec::new();
-                let mut stderr_buf = Vec::new();
-                if let Some(ref mut h) = child.stdout {
-                    let _ = h.read_to_end(&mut stdout_buf);
-                }
-                if let Some(ref mut h) = child.stderr {
-                    let _ = h.read_to_end(&mut stderr_buf);
-                }
-                break std::process::Output {
-                    status,
-                    stdout: stdout_buf,
-                    stderr: stderr_buf,
-                };
-            }
+            Ok(Some(s)) => break s,
             Ok(None) => {
                 if Instant::now() >= deadline {
                     let _ = child.kill();
@@ -117,6 +126,28 @@ fn run_version_check(tool: &dyn ExternalTool, path: &std::path::Path) -> Result<
             }
             Err(e) => return Err(format!("Version check failed: {}", e)),
         }
+    };
+
+    if let Some(h) = stdout_thread {
+        let _ = h.join();
+    }
+    if let Some(h) = stderr_thread {
+        let _ = h.join();
+    }
+
+    let mut stdout_buf = Vec::new();
+    let mut stderr_buf = Vec::new();
+    for (kind, buf) in rx.iter() {
+        match kind {
+            "stdout" => stdout_buf = buf,
+            "stderr" => stderr_buf = buf,
+            _ => {}
+        }
+    }
+    let output = std::process::Output {
+        status,
+        stdout: stdout_buf,
+        stderr: stderr_buf,
     };
 
     if !output.status.success() {

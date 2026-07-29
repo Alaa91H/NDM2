@@ -327,9 +327,14 @@ impl UnifiedProfileStore {
 
     pub fn save(&self) {
         if let Ok(json) = serde_json::to_string_pretty(&self.profiles) {
-            let _ =
-                fs::create_dir_all(self.save_path.parent().unwrap_or(std::path::Path::new(".")));
-            let _ = fs::write(&self.save_path, json);
+            if let Err(e) = fs::create_dir_all(
+                self.save_path.parent().unwrap_or(std::path::Path::new(".")),
+            ) {
+                log::error!("profile_store: failed to create dir: {e}");
+            }
+            if let Err(e) = fs::write(&self.save_path, json) {
+                log::error!("profile_store: failed to write {}: {e}", self.save_path.display());
+            }
         }
     }
 
@@ -405,7 +410,13 @@ mod tests {
     use super::*;
 
     fn temp_store() -> UnifiedProfileStore {
-        let dir = std::env::temp_dir().join(format!("nova_profile_test_{}", std::process::id()));
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static TEST_COUNTER: AtomicU32 = AtomicU32::new(0);
+        let n = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "nova_profile_test_{}_{n}",
+            std::process::id()
+        ));
         let _ = fs::create_dir_all(&dir);
         UnifiedProfileStore::with_path(dir.join("profiles.json"))
     }

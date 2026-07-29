@@ -237,7 +237,11 @@ impl MultiSocketRuntime {
 
             if update.token == 0 {
                 let token = self.next_token;
-                self.next_token = self.next_token.saturating_add(1);
+                self.next_token = if self.next_token == usize::MAX {
+                    1
+                } else {
+                    self.next_token + 1
+                };
                 multi.assign(update.socket, token).map_err(|e| {
                     wrap_multi_error(MultiErrorKind::SocketAssignment, e.to_string())
                 })?;

@@ -720,112 +720,102 @@ async fn background_resolve_and_start(state: SharedState, task_id: String, origi
         }
     };
 
-    // ── Apply enriched metadata to task snapshot + curl job ─────────────
+    // ── Apply enriched metadata to curl job first, then task snapshot ──
+    // Lock order: curl_jobs → task_snapshot (documented order).
     let mut updates_applied = false;
+    let mut deferred_url_update: Option<String> = None;
+    let mut deferred_name_update: Option<String> = None;
+
+    {
+        if let Ok(mut jobs) = state.curl_jobs.lock() {
+            if let Some(job) = jobs.get_mut(&task_id) {
+                if let Some(ref final_url) = metadata.final_url {
+                    if supported_direct_url(final_url) && final_url != &job.task.url {
+                        job.task.url = final_url.clone();
+                        deferred_url_update = Some(final_url.clone());
+                    }
+                }
+
+                let opts = &mut job.direct_options;
+                if let Some(ref etag) = metadata.etag {
+                    opts.entry("etag".to_string())
+                        .or_insert_with(|| serde_json::Value::String(etag.clone()));
+                }
+                if let Some(ref last_modified) = metadata.last_modified {
+                    opts.entry("lastModified".to_string())
+                        .or_insert_with(|| serde_json::Value::String(last_modified.clone()));
+                }
+                if let Some(ref digest) = metadata.digest_sha256 {
+                    opts.insert(
+                        "digestSha256".to_string(),
+                        serde_json::Value::String(digest.clone()),
+                    );
+                }
+                if let Some(ref ct) = metadata.content_type {
+                    opts.entry("contentType".to_string())
+                        .or_insert_with(|| serde_json::Value::String(ct.clone()));
+                }
+                if !metadata.link_mirrors.is_empty() {
+                    let mirrors: Vec<serde_json::Value> = metadata
+                        .link_mirrors
+                        .iter()
+                        .map(|m| serde_json::Value::String(m.clone()))
+                        .collect();
+                    opts.insert("linkMirrors".to_string(), serde_json::Value::Array(mirrors));
+                }
+                if job.task.size_bytes == 0 && metadata.size_bytes > 0 {
+                    job.task.size_bytes = metadata.size_bytes;
+                }
+                if let Some(ref probe_name) = metadata.file_name {
+                    let should_update = job.task.name == "download"
+                        || job.task.name.is_empty()
+                        || job
+                            .task
+                            .name
+                            .eq_ignore_ascii_case(&fallback_file_name(&job.task.url));
+                    if should_update {
+                        job.task.name = probe_name.clone();
+                        deferred_name_update = Some(probe_name.clone());
+                    }
+                }
+                job.task.resumable = metadata.resumable;
+                if let Some(ref strategy) = metadata.strategy {
+                    opts.insert(
+                        "rieStrategy".to_string(),
+                        serde_json::Value::String(strategy.clone()),
+                    );
+                }
+                if let Some(connections) = metadata.connections {
+                    opts.insert(
+                        "rieConnections".to_string(),
+                        serde_json::Value::Number(connections.into()),
+                    );
+                }
+                opts.insert(
+                    "preflightResolved".to_string(),
+                    serde_json::Value::Bool(true),
+                );
+                opts.insert(
+                    "preflightSupportsRange".to_string(),
+                    serde_json::Value::Bool(metadata.resumable),
+                );
+                updates_applied = true;
+            }
+        }
+    }
+
+    // Sync all changes to task_snapshot (single lock acquisition).
     if let Ok(mut tasks) = state.task_snapshot.lock() {
         if let Some(task) = tasks.get_mut(&task_id) {
             if task.size_bytes == 0 && metadata.size_bytes > 0 {
                 task.size_bytes = metadata.size_bytes;
-                updates_applied = true;
             }
             task.resumable = metadata.resumable;
-            if let Some(ref probe_name) = metadata.file_name {
-                let should_update = task.name == "download"
-                    || task.name.is_empty()
-                    || task
-                        .name
-                        .eq_ignore_ascii_case(&fallback_file_name(&task.url));
-                if should_update {
-                    task.name = probe_name.clone();
-                    updates_applied = true;
-                }
-            }
-        }
-    }
-
-    // Defer task_snapshot update to avoid nesting it inside curl_jobs lock
-    // (lock ordering: curl_jobs → task_snapshot is a deadlock risk).
-    let deferred_url_update: Option<String> = if let Some(ref final_url) = metadata.final_url {
-        if supported_direct_url(final_url) {
-            Some(final_url.clone())
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    if let Ok(mut jobs) = state.curl_jobs.lock() {
-        if let Some(job) = jobs.get_mut(&task_id) {
             if let Some(ref final_url) = deferred_url_update {
-                if final_url != &job.task.url {
-                    job.task.url = final_url.clone();
-                }
-            }
-
-            let opts = &mut job.direct_options;
-            if let Some(ref etag) = metadata.etag {
-                opts.entry("etag".to_string())
-                    .or_insert_with(|| serde_json::Value::String(etag.clone()));
-            }
-            if let Some(ref last_modified) = metadata.last_modified {
-                opts.entry("lastModified".to_string())
-                    .or_insert_with(|| serde_json::Value::String(last_modified.clone()));
-            }
-            if let Some(ref digest) = metadata.digest_sha256 {
-                opts.insert(
-                    "digestSha256".to_string(),
-                    serde_json::Value::String(digest.clone()),
-                );
-            }
-            if let Some(ref ct) = metadata.content_type {
-                opts.entry("contentType".to_string())
-                    .or_insert_with(|| serde_json::Value::String(ct.clone()));
-            }
-            if !metadata.link_mirrors.is_empty() {
-                let mirrors: Vec<serde_json::Value> = metadata
-                    .link_mirrors
-                    .iter()
-                    .map(|m| serde_json::Value::String(m.clone()))
-                    .collect();
-                opts.insert("linkMirrors".to_string(), serde_json::Value::Array(mirrors));
-            }
-            if job.task.size_bytes == 0 && metadata.size_bytes > 0 {
-                job.task.size_bytes = metadata.size_bytes;
-            }
-            if let Some(ref strategy) = metadata.strategy {
-                opts.insert(
-                    "rieStrategy".to_string(),
-                    serde_json::Value::String(strategy.clone()),
-                );
-            }
-            if let Some(connections) = metadata.connections {
-                opts.insert(
-                    "rieConnections".to_string(),
-                    serde_json::Value::Number(connections.into()),
-                );
-            }
-            // Signal that the RIE has completed a full preflight resolution
-            // using reqwest with anti-bot headers. The curl download thread
-            // should skip its own `resolve_effective_target` preflight to
-            // avoid redundant requests and inconsistent headers.
-            opts.insert(
-                "preflightResolved".to_string(),
-                serde_json::Value::Bool(true),
-            );
-            opts.insert(
-                "preflightSupportsRange".to_string(),
-                serde_json::Value::Bool(metadata.resumable),
-            );
-        }
-    }
-
-    // Apply the deferred URL update to task_snapshot separately (no lock nesting).
-    if let Some(final_url) = &deferred_url_update {
-        if let Ok(mut tasks) = state.task_snapshot.lock() {
-            if let Some(task) = tasks.get_mut(&task_id) {
                 task.url = final_url.clone();
-                updates_applied = true;
+            }
+            if let Some(ref name) = deferred_name_update {
+                task.name = name.clone();
             }
         }
     }

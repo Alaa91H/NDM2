@@ -176,7 +176,7 @@ export function setAuthToken(token: string): void {
 }
 
 function getApiBase(): string {
-  if (_apiBase !== undefined) return _apiBase;
+  if (_apiBase) return _apiBase;
   const envUrl = import.meta.env.VITE_NOVA_API_URL;
   if (envUrl) {
     _apiBase = envUrl.replace(/\/$/, '');
@@ -186,8 +186,7 @@ function getApiBase(): string {
     _apiBase = 'http://127.0.0.1:3199';
     return _apiBase;
   }
-  _apiBase = '';
-  return _apiBase;
+  return '';
 }
 
 /** Override the API base URL (used by Tauri to set the correct daemon port). */
@@ -891,7 +890,8 @@ async function request<T>(path: string, init?: RequestInit, timeoutMs = 2500): P
   try {
     return await doFetch(retryController.signal);
   } catch (err) {
-    if (err instanceof Error && !err.message.includes('HTTP 4')) {
+    const isIdempotent = method === 'GET' || method === 'HEAD' || method === 'OPTIONS';
+    if (isIdempotent && err instanceof Error && !err.message.includes('HTTP 4')) {
       logger.warn('NovaClient', `Retrying ${method} ${path} after transient error: ${err.message}`);
       await new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, 500);

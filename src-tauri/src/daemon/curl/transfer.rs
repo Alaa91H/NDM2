@@ -11,6 +11,7 @@ use crate::daemon::direct::{
     EventLoopMode, FileWriter, IntegrityMetadata, IntegrityValidator, RetryPolicy, SegmentPlanner,
     SegmentRange as ByteRange,
 };
+use crate::daemon::engine::adaptive::AdaptationAction;
 use crate::daemon::engine::config::global_config;
 use crate::daemon::engine::policy_engine::{DecisionCategory, DecisionContext};
 use crate::daemon::state::SharedState;
@@ -690,11 +691,8 @@ fn run_single_libcurl(
     } else {
         None
     };
-    let preallocate = if resume_existing == 0 && plan.total_size > 0 {
-        Some(plan.total_size)
-    } else {
-        None
-    };
+    let is_preallocated = resume_existing == 0 && plan.total_size > 0;
+    let preallocate = if is_preallocated { Some(plan.total_size) } else { None };
     let easy = create_easy_for_range_ext(
         plan,
         &plan.output_path,
@@ -720,9 +718,12 @@ fn run_single_libcurl(
     let cancel_for_tick = cancel.clone();
     let mut tick = || {
         let counter_bytes = downloaded_for_tick.load(Ordering::Relaxed);
-        let disk_bytes = FileWriter::current_size(&plan.output_path);
-        let effective_downloaded =
-            on_disk_before + counter_bytes.max(disk_bytes.saturating_sub(on_disk_before));
+        let effective_downloaded = if is_preallocated {
+            on_disk_before + counter_bytes
+        } else {
+            let disk_bytes = FileWriter::current_size(&plan.output_path);
+            on_disk_before + counter_bytes.max(disk_bytes.saturating_sub(on_disk_before))
+        };
         let now = Instant::now();
         let elapsed = now.duration_since(last_tick).as_secs_f64().max(0.001);
         let speed = effective_downloaded.saturating_sub(last_total) as f64 / elapsed;
@@ -1105,6 +1106,8 @@ fn run_segmented_libcurl(
     let mut tick = || {
         let now = Instant::now();
         let elapsed = now.duration_since(last_tick).as_secs_f64().max(0.001);
+        let mut seg_downloads = Vec::with_capacity(active.len());
+        let mut seg_speeds = Vec::with_capacity(active.len());
         for (i, (_range, progress, _initial)) in active.iter().enumerate() {
             let seg_downloaded = progress.load(Ordering::Relaxed);
             let seg_speed = if seg_downloaded > prev_seg_bytes[i] {
@@ -1117,18 +1120,41 @@ fn run_segmented_libcurl(
             telemetry_bus.report_bytes(i, seg_downloaded);
             telemetry_bus.report_speed(i, seg_speed);
             telemetry_bus.set_alive(i, true);
+            seg_downloads.push(seg_downloaded);
+            seg_speeds.push(seg_speed);
         }
         if let Ok(mut trackers) = state.engine_trackers.lock() {
             if let Some(tracker) = trackers.get_mut(id) {
                 if let Some(ref mut engine) = tracker.adaptive_engine {
+                    for (i, (&downloaded, &speed)) in seg_downloads.iter().zip(seg_speeds.iter()).enumerate() {
+                        engine.segment_ctrl.update_progress(i as u32, downloaded, speed);
+                    }
                     let decision = engine.evaluate(&telemetry_bus);
+                    for action in &decision.actions {
+                        match action {
+                            AdaptationAction::ThrottleAll { per_conn_bytes_per_sec } => {
+                                log::info!("Task {}: throttling all connections to {} Bps", id, per_conn_bytes_per_sec);
+                            }
+                            AdaptationAction::SplitSegment { segment_id, at_byte } => {
+                                log::info!("Task {}: split segment {} at byte {}", id, segment_id, at_byte);
+                            }
+                            AdaptationAction::MergeSegments { a, b } => {
+                                log::info!("Task {}: merge segments {} and {}", id, a, b);
+                            }
+                            AdaptationAction::Redistribute { from_seg, to_seg, bytes } => {
+                                log::info!("Task {}: redistribute {} bytes from seg {} to {}", id, bytes, from_seg, to_seg);
+                            }
+                            _ => {}
+                        }
+                    }
                     if decision.target_connections != engine.current_connections()
                         || !decision.actions.is_empty()
                     {
                         log::debug!(
-                            "Adaptive engine decision for task {}: conns={}, reason={}, confidence={:.2}",
+                            "Adaptive engine decision for task {}: conns={}, actions={}, reason={}, confidence={:.2}",
                             id,
                             decision.target_connections,
+                            decision.actions.len(),
                             decision.reason,
                             decision.confidence,
                         );
@@ -1195,7 +1221,7 @@ fn run_segmented_libcurl(
                 idx, code
             ));
         }
-        if code == 200 && plan.connections > 1 && is_http_family(&plan.url) {
+        if code == 200 && active.len() > 1 && is_http_family(&plan.url) {
             return Err("Server did not honor byte-range requests; retry with one connection or probe the URL again.".to_string());
         }
     }
@@ -1225,6 +1251,9 @@ fn run_libcurl_download(
     mut plan: DirectDownloadPlan,
     cancel: Arc<AtomicBool>,
 ) -> Result<u64, String> {
+    // Safety cap: no single download should retry for more than 24 hours,
+    // regardless of how the retry policy is configured or dynamically adapted.
+    const MAX_RETRY_WALL_TIME: std::time::Duration = std::time::Duration::from_secs(86400);
     log::info!(
         "Task {id}: run_libcurl_download entered — url={}, total_size={}, segmented={}, output={}",
         plan.url,
@@ -1302,14 +1331,15 @@ fn run_libcurl_download(
                 );
                 plan.output_path = renamed;
                 // Update the task snapshot so the UI shows the new filename.
-                if let Ok(mut tasks) = state.task_snapshot.lock() {
-                    if let Some(task) = tasks.get_mut(id) {
-                        task.save_path = plan.output_path.to_string_lossy().to_string();
-                    }
-                }
+                // Lock order: curl_jobs → task_snapshot (to match the rest of the codebase)
                 if let Ok(mut jobs) = state.curl_jobs.lock() {
                     if let Some(job) = jobs.get_mut(id) {
                         job.task.save_path = plan.output_path.to_string_lossy().to_string();
+                    }
+                }
+                if let Ok(mut tasks) = state.task_snapshot.lock() {
+                    if let Some(task) = tasks.get_mut(id) {
+                        task.save_path = plan.output_path.to_string_lossy().to_string();
                     }
                 }
                 state.mark_dirty();
@@ -1321,8 +1351,15 @@ fn run_libcurl_download(
         if cancel.load(Ordering::Acquire) {
             return Err("cancelled".to_string());
         }
+        if start_time.elapsed() >= MAX_RETRY_WALL_TIME {
+            log::warn!(
+                "Task {id}: retry wall-time limit ({MAX_RETRY_WALL_TIME:?}) exceeded, giving up"
+            );
+            break;
+        }
         if let Some(max_time) = retry_policy.max_total_time {
             if start_time.elapsed() >= max_time {
+                log::info!("Task {id}: retry max_total_time ({max_time:?}) exceeded, giving up");
                 break;
             }
         }
@@ -1634,6 +1671,9 @@ pub(crate) fn mark_curl_task_finished(
 ) {
     log::info!("Task {id}: download completed (final_size={final_size}, generation={generation})");
     state.priority_queue.stop_download(id);
+    // download_stats scoped to this block and released before curl_jobs
+    // is acquired below, preventing AB-BA deadlock with persist's
+    // build_snapshot (which acquires curl_jobs → download_stats).
     {
         if let Ok(mut stats) = state.download_stats.lock() {
             stats.total_completed += 1;
@@ -1642,7 +1682,7 @@ pub(crate) fn mark_curl_task_finished(
     }
     let mut jobs = lock_or_err!(state.curl_jobs);
     if let Some(job) = jobs.get_mut(id) {
-        if job.run_generation.load(Ordering::Relaxed) != generation {
+        if job.run_generation.load(Ordering::Acquire) != generation {
             return;
         }
         job.task.status = "completed".to_string();
@@ -1677,14 +1717,18 @@ pub(crate) fn mark_curl_task_failed(
     }
     // Always decrement active_downloads — both cancel and error release a slot.
     state.priority_queue.stop_download(id);
+    // download_stats scoped here; guard released before curl_jobs below
+    // (see build_snapshot in persist.rs for lock-ordering rationale).
     if !cancelled {
-        if let Ok(mut stats) = state.download_stats.lock() {
-            stats.total_failed += 1;
+        {
+            if let Ok(mut stats) = state.download_stats.lock() {
+                stats.total_failed += 1;
+            }
         }
     }
     let mut jobs = lock_or_err!(state.curl_jobs);
     if let Some(job) = jobs.get_mut(id) {
-        if job.run_generation.load(Ordering::Relaxed) != generation {
+        if job.run_generation.load(Ordering::Acquire) != generation {
             return;
         }
         job.task.status = if cancelled { "paused" } else { "error" }.to_string();
@@ -1747,6 +1791,7 @@ pub(crate) fn start_curl_process(state: &SharedState, id: &str) {
     state.priority_queue.start_download(id);
 
     let watchdog_cancel = record.1.clone();
+    let watchdog_generation = record.2;
     let watchdog_id = id.to_string();
     let watchdog_state = state.clone();
     let watchdog_expected = record.0.total_size;
@@ -1798,6 +1843,21 @@ pub(crate) fn start_curl_process(state: &SharedState, id: &str) {
                     let _ = std::fs::remove_file(&output_path);
                     remove_stale_parts_for(&output_path);
                 }
+                if cancelled {
+                    let watchdog_set_error = state2
+                        .curl_jobs
+                        .lock()
+                        .ok()
+                        .map(|j| j.get(&id2).map(|job| job.task.error_message.is_some()).unwrap_or(false))
+                        .unwrap_or(false);
+                    if watchdog_set_error {
+                        log::info!(
+                            "Task {id2}: watchdog already set error; preserving instead of marking cancelled"
+                        );
+                        state2.priority_queue.stop_download(&id2);
+                        return;
+                    }
+                }
                 mark_curl_task_failed(&state2, &id2, error, cancelled, generation);
             }
             Err(panic_info) => {
@@ -1825,7 +1885,7 @@ pub(crate) fn start_curl_process(state: &SharedState, id: &str) {
     } else {
         7200
     };
-    std::thread::spawn(move || {
+    let watchdog_handle = std::thread::spawn(move || {
         log::info!(
             "Watchdog started for task {watchdog_id} (hard deadline: {hard_deadline_secs}s)"
         );
@@ -1836,6 +1896,11 @@ pub(crate) fn start_curl_process(state: &SharedState, id: &str) {
 
         loop {
             std::thread::sleep(Duration::from_secs(3));
+
+            if watchdog_state.shutdown_requested.load(Ordering::Acquire) {
+                log::info!("Watchdog for {watchdog_id}: daemon shutting down, exiting");
+                return;
+            }
 
             if watchdog_cancel.load(Ordering::Acquire) {
                 log::info!("Watchdog for {watchdog_id}: cancel token already set, exiting");
@@ -1884,6 +1949,7 @@ pub(crate) fn start_curl_process(state: &SharedState, id: &str) {
                 force_error_status(
                     &watchdog_state,
                     &watchdog_id,
+                    watchdog_generation,
                     format!(
                         "Download stalled: no data received for {} seconds. The connection may have hung or the server stopped responding.",
                         stall_timeout.as_secs()
@@ -1901,6 +1967,7 @@ pub(crate) fn start_curl_process(state: &SharedState, id: &str) {
                 force_error_status(
                     &watchdog_state,
                     &watchdog_id,
+                    watchdog_generation,
                     format!(
                         "Download timed out after {} seconds. The transfer did not complete within the allowed time limit.",
                         hard_deadline_secs
@@ -1917,21 +1984,33 @@ pub(crate) fn start_curl_process(state: &SharedState, id: &str) {
             }
         }
     });
+    if let Ok(mut handles) = state.watchdog_handles.lock() {
+        handles.push(watchdog_handle);
+    }
 }
 
 /// Force a task to "error" status from an external thread (watchdog).
 /// This is used when the curl worker thread is stuck and cannot update
-/// the status itself. The generation check is skipped because the
-/// watchdog runs alongside the worker and is authoritative.
-fn force_error_status(state: &SharedState, id: &str, message: String) {
+/// the status itself. Checks the generation to prevent a stale watchdog
+/// from overwriting a restarted task's state.
+fn force_error_status(state: &SharedState, id: &str, generation: u64, message: String) {
     log::error!("Watchdog force-error for task {id}: {message}");
     state.priority_queue.stop_download(id);
-    if let Ok(mut stats) = state.download_stats.lock() {
-        stats.total_failed += 1;
+    {
+        if let Ok(mut stats) = state.download_stats.lock() {
+            stats.total_failed += 1;
+        }
     }
     let mut jobs = lock_or_err!(state.curl_jobs);
     if let Some(job) = jobs.get_mut(id) {
         if job.task.status == "completed" {
+            return;
+        }
+        if generation > 0 && job.run_generation.load(Ordering::Acquire) != generation {
+            log::info!(
+                "Watchdog for {id}: generation mismatch (ours={generation}, current={}), skipping",
+                job.run_generation.load(Ordering::Acquire)
+            );
             return;
         }
         job.task.status = "error".to_string();
@@ -1949,10 +2028,27 @@ fn force_error_status(state: &SharedState, id: &str, message: String) {
 /// Generate a unique filename by appending " (1)", " (2)", etc. before the
 /// extension, mirroring the browser's `uniquify` conflict resolution.
 /// Returns `None` only if the original path has no filename component.
+/// Uses atomic `create_new` to prevent TOCTOU races across concurrent tasks.
 fn auto_rename_path(original: &std::path::Path) -> Option<std::path::PathBuf> {
     let parent = original.parent()?;
     let stem = original.file_stem()?.to_str()?;
     let ext = original.extension().and_then(|e| e.to_str());
+
+    // Try atomic file creation to eliminate TOCTOU race with concurrent tasks.
+    let try_claim = |candidate: &std::path::PathBuf| -> bool {
+        match std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(candidate)
+        {
+            Ok(f) => {
+                drop(f);
+                let _ = std::fs::remove_file(candidate);
+                true
+            }
+            Err(_) => false,
+        }
+    };
 
     for counter in 1u32..=9999 {
         let new_stem = format!("{} ({})", stem, counter);
@@ -1962,20 +2058,24 @@ fn auto_rename_path(original: &std::path::Path) -> Option<std::path::PathBuf> {
         };
         let candidate = parent.join(&new_name);
         if !candidate.exists() {
-            return Some(candidate);
+            if try_claim(&candidate) {
+                return Some(candidate);
+            }
         }
     }
-    // Exhausted the counter; append a timestamp as a last resort.
+    // Exhausted the counter; append a timestamp + pid as a last resort.
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let new_stem = format!("{}_{}", stem, ts);
+    let new_stem = format!("{}_{}_{}", stem, ts, std::process::id());
     let new_name = match ext {
         Some(e) => format!("{}.{}", new_stem, e),
         None => new_stem,
     };
-    Some(parent.join(&new_name))
+    let candidate = parent.join(&new_name);
+    let _ = try_claim(&candidate);
+    Some(candidate)
 }
 
 #[cfg(test)]

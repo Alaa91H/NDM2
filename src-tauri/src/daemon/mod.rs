@@ -18,7 +18,7 @@ use axum::routing::get;
 use axum::Router;
 use reqwest::Client as HttpClient;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tower_http::compression::CompressionLayer;
@@ -32,6 +32,15 @@ use crate::daemon::types::{CreateDownloadBody, CurlJob, MediaJob, TelegramConfig
 use crate::lock_or_err;
 
 use crate::daemon::engine::extractor::{ExtractorRegistry, SharedExtractorRegistry};
+
+/// External shutdown signal, set by the host process (Tauri) to trigger
+/// graceful daemon shutdown via the graceful_shutdown future.
+pub static EXTERNAL_SHUTDOWN: AtomicBool = AtomicBool::new(false);
+
+/// Request the running daemon to shut down gracefully. Safe from any thread.
+pub fn signal_shutdown() {
+    EXTERNAL_SHUTDOWN.store(true, Ordering::Release);
+}
 
 /// Generate a random 32-char hex token for API authentication.
 fn generate_api_token() -> String {
@@ -121,7 +130,7 @@ fn resolve_engine_binary(resource_dir: &str, binary_name: &str) -> String {
         .find(|candidate| candidate.exists())
         .map(|candidate| candidate.display().to_string())
         .unwrap_or_else(|| {
-            log::warn!(
+            log::error!(
                 "{} not found in bundled locations; falling back to PATH lookup. \
                  This may be a security risk if PATH has been tampered with.",
                 binary_name
@@ -242,6 +251,8 @@ pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
                 resource_manager: Arc::new(Mutex::new(
                     crate::daemon::engine::resource_manager::ResourceManager::new(),
                 )),
+                shutdown_requested: std::sync::atomic::AtomicBool::new(false),
+                watchdog_handles: Mutex::new(Vec::new()),
             };
 
             let state = Arc::new(state);
@@ -281,7 +292,16 @@ pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
                 ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 loop {
                     ticker.tick().await;
-                    crate::daemon::routes::run_scheduler_tick(&scheduler_state).await;
+                    let state = scheduler_state.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let rt = tokio::runtime::Handle::current();
+                        if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            let _ = rt.block_on(crate::daemon::routes::run_scheduler_tick(&state));
+                        })) {
+                            let msg = if let Some(s) = e.downcast_ref::<&str>() { s.to_string() } else if let Some(s) = e.downcast_ref::<String>() { s.clone() } else { "unknown".to_string() };
+                            log::error!("Scheduler tick panicked: {msg}");
+                        }
+                    }).await.ok();
                 }
             });
 
@@ -386,17 +406,22 @@ pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
             }
             let shutdown_state = state.clone();
             let shutdown_signal = async move {
-                let _ = tokio::signal::ctrl_c().await;
-                log::info!("Shutdown signal received; pausing active downloads...");
-                {
-                    let mut curl = lock_or_err!(shutdown_state.curl_jobs);
-                    for job in curl.values_mut() {
-                        job.cancel_token
-                            .store(true, std::sync::atomic::Ordering::Release);
-                        job.task.status = "paused".to_string();
-                        job.task.engine_status = Some("shutdown".to_string());
+                let ctrl_c = tokio::signal::ctrl_c();
+                let external = async {
+                    loop {
+                        if EXTERNAL_SHUTDOWN.load(Ordering::Acquire) {
+                            break;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                     }
+                };
+                tokio::select! {
+                    _ = ctrl_c => {},
+                    _ = external => {},
                 }
+                EXTERNAL_SHUTDOWN.store(false, Ordering::Release);
+                log::info!("Shutdown signal received; pausing active downloads...");
+                // Lock in documented order: media_jobs, curl_jobs, task_snapshot
                 {
                     let mut media = lock_or_err!(shutdown_state.media_jobs);
                     for job in media.values_mut() {
@@ -407,7 +432,27 @@ pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
                         job.task.engine_status = Some("shutdown".to_string());
                     }
                 }
-                std::thread::sleep(std::time::Duration::from_millis(200));
+                {
+                    let mut curl = lock_or_err!(shutdown_state.curl_jobs);
+                    for job in curl.values_mut() {
+                        job.cancel_token
+                            .store(true, std::sync::atomic::Ordering::Release);
+                        job.task.status = "paused".to_string();
+                        job.task.engine_status = Some("shutdown".to_string());
+                    }
+                }
+                // Signal watchdog threads to exit.
+                shutdown_state
+                    .shutdown_requested
+                    .store(true, std::sync::atomic::Ordering::Release);
+                // Join watchdog handles (they will exit on next check loop after
+                // shutdown_requested is set).
+                for h in std::mem::take(
+                    &mut *lock_or_err!(shutdown_state.watchdog_handles),
+                ) {
+                    let _ = h.join();
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                 log::info!("Flushing state...");
                 crate::daemon::persist::save_now(&shutdown_state);
                 log::info!("State saved; shutting down daemon.");
@@ -441,6 +486,8 @@ fn restore_persisted_tasks(
 
     // Lock order must be media_jobs, curl_jobs, task_snapshot to match
     // the rest of the daemon and prevent deadlock.
+    // download_stats: must NOT be held simultaneously with curl_jobs
+    // (acquire in separate block scope) — see persist.rs build_snapshot.
     let mut media_jobs = match state.media_jobs.lock() {
         Ok(g) => g,
         Err(e) => {
@@ -493,7 +540,8 @@ fn restore_persisted_tasks(
             }
         } else if task.engine == "curl"
             || task.engine == "libcurl-multi"
-            || (task.engine != "yt-dlp" && task.url.starts_with("http://"))
+            || (task.engine != "yt-dlp"
+                && (task.url.starts_with("http://") || task.url.starts_with("https://")))
         {
             task.engine = "libcurl-multi".to_string();
             task.engine_id = task.id.clone();
