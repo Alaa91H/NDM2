@@ -117,7 +117,7 @@ fn proxy_resolves_to_internal(proxy: &str) -> bool {
         }
     } else {
         // Scheme-less proxy: treat as host:port (curl accepts "host:port" shorthand).
-        proxy.split('@').last().unwrap_or(proxy).split(':').next().unwrap_or(proxy).trim_start_matches('[').trim_end_matches(']')
+        proxy.split('@').next_back().unwrap_or(proxy).split(':').next().unwrap_or(proxy).trim_start_matches('[').trim_end_matches(']')
     };
     if host.is_empty() {
         return true; // empty host is suspicious

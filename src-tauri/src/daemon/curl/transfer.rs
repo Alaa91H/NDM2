@@ -2057,10 +2057,8 @@ fn auto_rename_path(original: &std::path::Path) -> Option<std::path::PathBuf> {
             None => new_stem,
         };
         let candidate = parent.join(&new_name);
-        if !candidate.exists() {
-            if try_claim(&candidate) {
+        if !candidate.exists() && try_claim(&candidate) {
                 return Some(candidate);
-            }
         }
     }
     // Exhausted the counter; append a timestamp + pid as a last resort.

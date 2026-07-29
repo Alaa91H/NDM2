@@ -296,7 +296,7 @@ pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
                     tokio::task::spawn_blocking(move || {
                         let rt = tokio::runtime::Handle::current();
                         if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            let _ = rt.block_on(crate::daemon::routes::run_scheduler_tick(&state));
+                            rt.block_on(crate::daemon::routes::run_scheduler_tick(&state));
                         })) {
                             let msg = if let Some(s) = e.downcast_ref::<&str>() { s.to_string() } else if let Some(s) = e.downcast_ref::<String>() { s.clone() } else { "unknown".to_string() };
                             log::error!("Scheduler tick panicked: {msg}");
