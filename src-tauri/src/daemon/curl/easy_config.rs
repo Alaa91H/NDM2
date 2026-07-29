@@ -1073,7 +1073,10 @@ pub(crate) fn apply_easy_options<H: Handler>(
     }
     if let Some(range) = plan.config.str_("localPortRange") {
         if let Some((start_str, end_str)) = range.split_once('-') {
-            if let (Ok(lo), Ok(hi)) = (start_str.trim().parse::<u16>(), end_str.trim().parse::<u16>()) {
+            if let (Ok(lo), Ok(hi)) = (
+                start_str.trim().parse::<u16>(),
+                end_str.trim().parse::<u16>(),
+            ) {
                 if hi >= lo {
                     easy.set_local_port(lo)
                         .map_err(|err| format!("Could not configure local port: {err}"))?;

@@ -351,10 +351,10 @@ fn check_tcp_endpoint(host: String, port: u16) -> Result<bool, String> {
     let dns_host = address.clone();
     std::thread::spawn(move || {
         let result = (|| -> Result<(std::net::SocketAddr, std::net::IpAddr), String> {
-            let mut resolved = dns_host
-                .to_socket_addrs()
-                .map_err(|e| e.to_string())?;
-            let socket_addr = resolved.next().ok_or_else(|| "No addresses resolved".to_string())?;
+            let mut resolved = dns_host.to_socket_addrs().map_err(|e| e.to_string())?;
+            let socket_addr = resolved
+                .next()
+                .ok_or_else(|| "No addresses resolved".to_string())?;
             let ip = socket_addr.ip();
             Ok((socket_addr, ip))
         })();
@@ -502,7 +502,13 @@ fn kill_old_daemon() {
         if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             kill_old_daemon_range(our_pid, preferred)
         })) {
-            let msg = if let Some(s) = e.downcast_ref::<&str>() { s.to_string() } else if let Some(s) = e.downcast_ref::<String>() { s.clone() } else { "unknown".to_string() };
+            let msg = if let Some(s) = e.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = e.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown".to_string()
+            };
             log::error!("kill_old_daemon thread panicked: {msg}");
         }
     });

@@ -39,9 +39,8 @@ impl ThreadPool {
                     match task {
                         Ok(task_fn) => {
                             ac.fetch_add(1, Ordering::Relaxed);
-                            let result = std::panic::catch_unwind(
-                                std::panic::AssertUnwindSafe(task_fn),
-                            );
+                            let result =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(task_fn));
                             ac.fetch_sub(1, Ordering::Relaxed);
                             if let Err(panic) = result {
                                 let msg = if let Some(s) = panic.downcast_ref::<&str>() {

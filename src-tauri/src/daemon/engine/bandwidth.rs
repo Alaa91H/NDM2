@@ -75,7 +75,10 @@ impl BandwidthManager {
             return 0;
         }
         let global = self.effective_global_limit();
-        let per_task = self.task_limits.lock().ok()
+        let per_task = self
+            .task_limits
+            .lock()
+            .ok()
             .and_then(|limits| limits.get(task_id).copied());
         match (global, per_task) {
             (0, Some(t)) => t,

@@ -114,7 +114,6 @@ impl EngineConfig {
             cache,
         }
     }
-
 }
 
 fn total_system_memory_bytes() -> u64 {
@@ -165,10 +164,7 @@ fn total_system_memory_bytes() -> u64 {
     #[cfg(target_os = "macos")]
     {
         use std::process::Command;
-        if let Ok(output) = Command::new("sysctl")
-            .args(["-n", "hw.memsize"])
-            .output()
-        {
+        if let Ok(output) = Command::new("sysctl").args(["-n", "hw.memsize"]).output() {
             if let Ok(s) = String::from_utf8(output.stdout) {
                 if let Ok(bytes) = s.trim().parse::<u64>() {
                     return bytes;

@@ -112,12 +112,25 @@ fn proxy_resolves_to_internal(proxy: &str) -> bool {
                 Some(rest)
             }
         }) {
-            Some(h) => h.split(':').next().unwrap_or(h).trim_start_matches('[').trim_end_matches(']'),
+            Some(h) => h
+                .split(':')
+                .next()
+                .unwrap_or(h)
+                .trim_start_matches('[')
+                .trim_end_matches(']'),
             None => return false,
         }
     } else {
         // Scheme-less proxy: treat as host:port (curl accepts "host:port" shorthand).
-        proxy.split('@').next_back().unwrap_or(proxy).split(':').next().unwrap_or(proxy).trim_start_matches('[').trim_end_matches(']')
+        proxy
+            .split('@')
+            .next_back()
+            .unwrap_or(proxy)
+            .split(':')
+            .next()
+            .unwrap_or(proxy)
+            .trim_start_matches('[')
+            .trim_end_matches(']')
     };
     if host.is_empty() {
         return true; // empty host is suspicious
@@ -144,7 +157,10 @@ fn push_optional_proxy_arg(
             return Err(format!("Rejected unsafe value for {}", flag));
         }
         if proxy_resolves_to_internal(value) {
-            return Err(format!("Rejected proxy pointing to internal address for {}", flag));
+            return Err(format!(
+                "Rejected proxy pointing to internal address for {}",
+                flag
+            ));
         }
         push_arg(args, flag, value);
     }

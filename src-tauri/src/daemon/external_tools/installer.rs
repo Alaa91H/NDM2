@@ -62,9 +62,7 @@ fn check_ffmpeg_latest(http: &reqwest::Client, os: &str) -> Result<UpdateInfo, S
         Ok(resp) => {
             let handle = tokio::runtime::Handle::try_current()
                 .map_err(|_| "No tokio runtime available for async operation".to_string())?;
-            let body = tokio::task::block_in_place(|| {
-                handle.block_on(async { resp.text().await })
-            });
+            let body = tokio::task::block_in_place(|| handle.block_on(async { resp.text().await }));
             match body {
                 Ok(body) => {
                     let json: serde_json::Value = serde_json::from_str(&body)
@@ -148,9 +146,7 @@ fn check_ytdlp_latest(http: &reqwest::Client, os: &str) -> Result<UpdateInfo, St
         Ok(resp) => {
             let handle = tokio::runtime::Handle::try_current()
                 .map_err(|_| "No tokio runtime available for async operation".to_string())?;
-            let body = tokio::task::block_in_place(|| {
-                handle.block_on(async { resp.text().await })
-            });
+            let body = tokio::task::block_in_place(|| handle.block_on(async { resp.text().await }));
             match body {
                 Ok(body) => {
                     let json: serde_json::Value = serde_json::from_str(&body)

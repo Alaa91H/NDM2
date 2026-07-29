@@ -215,7 +215,8 @@ impl SegmentPlanner {
             .max(1)
             .min(self.max_connections)
             .min(MAX_SEGMENTS)
-            .min(u32::try_from(total_size.max(1)).unwrap_or(MAX_SEGMENTS)) as usize;
+            .min(u32::try_from(total_size.max(1)).unwrap_or(MAX_SEGMENTS))
+            as usize;
         let base = total_size / count as u64;
         let rem = total_size % count as u64;
         let file_base = output_path

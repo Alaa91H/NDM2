@@ -187,8 +187,7 @@ impl ResourceMonitor {
             return 0.0;
         }
 
-        static PREV: std::sync::OnceLock<std::sync::Mutex<(u64, u64)>> =
-            std::sync::OnceLock::new();
+        static PREV: std::sync::OnceLock<std::sync::Mutex<(u64, u64)>> = std::sync::OnceLock::new();
         let prev = PREV.get_or_init(|| std::sync::Mutex::new((0, 0)));
         let mut guard = prev.lock().unwrap();
         let (prev_idle, prev_total) = *guard;

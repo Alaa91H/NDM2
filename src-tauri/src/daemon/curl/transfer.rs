@@ -692,7 +692,11 @@ fn run_single_libcurl(
         None
     };
     let is_preallocated = resume_existing == 0 && plan.total_size > 0;
-    let preallocate = if is_preallocated { Some(plan.total_size) } else { None };
+    let preallocate = if is_preallocated {
+        Some(plan.total_size)
+    } else {
+        None
+    };
     let easy = create_easy_for_range_ext(
         plan,
         &plan.output_path,
@@ -1126,23 +1130,51 @@ fn run_segmented_libcurl(
         if let Ok(mut trackers) = state.engine_trackers.lock() {
             if let Some(tracker) = trackers.get_mut(id) {
                 if let Some(ref mut engine) = tracker.adaptive_engine {
-                    for (i, (&downloaded, &speed)) in seg_downloads.iter().zip(seg_speeds.iter()).enumerate() {
-                        engine.segment_ctrl.update_progress(i as u32, downloaded, speed);
+                    for (i, (&downloaded, &speed)) in
+                        seg_downloads.iter().zip(seg_speeds.iter()).enumerate()
+                    {
+                        engine
+                            .segment_ctrl
+                            .update_progress(i as u32, downloaded, speed);
                     }
                     let decision = engine.evaluate(&telemetry_bus);
                     for action in &decision.actions {
                         match action {
-                            AdaptationAction::ThrottleAll { per_conn_bytes_per_sec } => {
-                                log::info!("Task {}: throttling all connections to {} Bps", id, per_conn_bytes_per_sec);
+                            AdaptationAction::ThrottleAll {
+                                per_conn_bytes_per_sec,
+                            } => {
+                                log::info!(
+                                    "Task {}: throttling all connections to {} Bps",
+                                    id,
+                                    per_conn_bytes_per_sec
+                                );
                             }
-                            AdaptationAction::SplitSegment { segment_id, at_byte } => {
-                                log::info!("Task {}: split segment {} at byte {}", id, segment_id, at_byte);
+                            AdaptationAction::SplitSegment {
+                                segment_id,
+                                at_byte,
+                            } => {
+                                log::info!(
+                                    "Task {}: split segment {} at byte {}",
+                                    id,
+                                    segment_id,
+                                    at_byte
+                                );
                             }
                             AdaptationAction::MergeSegments { a, b } => {
                                 log::info!("Task {}: merge segments {} and {}", id, a, b);
                             }
-                            AdaptationAction::Redistribute { from_seg, to_seg, bytes } => {
-                                log::info!("Task {}: redistribute {} bytes from seg {} to {}", id, bytes, from_seg, to_seg);
+                            AdaptationAction::Redistribute {
+                                from_seg,
+                                to_seg,
+                                bytes,
+                            } => {
+                                log::info!(
+                                    "Task {}: redistribute {} bytes from seg {} to {}",
+                                    id,
+                                    bytes,
+                                    from_seg,
+                                    to_seg
+                                );
                             }
                             _ => {}
                         }
@@ -1848,7 +1880,11 @@ pub(crate) fn start_curl_process(state: &SharedState, id: &str) {
                         .curl_jobs
                         .lock()
                         .ok()
-                        .map(|j| j.get(&id2).map(|job| job.task.error_message.is_some()).unwrap_or(false))
+                        .map(|j| {
+                            j.get(&id2)
+                                .map(|job| job.task.error_message.is_some())
+                                .unwrap_or(false)
+                        })
                         .unwrap_or(false);
                     if watchdog_set_error {
                         log::info!(
@@ -2058,7 +2094,7 @@ fn auto_rename_path(original: &std::path::Path) -> Option<std::path::PathBuf> {
         };
         let candidate = parent.join(&new_name);
         if !candidate.exists() && try_claim(&candidate) {
-                return Some(candidate);
+            return Some(candidate);
         }
     }
     // Exhausted the counter; append a timestamp + pid as a last resort.

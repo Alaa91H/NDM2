@@ -154,8 +154,7 @@ impl DownloadRuleEngine {
                 RuleCondition::HeaderContains { header, value } => {
                     let value_lower = value.to_lowercase();
                     headers.iter().any(|(k, v)| {
-                        k.eq_ignore_ascii_case(header)
-                            && v.to_lowercase().contains(&value_lower)
+                        k.eq_ignore_ascii_case(header) && v.to_lowercase().contains(&value_lower)
                     })
                 }
             });

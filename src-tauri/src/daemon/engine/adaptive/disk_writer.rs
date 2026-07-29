@@ -63,11 +63,15 @@ impl AsyncDiskWriter {
     pub fn write(&self, segment_id: u32, offset: u64, data: Vec<u8>) {
         let len = data.len() as u64;
         self.pending_bytes.fetch_add(len, Ordering::Relaxed);
-        if self.tx.send(WriteCommand::Data {
-            segment_id,
-            offset,
-            data,
-        }).is_err() {
+        if self
+            .tx
+            .send(WriteCommand::Data {
+                segment_id,
+                offset,
+                data,
+            })
+            .is_err()
+        {
             self.pending_bytes.fetch_sub(len, Ordering::Relaxed);
         }
     }
@@ -106,7 +110,6 @@ impl Drop for AsyncDiskWriter {
 }
 
 impl AsyncDiskWriter {
-
     fn writer_loop(
         rx: mpsc::Receiver<WriteCommand>,
         paths: BTreeMap<u32, String>,
