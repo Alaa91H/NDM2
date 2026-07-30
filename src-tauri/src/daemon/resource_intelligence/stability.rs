@@ -46,7 +46,7 @@ impl ServerProfileStore {
         // Record the probe.
         {
             if let Ok(mut history) = self.probe_history.lock() {
-                let records = history.entry(host.to_string()).or_insert_with(Vec::new);
+                let records = history.entry(host.to_owned()).or_insert_with(Vec::new);
                 records.push(ProbeRecord {
                     success,
                     response_time_ms,
@@ -77,10 +77,10 @@ impl ServerProfileStore {
             Err(_) => return,
         };
         let profile = profiles
-            .entry(host.to_string())
+            .entry(host.to_owned())
             .or_insert_with(ServerProfile::default);
 
-        profile.host = host.to_string();
+        profile.host = host.to_owned();
         profile.total_probes += 1;
         if success {
             profile.successful_probes += 1;
@@ -113,7 +113,7 @@ impl ServerProfileStore {
         // Stability score: weighted combination of success rate, consecutive failures,
         // and rate limit detection.
         let success_rate = profile.successful_probes as f64 / profile.total_probes.max(1) as f64;
-        let failure_penalty = (profile.consecutive_failures as f64 * 0.1).min(1.0);
+        let failure_penalty = (f64::from(profile.consecutive_failures) * 0.1).min(1.0);
         let rate_limit_penalty = if profile.rate_limit_detected {
             0.2
         } else {
@@ -164,16 +164,15 @@ impl ServerProfileStore {
         // Check consecutive failures at the end of the history.
         let mut consecutive_failures = 0u32;
         for record in history.iter().rev() {
-            if !record.success {
-                consecutive_failures += 1;
-            } else {
+            if record.success {
                 break;
             }
+            consecutive_failures += 1;
         }
 
-        let connection_failures = consecutive_failures as f64 / total;
+        let connection_failures = f64::from(consecutive_failures) / total;
         let overall =
-            (successes / total - rate_limit_freq * 0.3 - connection_failures * 0.2).clamp(0.0, 1.0);
+            connection_failures.mul_add(-0.2, rate_limit_freq.mul_add(-0.3, successes / total)).clamp(0.0, 1.0);
 
         StabilityAnalysis {
             response_stability: if variance < 1000.0 { 1.0 } else { 0.5 },

@@ -45,7 +45,7 @@ impl DieOrchestrator {
             .lock()
             .ok()
             .and_then(|store| store.get_for_host(host).cloned())
-            .map(|p| {
+            .map_or(requested, |p| {
                 if p.optimal_connections > 0 {
                     p.optimal_connections
                 } else if p.per_connection_ceiling > 0 {
@@ -57,8 +57,7 @@ impl DieOrchestrator {
                 } else {
                     requested
                 }
-            })
-            .unwrap_or(requested);
+            });
 
         let mut result = learned.min(host_available).min(global_available);
         result = result.max(1);
@@ -66,7 +65,7 @@ impl DieOrchestrator {
     }
 
     pub fn register_connection(&mut self, host: &str, count: u32) {
-        *self.host_connections.entry(host.to_string()).or_insert(0) += count;
+        *self.host_connections.entry(host.to_owned()).or_insert(0) += count;
     }
 
     pub fn release_connections(&mut self, host: &str, count: u32) {
@@ -99,15 +98,13 @@ impl DieOrchestrator {
     pub fn detect_plateau(&mut self, host: &str, recent_speeds: &[u64]) -> bool {
         self.profile_store
             .lock()
-            .map(|mut store| store.detect_bandwidth_plateau(host, recent_speeds))
-            .unwrap_or(false)
+            .is_ok_and(|mut store| store.detect_bandwidth_plateau(host, recent_speeds))
     }
 
     pub fn is_rate_limited(&self, host: &str) -> bool {
         self.profile_store
             .lock()
-            .map(|store| store.is_rate_limited(host))
-            .unwrap_or(false)
+            .is_ok_and(|store| store.is_rate_limited(host))
     }
 
     pub fn shutdown(&self) {

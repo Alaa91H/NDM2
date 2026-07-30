@@ -59,7 +59,7 @@ pub fn check_health(tool: &dyn ExternalTool, path: &std::path::Path) -> HealthRe
             } else {
                 report.executable_works = true;
                 report.status = ToolStatus::Broken;
-                report.error_message = Some("Could not parse version from output".to_string());
+                report.error_message = Some("Could not parse version from output".to_owned());
             }
         }
         Err(e) => {
@@ -120,11 +120,11 @@ fn run_version_check(tool: &dyn ExternalTool, path: &std::path::Path) -> Result<
                 if Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(format!("Version check timed out after {:?}", timeout));
+                    return Err(format!("Version check timed out after {timeout:?}"));
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
-            Err(e) => return Err(format!("Version check failed: {}", e)),
+            Err(e) => return Err(format!("Version check failed: {e}")),
         }
     };
 
@@ -137,7 +137,7 @@ fn run_version_check(tool: &dyn ExternalTool, path: &std::path::Path) -> Result<
 
     let mut stdout_buf = Vec::new();
     let mut stderr_buf = Vec::new();
-    for (kind, buf) in rx.iter() {
+    for (kind, buf) in &rx {
         match kind {
             "stdout" => stdout_buf = buf,
             "stderr" => stderr_buf = buf,
@@ -159,7 +159,7 @@ fn run_version_check(tool: &dyn ExternalTool, path: &std::path::Path) -> Result<
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     if stdout.trim().is_empty() {
-        return Err("Version command returned empty output".to_string());
+        return Err("Version command returned empty output".to_owned());
     }
 
     Ok(stdout)

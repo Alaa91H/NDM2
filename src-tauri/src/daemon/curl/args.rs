@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::net::ToSocketAddrs;
 use std::path::Path;
 
-use super::*;
+use super::PathBuf;
 use crate::daemon::direct::DirectUrl;
 use crate::daemon::engine::config::global_config;
 use crate::daemon::types::CreateDownloadBody;
@@ -31,7 +31,7 @@ const ALLOWED_CURL_RAW_OPTIONS: &[&str] = &[
 ];
 
 #[inline]
-pub(crate) fn direct_str<'a>(
+pub fn direct_str<'a>(
     direct_options: &'a HashMap<String, serde_json::Value>,
     key: &str,
 ) -> Option<&'a str> {
@@ -43,15 +43,15 @@ pub(crate) fn direct_str<'a>(
 }
 
 #[inline]
-pub(crate) fn direct_bool(
+pub fn direct_bool(
     direct_options: &HashMap<String, serde_json::Value>,
     key: &str,
 ) -> Option<bool> {
-    direct_options.get(key).and_then(|v| v.as_bool())
+    direct_options.get(key).and_then(serde_json::Value::as_bool)
 }
 
 #[inline]
-pub(crate) fn direct_u64(
+pub fn direct_u64(
     direct_options: &HashMap<String, serde_json::Value>,
     key: &str,
 ) -> Option<u64> {
@@ -60,7 +60,7 @@ pub(crate) fn direct_u64(
         .and_then(|v| v.as_u64().or_else(|| v.as_f64().map(|n| n.max(0.0) as u64)))
 }
 
-pub(crate) fn direct_array(
+pub fn direct_array(
     direct_options: &HashMap<String, serde_json::Value>,
     key: &str,
 ) -> Vec<String> {
@@ -73,14 +73,14 @@ pub(crate) fn direct_array(
                 .filter_map(|value| value.as_str())
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .map(str::to_string)
+                .map(str::to_owned)
                 .collect()
         })
         .unwrap_or_default()
 }
 
 #[inline]
-pub(crate) fn safe_value(value: &str) -> bool {
+pub fn safe_value(value: &str) -> bool {
     !value.is_empty()
         && !value
             .bytes()
@@ -94,7 +94,7 @@ fn push_optional_arg(
 ) -> Result<(), String> {
     if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
         if !safe_value(value) {
-            return Err(format!("Rejected unsafe value for {}", flag));
+            return Err(format!("Rejected unsafe value for {flag}"));
         }
         push_arg(args, flag, value);
     }
@@ -103,7 +103,7 @@ fn push_optional_arg(
 
 /// Reject proxy URLs whose hostname resolves to an internal/private IP.
 /// Prevents SSRF through the --proxy / --preproxy curl flags.
-fn proxy_resolves_to_internal(proxy: &str) -> bool {
+pub(crate) fn proxy_resolves_to_internal(proxy: &str) -> bool {
     let host = if proxy.contains("://") {
         match proxy.split("://").nth(1).and_then(|rest| {
             if rest.contains('@') {
@@ -139,11 +139,17 @@ fn proxy_resolves_to_internal(proxy: &str) -> bool {
     if let Ok(ip) = host.parse::<std::net::IpAddr>() {
         return crate::daemon::utils::is_internal_ip(ip);
     }
-    // Resolve hostname
-    if let Ok(mut addrs) = (host, 0).to_socket_addrs() {
-        addrs.any(|addr| crate::daemon::utils::is_internal_ip(addr.ip()))
-    } else {
-        false // unresolvable — let curl decide at runtime
+    // Resolve hostname with a timeout to avoid blocking the caller
+    // (which may be on the tokio runtime) indefinitely on a hung DNS.
+    let owned_host = host.to_owned();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = (owned_host.as_str(), 0).to_socket_addrs();
+        let _ = tx.send(result);
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+        Ok(Ok(mut addrs)) => addrs.any(|addr| crate::daemon::utils::is_internal_ip(addr.ip())),
+        _ => false,
     }
 }
 
@@ -154,12 +160,11 @@ fn push_optional_proxy_arg(
 ) -> Result<(), String> {
     if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
         if !safe_value(value) {
-            return Err(format!("Rejected unsafe value for {}", flag));
+            return Err(format!("Rejected unsafe value for {flag}"));
         }
         if proxy_resolves_to_internal(value) {
             return Err(format!(
-                "Rejected proxy pointing to internal address for {}",
-                flag
+                "Rejected proxy pointing to internal address for {flag}"
             ));
         }
         push_arg(args, flag, value);
@@ -175,14 +180,14 @@ fn push_optional_u64(args: &mut Vec<String>, flag: &str, value: Option<u64>) {
 
 fn push_bool_flag(args: &mut Vec<String>, enabled: Option<bool>, flag: &str) {
     if enabled == Some(true) {
-        args.push(flag.to_string());
+        args.push(flag.to_owned());
     }
 }
 
 fn push_array_args(args: &mut Vec<String>, flag: &str, values: Vec<String>) -> Result<(), String> {
     for value in values {
         if !safe_value(&value) {
-            return Err(format!("Rejected unsafe value for {}", flag));
+            return Err(format!("Rejected unsafe value for {flag}"));
         }
         push_arg(args, flag, &value);
     }
@@ -208,23 +213,25 @@ fn apply_raw_curl_options(args: &mut Vec<String>, raw_options: &str) -> Result<(
         .filter(|line| !line.is_empty())
     {
         let parts = crate::daemon::utils::shell_split(line);
-        let option = parts.first().map(String::as_str).unwrap_or("");
+        let option = parts.first().map_or("", String::as_str);
         let allowed = ALLOWED_CURL_RAW_OPTIONS
             .iter()
-            .any(|allowed| option == *allowed || option.starts_with(&format!("{}=", allowed)));
+            .any(|allowed| option == *allowed || option.starts_with(&format!("{allowed}=")));
         let safe = !line.contains(|c: char| {
             c == ';' || c == '|' || c == '&' || c == '$' || c == '`' || c == '\n' || c == '\r'
         });
         if !allowed || !safe {
-            return Err(format!("Rejected unsupported curl raw option '{}'", line));
+            return Err(format!("Rejected unsupported curl raw option '{line}'"));
         }
-        args.extend(parts);
+        if let Some(token) = parts.into_iter().next() {
+            args.push(token);
+        }
     }
     Ok(())
 }
 
 #[inline]
-pub(crate) fn requested_connections(connections: Option<u32>) -> u32 {
+pub fn requested_connections(connections: Option<u32>) -> u32 {
     let cfg = global_config();
     match connections.unwrap_or(0) {
         0 => cfg.initial_segments,
@@ -237,13 +244,13 @@ fn file_name_from_url(url: &str) -> String {
     let path = url.split('?').next().unwrap_or(url);
     let name = path.rsplit('/').next().unwrap_or("download").trim();
     if name.is_empty() {
-        "download".to_string()
+        "download".to_owned()
     } else {
-        name.to_string()
+        name.to_owned()
     }
 }
 
-pub(crate) fn destination_from_body(body: &CreateDownloadBody, url: &str) -> (String, PathBuf) {
+pub fn destination_from_body(body: &CreateDownloadBody, url: &str) -> (String, PathBuf) {
     let name = body.name.clone().unwrap_or_else(|| file_name_from_url(url));
     if let Some(save_path) = body
         .save_path
@@ -257,14 +264,14 @@ pub(crate) fn destination_from_body(body: &CreateDownloadBody, url: &str) -> (St
     (name.clone(), PathBuf::from(name))
 }
 
-pub(crate) fn build_curl_args(
+pub fn build_curl_args(
     body: &CreateDownloadBody,
     output_path: &Path,
 ) -> Result<Vec<String>, String> {
     build_curl_args_with_capabilities(body, output_path, true)
 }
 
-pub(crate) fn build_curl_args_with_capabilities(
+pub fn build_curl_args_with_capabilities(
     body: &CreateDownloadBody,
     output_path: &Path,
     fail_with_body_supported: bool,
@@ -276,7 +283,7 @@ pub(crate) fn build_curl_args_with_capabilities(
         || url.to_lowercase().ends_with(".torrent")
         || url.contains(".torrent?")
     {
-        return Err("curl/libcurl is the direct-download engine. Magnet and torrent tasks need a separate torrent engine.".to_string());
+        return Err("curl/libcurl is the direct-download engine. Magnet and torrent tasks need a separate torrent engine.".to_owned());
     }
 
     let direct_options = body.direct_options.as_ref();
@@ -289,24 +296,24 @@ pub(crate) fn build_curl_args_with_capabilities(
     let resumable = body.resumable.unwrap_or(true);
 
     let mut args = vec![
-        "--show-error".to_string(),
-        "--silent".to_string(),
-        "--create-dirs".to_string(),
-        "--output".to_string(),
+        "--show-error".to_owned(),
+        "--silent".to_owned(),
+        "--create-dirs".to_owned(),
+        "--output".to_owned(),
         output_path.to_string_lossy().to_string(),
     ];
     if follow_redirects {
-        args.push("--location".to_string());
+        args.push("--location".to_owned());
     }
     if fail_with_body && fail_with_body_supported {
-        args.push("--fail-with-body".to_string());
+        args.push("--fail-with-body".to_owned());
     } else {
-        args.push("--fail".to_string());
+        args.push("--fail".to_owned());
     }
 
     if resumable {
-        args.push("--continue-at".to_string());
-        args.push("-".to_string());
+        args.push("--continue-at".to_owned());
+        args.push("-".to_owned());
     }
 
     let mut referer_from_direct = None;
@@ -322,10 +329,10 @@ pub(crate) fn build_curl_args_with_capabilities(
         let ua = direct_str(dopts, "userAgent").unwrap_or(DEFAULT_USER_AGENT);
         push_arg(&mut args, "--user-agent", ua);
         if let Some(referer) = direct_str(dopts, "referer") {
-            referer_from_direct = Some(referer.to_string());
+            referer_from_direct = Some(referer.to_owned());
         }
         if let Some(speed) = direct_u64(dopts, "speedLimitKbs").filter(|speed| *speed > 0) {
-            push_arg(&mut args, "--limit-rate", &format!("{}K", speed));
+            push_arg(&mut args, "--limit-rate", &format!("{speed}K"));
         }
         if let Some(speed) = direct_u64(dopts, "speedLimitBytes").filter(|speed| *speed > 0) {
             push_arg(&mut args, "--limit-rate", &speed.to_string());
@@ -341,7 +348,7 @@ pub(crate) fn build_curl_args_with_capabilities(
         push_optional_u64(&mut args, "--speed-time", direct_u64(dopts, "speedTimeSec"));
         if let Some(username) = direct_str(dopts, "username") {
             let password = direct_str(dopts, "password").unwrap_or("");
-            push_arg(&mut args, "--user", &format!("{}:{}", username, password));
+            push_arg(&mut args, "--user", &format!("{username}:{password}"));
         }
         if let Some(retries) = direct_u64(dopts, "retryCount") {
             push_arg(&mut args, "--retry", &retries.to_string());
@@ -371,7 +378,7 @@ pub(crate) fn build_curl_args_with_capabilities(
         push_optional_arg(&mut args, "--range", direct_str(dopts, "range"))?;
         push_bool_flag(&mut args, direct_bool(dopts, "remoteTime"), "--remote-time");
         if direct_bool(dopts, "allowOverwrite") == Some(false) {
-            args.push("--no-clobber".to_string());
+            args.push("--no-clobber".to_owned());
         }
         if let Some(method) = direct_str(dopts, "requestMethod") {
             push_optional_arg(&mut args, "--request", Some(method))?;
@@ -385,11 +392,11 @@ pub(crate) fn build_curl_args_with_capabilities(
         // "safe" URL hostname could be redirected to an internal IP otherwise.
         for entry in direct_array(dopts, "resolve") {
             crate::daemon::utils::is_safe_resolve_entry(&entry)
-                .map_err(|e| format!("Rejected --resolve entry '{}': {}", entry, e))?;
+                .map_err(|e| format!("Rejected --resolve entry '{entry}': {e}"))?;
         }
         for entry in direct_array(dopts, "connectTo") {
             crate::daemon::utils::is_safe_resolve_entry(&entry)
-                .map_err(|e| format!("Rejected --connect-to entry '{}': {}", entry, e))?;
+                .map_err(|e| format!("Rejected --connect-to entry '{entry}': {e}"))?;
         }
         push_array_args(&mut args, "--resolve", direct_array(dopts, "resolve"))?;
         push_array_args(&mut args, "--connect-to", direct_array(dopts, "connectTo"))?;
@@ -425,14 +432,14 @@ pub(crate) fn build_curl_args_with_capabilities(
             .to_ascii_lowercase()
             .as_str()
         {
-            "1.0" | "http1.0" => args.push("--http1.0".to_string()),
-            "1.1" | "http1.1" => args.push("--http1.1".to_string()),
-            "2" | "http2" => args.push("--http2".to_string()),
+            "1.0" | "http1.0" => args.push("--http1.0".to_owned()),
+            "1.1" | "http1.1" => args.push("--http1.1".to_owned()),
+            "2" | "http2" => args.push("--http2".to_owned()),
             "2-prior-knowledge" | "http2-prior-knowledge" => {
-                args.push("--http2-prior-knowledge".to_string())
+                args.push("--http2-prior-knowledge".to_owned());
             }
-            "3" | "http3" => args.push("--http3".to_string()),
-            "3-only" | "http3-only" => args.push("--http3-only".to_string()),
+            "3" | "http3" => args.push("--http3".to_owned()),
+            "3-only" | "http3-only" => args.push("--http3-only".to_owned()),
             _ => {}
         }
         let mut headers = Vec::new();
@@ -457,6 +464,6 @@ pub(crate) fn build_curl_args_with_capabilities(
         push_arg(&mut args, "--referer", referer);
     }
 
-    args.push(url.to_string());
+    args.push(url.to_owned());
     Ok(args)
 }

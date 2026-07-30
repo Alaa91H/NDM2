@@ -128,7 +128,7 @@ impl ResourceManager {
 
     fn detect_disk_budget(connections: u32) -> u64 {
         let total_mbps = 100 * 1024 * 1024;
-        total_mbps / (connections as u64).max(1)
+        total_mbps / u64::from(connections).max(1)
     }
 }
 
@@ -155,7 +155,7 @@ impl UnifiedSnapshot {
         self.memory_pressure > 0.85
     }
 
-    pub fn is_disk_bottlenecked(&self) -> bool {
+    pub const fn is_disk_bottlenecked(&self) -> bool {
         self.disk_write_mbps < 5 && self.disk_write_mbps > 0
     }
 }

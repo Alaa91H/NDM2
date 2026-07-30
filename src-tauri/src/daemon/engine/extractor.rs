@@ -58,7 +58,7 @@ impl ExtractorRegistry {
         let url = body.url.as_deref().unwrap_or("");
         let extractor = self
             .select(url, has_media)
-            .ok_or_else(|| ValidateError(format!("No extractor found for URL: {}", url)))?;
+            .ok_or_else(|| ValidateError(format!("No extractor found for URL: {url}")))?;
         extractor.validate(body)?;
         Ok(extractor)
     }
@@ -81,7 +81,7 @@ impl SharedExtractorRegistry {
     pub fn validate(&self, body: &CreateDownloadBody) -> Result<Arc<dyn Extractor>, ValidateError> {
         self.0
             .lock()
-            .map_err(|e| ValidateError(format!("Registry lock poisoned: {}", e)))?
+            .map_err(|e| ValidateError(format!("Registry lock poisoned: {e}")))?
             .validate(body)
     }
 

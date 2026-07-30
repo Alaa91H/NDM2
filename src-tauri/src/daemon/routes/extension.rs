@@ -8,15 +8,17 @@ use axum::Router;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::time::Duration;
+use tokio_util::sync::CancellationToken;
 
 use crate::daemon::curl::{
-    create_curl_task as direct_create, delete_task, list_all_tasks, pause_task, resume_task,
+    create_curl_task as direct_create, delete_task, get_task, list_all_tasks, pause_task,
+    resume_task,
 };
 use crate::daemon::state::SharedState;
 use crate::daemon::types::CreateDownloadBody;
 use crate::daemon::ytdlp::create_ytdlp_task;
 
-use super::common::*;
+use super::common::{hidden_output_timed, PROBE_USER_AGENT, header_string, header_u64};
 use super::engine::extension_capabilities_from_status;
 
 use serde_json::json;
@@ -108,18 +110,16 @@ pub(super) fn read_browser_integration_state(data_dir: &str) -> (bool, bool) {
         .get("general")
         .and_then(|g| g.get("integrateWithBrowsers"))
         .and_then(|b| b.as_object())
-        .map(|m| m.values().any(|v| v.as_bool() == Some(true)))
-        .unwrap_or(true);
+        .map_or(true, |m| m.values().any(|v| v.as_bool() == Some(true)));
     let paired = cfg
         .get("extra")
         .and_then(|e| e.get("browserPairingToken"))
         .and_then(|t| t.as_str())
-        .map(|s| !s.is_empty())
-        .unwrap_or(false);
+        .is_some_and(|s| !s.is_empty());
     (enabled, paired)
 }
 
-pub(super) fn browser_ext_status(enabled: bool, paired: bool) -> &'static str {
+pub(super) const fn browser_ext_status(enabled: bool, paired: bool) -> &'static str {
     if enabled && paired {
         "connected"
     } else if enabled {
@@ -168,14 +168,24 @@ pub async fn handle_v1_list_tasks(State(state): State<SharedState>) -> Json<serd
     Json(serde_json::json!({"ok": true, "tasks": list_all_tasks(&state).await}))
 }
 
+pub async fn handle_v1_get_task(
+    State(state): State<SharedState>,
+    Path(id): Path<String>,
+) -> Json<serde_json::Value> {
+    match get_task(&state, &id) {
+        Some(task) => Json(serde_json::json!({"ok": true, "task": task})),
+        None => Json(serde_json::json!({"ok": false, "error": "Task not found"})),
+    }
+}
+
 pub(super) fn task_id_from_json(body: &serde_json::Value) -> Result<String, String> {
     body.get("taskId")
         .or_else(|| body.get("id"))
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|v| !v.is_empty())
-        .map(|v| v.to_string())
-        .ok_or_else(|| "Missing taskId".to_string())
+        .map(std::borrow::ToOwned::to_owned)
+        .ok_or_else(|| "Missing taskId".to_owned())
 }
 
 pub async fn handle_v1_pause_task_body(
@@ -265,8 +275,10 @@ pub async fn handle_v1_events(
         loop {
             interval.tick().await;
             let tasks = list_all_tasks(&state).await;
-            let payload = serde_json::to_string(&tasks).unwrap_or_else(|_| "[]".to_string());
-            if payload != last_payload {
+            let payload = serde_json::to_string(&tasks).unwrap_or_else(|_| "[]".to_owned());
+            if payload == last_payload {
+                yield Ok::<Event, Infallible>(Event::default().data(serde_json::json!({"type":"heartbeat", "at": now_str_for_events()}).to_string()));
+            } else {
                 last_payload = payload;
                 for task in &tasks {
                     let progress = if task.size_bytes > 0 { (task.downloaded_bytes as f64 / task.size_bytes as f64 * 100.0).clamp(0.0, 100.0) } else { 0.0 };
@@ -277,8 +289,6 @@ pub async fn handle_v1_events(
                         "progress": progress
                     }).to_string()));
                 }
-            } else {
-                yield Ok::<Event, Infallible>(Event::default().data(serde_json::json!({"type":"heartbeat", "at": now_str_for_events()}).to_string()));
             }
         }
     };
@@ -293,23 +303,22 @@ pub(super) fn json_str(value: &serde_json::Value, key: &str) -> Option<String> {
     value
         .get(key)
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
+        .map(std::borrow::ToOwned::to_owned)
         .filter(|s| !s.trim().is_empty())
 }
 
 pub(super) fn map_candidate_file_type(media_type: &str, extension: Option<&str>) -> String {
     match media_type {
-        "archive" => "compressed".to_string(),
-        "app" => "program".to_string(),
-        "document" | "video" | "audio" | "other" => media_type.to_string(),
-        "image" => "other".to_string(),
+        "archive" => "compressed".to_owned(),
+        "app" => "program".to_owned(),
+        "document" | "video" | "audio" | "other" => media_type.to_owned(),
+        "image" => "other".to_owned(),
         // For unknown media types, fall back to the unified extension map in
         // utils::file_type_from_extension so every code path classifies files
         // identically.
         _ => crate::daemon::utils::file_type_from_extension(
             extension.unwrap_or("").to_ascii_lowercase().as_str(),
-        )
-        .to_string(),
+        ).to_owned(),
     }
 }
 
@@ -328,8 +337,7 @@ pub(super) fn extension_candidate_to_download_body(
         .unwrap_or("");
     if matches!(media_type, "torrent" | "magnet") {
         return Err(
-            "Torrent and magnet candidates are not supported by the libcurl direct engine."
-                .to_string(),
+            "Torrent and magnet candidates are not supported by the libcurl direct engine.".to_owned(),
         );
     }
     let url = candidate
@@ -338,12 +346,12 @@ pub(super) fn extension_candidate_to_download_body(
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|v| !v.is_empty())
-        .ok_or_else(|| "Missing candidate URL".to_string())?;
+        .ok_or_else(|| "Missing candidate URL".to_owned())?;
     let is_stream_manifest =
         media_type == "manifest" || source == "hls-manifest" || source == "dash-manifest";
     if is_stream_manifest {
         if !(url.starts_with("http://") || url.starts_with("https://")) {
-            return Err("Only http(s) HLS/DASH manifests can be handed off to yt-dlp.".to_string());
+            return Err("Only http(s) HLS/DASH manifests can be handed off to yt-dlp.".to_owned());
         }
     } else if !(url.starts_with("http://")
         || url.starts_with("https://")
@@ -351,7 +359,7 @@ pub(super) fn extension_candidate_to_download_body(
         || url.starts_with("ftps://"))
     {
         return Err(
-            "Only http(s)/ftp(s) candidates can be handed off to libcurl multi.".to_string(),
+            "Only http(s)/ftp(s) candidates can be handed off to libcurl multi.".to_owned(),
         );
     }
     let mut direct_options = body
@@ -367,15 +375,15 @@ pub(super) fn extension_candidate_to_download_body(
         .get("referrer")
         .or_else(|| candidate.get("pageUrl"))
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+        .map(std::borrow::ToOwned::to_owned);
     if let Some(referrer) = referer.as_deref().filter(|v| !v.trim().is_empty()) {
         direct_options
-            .entry("referer".to_string())
+            .entry("referer".to_owned())
             .or_insert_with(|| serde_json::json!(referrer));
     }
     let media_options = if is_stream_manifest {
         let media = crate::daemon::types::MediaDownloadOptions {
-            mode: Some("video".to_string()),
+            mode: Some("video".to_owned()),
             playlist: Some(false),
             ffmpeg_enabled: Some(true),
             embed_metadata: Some(true),
@@ -390,10 +398,10 @@ pub(super) fn extension_candidate_to_download_body(
         None
     };
     Ok(CreateDownloadBody {
-        url: Some(url.to_string()),
+        url: Some(url.to_owned()),
         name: json_str(candidate, "filename").or_else(|| json_str(body, "name")),
         file_type: Some(if is_stream_manifest {
-            "video".to_string()
+            "video".to_owned()
         } else {
             map_candidate_file_type(
                 media_type,
@@ -402,10 +410,10 @@ pub(super) fn extension_candidate_to_download_body(
         }),
         size_bytes: candidate
             .get("sizeBytes")
-            .and_then(|v| v.as_u64())
-            .or_else(|| body.get("sizeBytes").and_then(|v| v.as_u64())),
+            .and_then(serde_json::Value::as_u64)
+            .or_else(|| body.get("sizeBytes").and_then(serde_json::Value::as_u64)),
         category: Some(if is_stream_manifest {
-            "video".to_string()
+            "video".to_owned()
         } else {
             map_candidate_file_type(
                 media_type,
@@ -415,19 +423,19 @@ pub(super) fn extension_candidate_to_download_body(
         queue_id: json_str(body, "queueId"),
         connections: body
             .get("connections")
-            .and_then(|v| v.as_u64())
+            .and_then(serde_json::Value::as_u64)
             .map(|v| v as u32),
         resumable: candidate
             .pointer("/headers/acceptRanges")
             .and_then(|v| v.as_str())
             .map(|v| v.eq_ignore_ascii_case("bytes"))
-            .or_else(|| body.get("resumable").and_then(|v| v.as_bool())),
+            .or_else(|| body.get("resumable").and_then(serde_json::Value::as_bool)),
         save_path: json_str(body, "savePath"),
         description: json_str(body, "description").or_else(|| {
             Some(if is_stream_manifest {
-                "Browser extension HLS/DASH stream via yt-dlp + FFmpeg".to_string()
+                "Browser extension HLS/DASH stream via yt-dlp + FFmpeg".to_owned()
             } else {
-                "Browser extension capture via runtime-verified libcurl multi".to_string()
+                "Browser extension capture via runtime-verified libcurl multi".to_owned()
             })
         }),
         referer,
@@ -454,20 +462,20 @@ pub(super) fn legacy_v1_body_to_download_body(
         .unwrap_or("")
         .trim();
     if url.is_empty() {
-        return Err("Missing url".to_string());
+        return Err("Missing url".to_owned());
     }
     Ok(CreateDownloadBody {
-        url: Some(url.to_string()),
+        url: Some(url.to_owned()),
         name: json_str(body, "name"),
         file_type: json_str(body, "fileType"),
-        size_bytes: body.get("sizeBytes").and_then(|v| v.as_u64()),
+        size_bytes: body.get("sizeBytes").and_then(serde_json::Value::as_u64),
         category: json_str(body, "category"),
         queue_id: json_str(body, "queueId"),
         connections: body
             .get("connections")
-            .and_then(|v| v.as_u64())
+            .and_then(serde_json::Value::as_u64)
             .map(|v| v as u32),
-        resumable: body.get("resumable").and_then(|v| v.as_bool()),
+        resumable: body.get("resumable").and_then(serde_json::Value::as_bool),
         save_path: json_str(body, "savePath"),
         description: json_str(body, "description"),
         referer: json_str(body, "referer"),
@@ -494,7 +502,7 @@ pub async fn handle_v1_add(
     };
     if let Some(ref url) = download_body.url {
         if let Err(e) = crate::daemon::utils::is_safe_target_url(url) {
-            log::warn!("Blocked SSRF in v1/add for {}: {}", url, e);
+            log::warn!("Blocked SSRF in v1/add for {url}: {e}");
             return Json(
                 serde_json::json!({"ok": false, "accepted": false, "taskId": "", "taskIds": [], "message": e}),
             );
@@ -525,7 +533,7 @@ pub async fn handle_v1_add(
             "message": "Added"
         })),
         Err(e) => {
-            log::error!("v1/add failed: {}", e);
+            log::error!("v1/add failed: {e}");
             Json(serde_json::json!({
                 "ok": false,
                 "accepted": false,
@@ -566,14 +574,14 @@ pub async fn handle_v1_stream_resolve(
         );
     }
     if let Err(e) = crate::daemon::utils::is_safe_target_url(url) {
-        log::warn!("Blocked stream resolve of unsafe URL {}: {}", url, e);
+        log::warn!("Blocked stream resolve of unsafe URL {url}: {e}");
         return Json(
             serde_json::json!({"ok": false, "resolved": false, "message": e, "qualities": []}),
         );
     }
 
     let ytdlp_bin = state.ytdlp_bin.clone();
-    let url2 = url.to_string();
+    let url2 = url.to_owned();
     let joined = tokio::task::spawn_blocking(move || {
         hidden_output_timed(
             &ytdlp_bin,
@@ -633,20 +641,20 @@ pub async fn handle_v1_stream_resolve(
             };
             let height = format
                 .get("height")
-                .and_then(|v| v.as_u64())
+                .and_then(serde_json::Value::as_u64)
                 .map(|v| v as u32);
             let width = format
                 .get("width")
-                .and_then(|v| v.as_u64())
+                .and_then(serde_json::Value::as_u64)
                 .map(|v| v as u32);
             let bandwidth = format
                 .get("tbr")
-                .and_then(|v| v.as_f64())
+                .and_then(serde_json::Value::as_f64)
                 .map(|v| (v * 1000.0).max(0.0) as u64)
                 .or_else(|| {
                     format
                         .get("abr")
-                        .and_then(|v| v.as_f64())
+                        .and_then(serde_json::Value::as_f64)
                         .map(|v| (v * 1000.0).max(0.0) as u64)
                 });
             let label = format
@@ -654,18 +662,18 @@ pub async fn handle_v1_stream_resolve(
                 .or_else(|| format.get("resolution"))
                 .or_else(|| format.get("format_id"))
                 .and_then(|v| v.as_str())
-                .map(|v| v.to_string())
-                .or_else(|| height.map(|h| format!("{}p", h)));
+                .map(std::borrow::ToOwned::to_owned)
+                .or_else(|| height.map(|h| format!("{h}p")));
             let mut q = serde_json::Map::new();
-            q.insert("url".to_string(), serde_json::json!(format_url));
+            q.insert("url".to_owned(), serde_json::json!(format_url));
             if let Some(width) = width {
-                q.insert("width".to_string(), serde_json::json!(width));
+                q.insert("width".to_owned(), serde_json::json!(width));
             }
             if let Some(height) = height {
-                q.insert("height".to_string(), serde_json::json!(height));
+                q.insert("height".to_owned(), serde_json::json!(height));
             }
             if let Some(bandwidth) = bandwidth {
-                q.insert("bandwidth".to_string(), serde_json::json!(bandwidth));
+                q.insert("bandwidth".to_owned(), serde_json::json!(bandwidth));
             }
             if let Some(codecs) = format
                 .get("vcodec")
@@ -673,41 +681,41 @@ pub async fn handle_v1_stream_resolve(
                 .and_then(|v| v.as_str())
                 .filter(|v| !v.is_empty() && *v != "none")
             {
-                q.insert("codecs".to_string(), serde_json::json!(codecs));
+                q.insert("codecs".to_owned(), serde_json::json!(codecs));
             }
             if let Some(label) = label.filter(|v| !v.is_empty()) {
-                q.insert("label".to_string(), serde_json::json!(label));
+                q.insert("label".to_owned(), serde_json::json!(label));
             }
             if let Some(format_id) = format
                 .get("format_id")
                 .and_then(|v| v.as_str())
                 .filter(|v| !v.is_empty())
             {
-                q.insert("formatId".to_string(), serde_json::json!(format_id));
+                q.insert("formatId".to_owned(), serde_json::json!(format_id));
             }
             if let Some(container) = format
                 .get("ext")
                 .and_then(|v| v.as_str())
                 .filter(|v| !v.is_empty())
             {
-                q.insert("container".to_string(), serde_json::json!(container));
+                q.insert("container".to_owned(), serde_json::json!(container));
             }
             if let Some(fps) = format
                 .get("fps")
-                .and_then(|v| v.as_f64())
+                .and_then(serde_json::Value::as_f64)
                 .filter(|v| *v > 0.0)
             {
-                q.insert("fps".to_string(), serde_json::json!(fps));
+                q.insert("fps".to_owned(), serde_json::json!(fps));
             }
             q.insert(
-                "hasVideo".to_string(),
+                "hasVideo".to_owned(),
                 serde_json::json!(format
                     .get("vcodec")
                     .and_then(|v| v.as_str())
                     .is_some_and(|v| v != "none")),
             );
             q.insert(
-                "hasAudio".to_string(),
+                "hasAudio".to_owned(),
                 serde_json::json!(format
                     .get("acodec")
                     .and_then(|v| v.as_str())
@@ -717,36 +725,36 @@ pub async fn handle_v1_stream_resolve(
         }
     }
     qualities.sort_by(|a, b| {
-        let ah = a.get("height").and_then(|v| v.as_u64()).unwrap_or(0);
-        let bh = b.get("height").and_then(|v| v.as_u64()).unwrap_or(0);
+        let ah = a.get("height").and_then(serde_json::Value::as_u64).unwrap_or(0);
+        let bh = b.get("height").and_then(serde_json::Value::as_u64).unwrap_or(0);
         bh.cmp(&ah)
     });
     qualities.dedup_by(|a, b| a.get("url") == b.get("url"));
 
     let mut payload = serde_json::Map::new();
-    payload.insert("ok".to_string(), serde_json::json!(true));
-    payload.insert("resolved".to_string(), serde_json::json!(true));
-    payload.insert("manifestType".to_string(), serde_json::json!(manifest_type));
-    payload.insert("qualities".to_string(), serde_json::Value::Array(qualities));
+    payload.insert("ok".to_owned(), serde_json::json!(true));
+    payload.insert("resolved".to_owned(), serde_json::json!(true));
+    payload.insert("manifestType".to_owned(), serde_json::json!(manifest_type));
+    payload.insert("qualities".to_owned(), serde_json::Value::Array(qualities));
     if let Some(duration) = info
         .get("duration")
-        .and_then(|v| v.as_f64())
+        .and_then(serde_json::Value::as_f64)
         .filter(|v| *v >= 0.0)
     {
-        payload.insert("durationSec".to_string(), serde_json::json!(duration));
+        payload.insert("durationSec".to_owned(), serde_json::json!(duration));
     }
-    if let Some(is_live) = info.get("is_live").and_then(|v| v.as_bool()) {
-        payload.insert("isLive".to_string(), serde_json::json!(is_live));
+    if let Some(is_live) = info.get("is_live").and_then(serde_json::Value::as_bool) {
+        payload.insert("isLive".to_owned(), serde_json::json!(is_live));
     }
-    payload.insert("drmProtected".to_string(), serde_json::json!(false));
-    payload.insert("subtitleTracks".to_string(), serde_json::json!([]));
-    payload.insert("audioTracks".to_string(), serde_json::json!([]));
+    payload.insert("drmProtected".to_owned(), serde_json::json!(false));
+    payload.insert("subtitleTracks".to_owned(), serde_json::json!([]));
+    payload.insert("audioTracks".to_owned(), serde_json::json!([]));
     if let Some(size) = info
         .get("filesize")
         .or_else(|| info.get("filesize_approx"))
-        .and_then(|v| v.as_u64())
+        .and_then(serde_json::Value::as_u64)
     {
-        payload.insert("estimatedSizeBytes".to_string(), serde_json::json!(size));
+        payload.insert("estimatedSizeBytes".to_owned(), serde_json::json!(size));
     }
     Json(serde_json::Value::Object(payload))
 }
@@ -758,7 +766,7 @@ pub async fn handle_v1_stream_add(
     let manifest = body.get("manifest").unwrap_or(&body);
     if manifest
         .get("drmProtected")
-        .and_then(|v| v.as_bool())
+        .and_then(serde_json::Value::as_bool)
         .unwrap_or(false)
     {
         return Json(
@@ -776,10 +784,10 @@ pub async fn handle_v1_stream_add(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .trim();
-    let url = if !manifest_url.is_empty() {
-        manifest_url
-    } else {
+    let url = if manifest_url.is_empty() {
         selected_url
+    } else {
+        manifest_url
     };
     if url.is_empty() || url.starts_with('-') {
         return Json(
@@ -787,13 +795,13 @@ pub async fn handle_v1_stream_add(
         );
     }
     if let Err(e) = crate::daemon::utils::is_safe_target_url(url) {
-        log::warn!("Blocked SSRF in stream/add for {}: {}", url, e);
+        log::warn!("Blocked SSRF in stream/add for {url}: {e}");
         return Json(
             serde_json::json!({"ok": false, "accepted": false, "taskId": "", "taskIds": [], "message": e}),
         );
     }
     let mut media_options = crate::daemon::types::MediaDownloadOptions {
-        mode: Some("video".to_string()),
+        mode: Some("video".to_owned()),
         playlist: Some(false),
         ffmpeg_enabled: Some(true),
         embed_metadata: Some(true),
@@ -804,7 +812,7 @@ pub async fn handle_v1_stream_add(
             .get("referrer")
             .or_else(|| manifest.get("pageUrl"))
             .and_then(|v| v.as_str())
-            .map(|v| v.to_string()),
+            .map(std::borrow::ToOwned::to_owned),
         ..Default::default()
     };
     if let Some(format_id) = selected
@@ -812,34 +820,33 @@ pub async fn handle_v1_stream_add(
         .and_then(|v| v.as_str())
         .filter(|v| !v.is_empty())
     {
-        media_options.format_selector = Some(format_id.to_string());
+        media_options.format_selector = Some(format_id.to_owned());
     } else if let Some(height) = selected
         .and_then(|q| q.get("height"))
-        .and_then(|v| v.as_u64())
+        .and_then(serde_json::Value::as_u64)
     {
-        media_options.quality = Some(format!("{}p", height));
+        media_options.quality = Some(format!("{height}p"));
         media_options.format_selector = Some(format!(
-            "bestvideo[height<={0}]+bestaudio/best[height<={0}]/best",
-            height
+            "bestvideo[height<={height}]+bestaudio/best[height<={height}]/best"
         ));
     }
     let body = CreateDownloadBody {
-        url: Some(url.to_string()),
+        url: Some(url.to_owned()),
         name: manifest
             .get("title")
             .and_then(|v| v.as_str())
-            .map(|v| v.to_string())
-            .or_else(|| Some("stream".to_string())),
-        file_type: Some("video".to_string()),
+            .map(std::borrow::ToOwned::to_owned)
+            .or_else(|| Some("stream".to_owned())),
+        file_type: Some("video".to_owned()),
         size_bytes: selected
             .and_then(|q| q.get("estimatedSizeBytes"))
-            .and_then(|v| v.as_u64()),
-        category: Some("video".to_string()),
+            .and_then(serde_json::Value::as_u64),
+        category: Some("video".to_owned()),
         queue_id: None,
         connections: Some(1),
         resumable: Some(true),
         save_path: None,
-        description: Some("Browser extension HLS/DASH stream via yt-dlp + FFmpeg".to_string()),
+        description: Some("Browser extension HLS/DASH stream via yt-dlp + FFmpeg".to_owned()),
         referer: media_options.referer.clone(),
         start_immediately: Some(true),
         direct_options: None,
@@ -872,8 +879,7 @@ pub async fn handle_v1_analyze(
         .get("url")
         .and_then(|v| v.as_str())
         .unwrap_or("")
-        .trim()
-        .to_string();
+        .trim().to_owned();
     if url.is_empty() {
         return Json(serde_json::json!({"ok": false, "stage": "init", "message": "Missing url"}));
     }
@@ -886,7 +892,7 @@ pub async fn handle_v1_analyze(
         );
     }
     if let Err(e) = crate::daemon::utils::is_safe_target_url(&url) {
-        log::warn!("Blocked SSRF in v1/analyze for {}: {}", url, e);
+        log::warn!("Blocked SSRF in v1/analyze for {url}: {e}");
         return Json(serde_json::json!({"ok": false, "stage": "init", "message": e}));
     }
 
@@ -919,19 +925,19 @@ pub async fn handle_v1_analyze(
         title = info
             .get("title")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
-        duration_sec = info.get("duration").and_then(|v| v.as_f64());
+            .map(std::borrow::ToOwned::to_owned);
+        duration_sec = info.get("duration").and_then(serde_json::Value::as_f64);
         thumbnail = info
             .get("thumbnail")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+            .map(std::borrow::ToOwned::to_owned);
         is_live = info
             .get("is_live")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         drm_protected = info
             .get("drm_protected")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
 
         if let Some(yt_formats) = info.get("formats").and_then(|v| v.as_array()) {
@@ -940,15 +946,15 @@ pub async fn handle_v1_analyze(
                     Some(u) => u,
                     None => continue,
                 };
-                let height = fmt.get("height").and_then(|v| v.as_u64()).map(|v| v as u32);
-                let width = fmt.get("width").and_then(|v| v.as_u64()).map(|v| v as u32);
+                let height = fmt.get("height").and_then(serde_json::Value::as_u64).map(|v| v as u32);
+                let width = fmt.get("width").and_then(serde_json::Value::as_u64).map(|v| v as u32);
                 let bandwidth = fmt
                     .get("tbr")
-                    .and_then(|v| v.as_f64())
+                    .and_then(serde_json::Value::as_f64)
                     .map(|v| (v * 1000.0).max(0.0) as u64)
                     .or_else(|| {
                         fmt.get("abr")
-                            .and_then(|v| v.as_f64())
+                            .and_then(serde_json::Value::as_f64)
                             .map(|v| (v * 1000.0).max(0.0) as u64)
                     });
                 let label = fmt
@@ -956,8 +962,8 @@ pub async fn handle_v1_analyze(
                     .or_else(|| fmt.get("resolution"))
                     .or_else(|| fmt.get("format_id"))
                     .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-                    .or_else(|| height.map(|h| format!("{}p", h)));
+                    .map(std::borrow::ToOwned::to_owned)
+                    .or_else(|| height.map(|h| format!("{h}p")));
                 let has_video = fmt
                     .get("vcodec")
                     .and_then(|v| v.as_str())
@@ -969,7 +975,7 @@ pub async fn handle_v1_analyze(
                 let estimated_size = fmt
                     .get("filesize")
                     .or_else(|| fmt.get("filesize_approx"))
-                    .and_then(|v| v.as_u64());
+                    .and_then(serde_json::Value::as_u64);
 
                 formats.push(json!({
                     "url": fmt_url,
@@ -980,13 +986,13 @@ pub async fn handle_v1_analyze(
                     "bandwidth": bandwidth,
                     "codecs": fmt.get("vcodec").or_else(|| fmt.get("acodec")).and_then(|v| v.as_str()).filter(|v| !v.is_empty() && *v != "none").unwrap_or(""),
                     "container": fmt.get("ext").and_then(|v| v.as_str()).unwrap_or(""),
-                    "fps": fmt.get("fps").and_then(|v| v.as_f64()).filter(|v| *v > 0.0),
+                    "fps": fmt.get("fps").and_then(serde_json::Value::as_f64).filter(|v| *v > 0.0),
                     "hasVideo": has_video,
                     "hasAudio": has_audio,
                     "estimatedSizeBytes": estimated_size,
-                    "tbr": fmt.get("tbr").and_then(|v| v.as_f64()),
-                    "vbr": fmt.get("vbr").and_then(|v| v.as_f64()),
-                    "abr": fmt.get("abr").and_then(|v| v.as_f64()),
+                    "tbr": fmt.get("tbr").and_then(serde_json::Value::as_f64),
+                    "vbr": fmt.get("vbr").and_then(serde_json::Value::as_f64),
+                    "abr": fmt.get("abr").and_then(serde_json::Value::as_f64),
                 }));
             }
         }
@@ -999,7 +1005,7 @@ pub async fn handle_v1_analyze(
                 .get("contentType")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let size = meta.get("sizeBytes").and_then(|v| v.as_u64());
+            let size = meta.get("sizeBytes").and_then(serde_json::Value::as_u64);
             formats.push(json!({
                 "url": &url,
                 "formatId": "direct",
@@ -1015,10 +1021,10 @@ pub async fn handle_v1_analyze(
 
     // Sort formats: video by height desc, audio by bandwidth desc
     formats.sort_by(|a, b| {
-        let a_h = a.get("height").and_then(|v| v.as_u64()).unwrap_or(0);
-        let b_h = b.get("height").and_then(|v| v.as_u64()).unwrap_or(0);
-        let a_bw = a.get("bandwidth").and_then(|v| v.as_u64()).unwrap_or(0);
-        let b_bw = b.get("bandwidth").and_then(|v| v.as_u64()).unwrap_or(0);
+        let a_h = a.get("height").and_then(serde_json::Value::as_u64).unwrap_or(0);
+        let b_h = b.get("height").and_then(serde_json::Value::as_u64).unwrap_or(0);
+        let a_bw = a.get("bandwidth").and_then(serde_json::Value::as_u64).unwrap_or(0);
+        let b_bw = b.get("bandwidth").and_then(serde_json::Value::as_u64).unwrap_or(0);
         if a_h != b_h {
             return b_h.cmp(&a_h);
         }
@@ -1030,10 +1036,10 @@ pub async fn handle_v1_analyze(
     let detected_type = if !formats.is_empty() {
         let has_video = formats
             .iter()
-            .any(|f| f.get("hasVideo").and_then(|v| v.as_bool()).unwrap_or(false));
+            .any(|f| f.get("hasVideo").and_then(serde_json::Value::as_bool).unwrap_or(false));
         let has_audio = formats
             .iter()
-            .any(|f| f.get("hasAudio").and_then(|v| v.as_bool()).unwrap_or(false));
+            .any(|f| f.get("hasAudio").and_then(serde_json::Value::as_bool).unwrap_or(false));
         if has_video {
             "video"
         } else if has_audio {
@@ -1060,20 +1066,20 @@ pub async fn handle_v1_analyze(
     };
 
     let mut result = serde_json::Map::new();
-    result.insert("ok".to_string(), json!(true));
-    result.insert("stage".to_string(), json!("complete"));
-    result.insert("url".to_string(), json!(url));
-    result.insert("title".to_string(), json!(title));
-    result.insert("durationSec".to_string(), json!(duration_sec));
-    result.insert("thumbnail".to_string(), json!(thumbnail));
-    result.insert("isLive".to_string(), json!(is_live));
-    result.insert("drmProtected".to_string(), json!(drm_protected));
-    result.insert("detectedType".to_string(), json!(detected_type));
-    result.insert("formats".to_string(), json!(formats));
+    result.insert("ok".to_owned(), json!(true));
+    result.insert("stage".to_owned(), json!("complete"));
+    result.insert("url".to_owned(), json!(url));
+    result.insert("title".to_owned(), json!(title));
+    result.insert("durationSec".to_owned(), json!(duration_sec));
+    result.insert("thumbnail".to_owned(), json!(thumbnail));
+    result.insert("isLive".to_owned(), json!(is_live));
+    result.insert("drmProtected".to_owned(), json!(drm_protected));
+    result.insert("detectedType".to_owned(), json!(detected_type));
+    result.insert("formats".to_owned(), json!(formats));
 
     // Include HTTP probe metadata if available
     if let Some(ref meta) = http_meta {
-        result.insert("httpProbe".to_string(), meta.clone());
+        result.insert("httpProbe".to_owned(), meta.clone());
     }
 
     Json(serde_json::Value::Object(result))
@@ -1084,6 +1090,17 @@ pub async fn handle_v1_analyze(
 // Same as /v1/analyze but returns SSE events for each stage so the
 // extension can show a live progress indicator.
 
+/// Guard that cancels a `CancellationToken` on drop. Placed inside the SSE
+/// stream so that when the client disconnects (and the stream is dropped),
+/// any in-flight probe work is cancelled promptly rather than running until
+/// its own timeout elapses.
+struct CancelOnDrop(CancellationToken);
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
+}
+
 pub async fn handle_v1_analyze_progress(
     State(state): State<SharedState>,
     Json(body): Json<serde_json::Value>,
@@ -1092,55 +1109,67 @@ pub async fn handle_v1_analyze_progress(
         .get("url")
         .and_then(|v| v.as_str())
         .unwrap_or("")
-        .trim()
-        .to_string();
+        .trim().to_owned();
     let _context = body.get("context").cloned().unwrap_or_else(|| json!({}));
+    let cancel = CancellationToken::new();
 
     let stream = async_stream::stream! {
+        // When the stream is dropped (client disconnect), the guard drops and
+        // cancels the token, which causes any in-flight `tokio::select!` that
+        // races against `cancel.cancelled()` to abort immediately.
+        let _guard = CancelOnDrop(cancel.clone());
+
+        macro_rules! yield_event {
+            ($data:expr) => {
+                if let Ok(event) = Event::default().json_data($data) {
+                    yield Ok::<Event, Infallible>(event);
+                } else {
+                    log::error!("SSE: failed to serialize event data");
+                }
+            };
+        }
+
         if url.is_empty() || url.starts_with('-') || !(url.starts_with("http://") || url.starts_with("https://")) {
-            yield Ok::<Event, Infallible>(Event::default()
-                .json_data(json!({"stage": "error", "message": "Invalid url"}))
-                .expect("valid json"));
+            yield_event!(json!({"stage": "error", "message": "Invalid url"}));
             return;
         }
         if let Err(e) = crate::daemon::utils::is_safe_target_url(&url) {
-            yield Ok::<Event, Infallible>(Event::default()
-                .json_data(json!({"stage": "error", "message": e}))
-                .expect("valid json"));
+            yield_event!(json!({"stage": "error", "message": e}));
             return;
         }
 
-        yield Ok::<Event, Infallible>(Event::default()
-            .json_data(json!({"stage": "http.probing", "url": &url}))
-            .expect("valid json"));
+        yield_event!(json!({"stage": "http.probing", "url": &url}));
 
-        let http_meta = http_probe_for_analyze(&state, &url).await;
+        let http_meta = tokio::select! {
+            result = http_probe_for_analyze(&state, &url) => result,
+            () = cancel.cancelled() => None,
+        };
         if let Some(ref meta) = http_meta {
-            yield Ok::<Event, Infallible>(Event::default()
-                .json_data(json!({"stage": "http.done", "meta": meta}))
-                .expect("valid json"));
+            yield_event!(json!({"stage": "http.done", "meta": meta}));
         }
 
-        yield Ok::<Event, Infallible>(Event::default()
-            .json_data(json!({"stage": "ytdlp.probing", "url": &url}))
-            .expect("valid json"));
+        if cancel.is_cancelled() {
+            return;
+        }
 
-        let ytdlp_result = ytdlp_probe_for_analyze(&state, &url).await;
+        yield_event!(json!({"stage": "ytdlp.probing", "url": &url}));
+
+        let ytdlp_result = tokio::select! {
+            result = ytdlp_probe_for_analyze(&state, &url) => result,
+            () = cancel.cancelled() => None,
+        };
         if let Some(ref info) = ytdlp_result {
-            let format_count = info.get("formats").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0);
-            yield Ok::<Event, Infallible>(Event::default()
-                .json_data(json!({"stage": "ytdlp.done", "formatCount": format_count, "title": info.get("title")}))
-                .expect("valid json"));
+            let format_count = info.get("formats").and_then(|v| v.as_array()).map_or(0, std::vec::Vec::len);
+            yield_event!(json!({"stage": "ytdlp.done", "formatCount": format_count, "title": info.get("title")}));
         } else {
-            yield Ok::<Event, Infallible>(Event::default()
-                .json_data(json!({"stage": "ytdlp.done", "formatCount": 0}))
-                .expect("valid json"));
+            yield_event!(json!({"stage": "ytdlp.done", "formatCount": 0}));
         }
 
-        // For the final event, emit a synthetic completion with the URL
-        yield Ok::<Event, Infallible>(Event::default()
-            .json_data(json!({"stage": "complete", "url": &url, "hint": "Fetch full result via /v1/analyze"}))
-            .expect("valid json"));
+        if cancel.is_cancelled() {
+            return;
+        }
+
+        yield_event!(json!({"stage": "complete", "url": &url, "hint": "Fetch full result via /v1/analyze"}));
     };
 
     Sse::new(stream).keep_alive(
@@ -1152,7 +1181,7 @@ pub async fn handle_v1_analyze_progress(
 
 async fn http_probe_for_analyze(state: &SharedState, url: &str) -> Option<serde_json::Value> {
     let client = state.http_client.clone();
-    let url2 = url.to_string();
+    let url2 = url.to_owned();
     let result = tokio::time::timeout(Duration::from_secs(10), async {
         let resp = client
             .head(&url2)
@@ -1167,12 +1196,12 @@ async fn http_probe_for_analyze(state: &SharedState, url: &str) -> Option<serde_
         let accept_ranges = header_string(&headers, "accept-ranges");
 
         let mut meta = serde_json::Map::new();
-        meta.insert("status".to_string(), json!(status));
-        meta.insert("contentType".to_string(), json!(content_type));
+        meta.insert("status".to_owned(), json!(status));
+        meta.insert("contentType".to_owned(), json!(content_type));
         if content_length > 0 {
-            meta.insert("sizeBytes".to_string(), json!(content_length));
+            meta.insert("sizeBytes".to_owned(), json!(content_length));
         }
-        meta.insert("acceptRanges".to_string(), json!(accept_ranges == "bytes"));
+        meta.insert("acceptRanges".to_owned(), json!(accept_ranges.eq_ignore_ascii_case("bytes")));
         Some(serde_json::Value::Object(meta))
     })
     .await
@@ -1184,7 +1213,7 @@ async fn http_probe_for_analyze(state: &SharedState, url: &str) -> Option<serde_
 
 async fn ytdlp_probe_for_analyze(state: &SharedState, url: &str) -> Option<serde_json::Value> {
     let ytdlp_bin = state.ytdlp_bin.clone();
-    let url2 = url.to_string();
+    let url2 = url.to_owned();
     let output = tokio::task::spawn_blocking(move || {
         hidden_output_timed(
             &ytdlp_bin,
@@ -1208,6 +1237,10 @@ async fn ytdlp_probe_for_analyze(state: &SharedState, url: &str) -> Option<serde
         return None;
     }
     let stdout = String::from_utf8_lossy(&process_output.stdout);
+    if stdout.len() > 1_048_576 {
+        log::warn!("yt-dlp output exceeded 1 MB size limit ({} bytes)", stdout.len());
+        return None;
+    }
     serde_json::from_str(&stdout).ok()
 }
 
@@ -1240,7 +1273,7 @@ fn content_type_to_ext(content_type: &str) -> &str {
     }
 }
 
-pub(crate) fn register_routes(router: Router<SharedState>) -> Router<SharedState> {
+pub fn register_routes(router: Router<SharedState>) -> Router<SharedState> {
     router
         .route(
             "/api/browser-extension/config",
@@ -1256,6 +1289,7 @@ pub(crate) fn register_routes(router: Router<SharedState>) -> Router<SharedState
         .route("/v1/extension-settings", get(handle_v1_extension_settings))
         .route("/v1/events", get(handle_v1_events))
         .route("/v1/tasks", get(handle_v1_list_tasks))
+        .route("/v1/tasks/{id}", get(handle_v1_get_task))
         .route("/v1/task/pause", post(handle_v1_pause_task_body))
         .route("/v1/task/resume", post(handle_v1_resume_task_body))
         .route("/v1/task/cancel", post(handle_v1_cancel_task_body))

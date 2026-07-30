@@ -3,17 +3,19 @@ mod easy_config;
 mod multi;
 mod task_api;
 mod transfer;
-pub(crate) mod transfer_config;
+pub mod transfer_config;
 
-pub(crate) use args::build_curl_args;
-pub(crate) use easy_config::init_download_ssl;
-pub(crate) use task_api::{
-    create_curl_task, curl_version, delete_task, list_all_tasks, pause_task, redownload_task,
-    resume_task, update_task_metadata, CurlExtractor,
+pub use args::build_curl_args;
+pub use easy_config::init_download_ssl;
+pub use task_api::{
+    create_curl_task, curl_version, delete_task, get_task, list_all_tasks, pause_task,
+    redownload_task, resume_task, update_task_metadata, CurlExtractor,
 };
-pub(crate) use transfer::start_curl_process;
+pub use transfer::start_curl_process;
 
-pub(super) use args::{destination_from_body, requested_connections, safe_value};
+pub(super) use args::{
+    destination_from_body, proxy_resolves_to_internal, requested_connections, safe_value,
+};
 pub(super) use easy_config::{apply_easy_options, create_easy_for_range_ext, HtmlHeadCapture};
 pub(super) use multi::{drive_multi_socket, drive_multi_wait_perform, CurlMultiGuard};
 #[allow(unused_imports)]

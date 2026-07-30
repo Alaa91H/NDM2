@@ -33,11 +33,11 @@ pub struct LiveSegment {
 }
 
 impl LiveSegment {
-    pub fn total_bytes(&self) -> u64 {
+    pub const fn total_bytes(&self) -> u64 {
         self.end_byte.saturating_sub(self.start_byte)
     }
 
-    pub fn remaining_bytes(&self) -> u64 {
+    pub const fn remaining_bytes(&self) -> u64 {
         self.total_bytes().saturating_sub(self.downloaded)
     }
 
@@ -87,7 +87,7 @@ impl SegmentController {
             min_segment_bytes,
             stall_threshold: Duration::from_secs(5),
             last_eval: Instant::now(),
-            eval_interval: Duration::from_millis(2000),
+            eval_interval: Duration::from_secs(2),
             peak_throughput: 0,
             max_segments: 64,
         }
@@ -154,7 +154,7 @@ impl SegmentController {
         let median_speed = if speeds.is_empty() {
             0
         } else {
-            let mut sorted = speeds.clone();
+            let mut sorted = speeds;
             sorted.sort_unstable();
             sorted[sorted.len() / 2]
         };
@@ -201,6 +201,7 @@ impl SegmentController {
             let fast_seg = self.segments.iter().find(|s| s.id == fast_id).unwrap();
             if fast_seg.speed > slow_seg.speed * 3
                 && slow_seg.remaining_bytes() > self.min_segment_bytes
+                && slow_seg.end_byte == fast_seg.start_byte
             {
                 let transferable =
                     ((fast_seg.speed - slow_seg.speed) / 4).min(slow_seg.remaining_bytes() / 4);
@@ -248,7 +249,7 @@ impl SegmentController {
             .segments
             .iter()
             .filter(|s| s.state == SegmentState::Active)
-            .map(|s| s.remaining_bytes())
+            .map(LiveSegment::remaining_bytes)
             .sum();
 
         if total_remaining < self.min_segment_bytes * 2 {
@@ -266,7 +267,7 @@ impl SegmentController {
             return None;
         }
 
-        let avg_speed_per_seg = total_speed / active_count.max(1) as u64;
+        let avg_speed_per_seg = total_speed / u64::from(active_count.max(1));
 
         let mut best_id: Option<u32> = None;
         let mut best_speed: u64 = 0;
@@ -452,8 +453,12 @@ impl SegmentController {
                 to_seg,
                 bytes,
             } => {
+                if from_seg == to_seg {
+                    return;
+                }
                 if let Some(slow) = self.segments.iter_mut().find(|s| s.id == *from_seg) {
                     slow.end_byte = slow.end_byte.saturating_sub(*bytes);
+                    slow.downloaded = slow.downloaded.min(slow.total_bytes());
                 }
                 let new_start = self
                     .segments
@@ -466,6 +471,7 @@ impl SegmentController {
                 ) {
                     fast.start_byte = new_start;
                 }
+                self.segments.sort_by_key(|s| s.start_byte);
             }
             SegmentPlan::SplitSegment { segment_id } => {
                 self.split_segment_at(*segment_id);
@@ -556,7 +562,7 @@ impl SegmentController {
         &self.segments
     }
 
-    pub fn peak_throughput(&self) -> u64 {
+    pub const fn peak_throughput(&self) -> u64 {
         self.peak_throughput
     }
 
@@ -576,18 +582,18 @@ impl SegmentController {
             }];
         }
         let count = if min_segment > 0 && total_size >= min_segment * 2 {
-            (total_size / min_segment).min(count as u64).max(1) as u32
+            (total_size / min_segment).min(u64::from(count)).max(1) as u32
         } else {
             count
         }
         .max(1);
-        let per_seg = total_size / count as u64;
-        let rem = total_size % count as u64;
+        let per_seg = total_size / u64::from(count);
+        let rem = total_size % u64::from(count);
         let now = Instant::now();
         let mut segments = Vec::with_capacity(count as usize);
         let mut start = 0u64;
         for i in 0..count {
-            let extra = if (i as u64) < rem { 1 } else { 0 };
+            let extra = u64::from(u64::from(i) < rem);
             let len = per_seg + extra;
             let end = start + len;
             segments.push(LiveSegment {

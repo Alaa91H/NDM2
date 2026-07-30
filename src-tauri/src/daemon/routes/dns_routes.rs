@@ -6,7 +6,7 @@ use std::time::Instant;
 use crate::daemon::state::SharedState;
 use crate::daemon::utils::hide_command_window;
 
-pub(crate) fn register_routes(router: Router<SharedState>) -> Router<SharedState> {
+pub fn register_routes(router: Router<SharedState>) -> Router<SharedState> {
     router.route("/api/dns/ping-all", post(handle_dns_ping_all))
 }
 
@@ -36,19 +36,24 @@ async fn handle_dns_ping_all() -> Json<serde_json::Value> {
 
 async fn ping_ip(ip: &str) -> Option<f64> {
     let start = Instant::now();
+    let ip = ip.to_owned();
 
-    let mut cmd = std::process::Command::new("ping");
-    #[cfg(target_os = "windows")]
-    {
-        cmd.arg("-n").arg("1").arg("-w").arg("2000");
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        cmd.arg("-c").arg("1").arg("-W").arg("2");
-    }
-    cmd.arg(ip);
-    hide_command_window(&mut cmd);
-    let output = cmd.output();
+    let output = tokio::task::spawn_blocking(move || {
+        let mut cmd = std::process::Command::new("ping");
+        #[cfg(target_os = "windows")]
+        {
+            cmd.arg("-n").arg("1").arg("-w").arg("2000");
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            cmd.arg("-c").arg("1").arg("-W").arg("2");
+        }
+        cmd.arg(&ip);
+        hide_command_window(&mut cmd);
+        cmd.output()
+    })
+    .await
+    .ok()?;
 
     match output {
         Ok(out) if out.status.success() => {

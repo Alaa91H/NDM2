@@ -55,8 +55,7 @@ impl MetadataCache {
         };
         let expired = cache
             .get(url)
-            .map(|entry| entry.inserted_at.elapsed() >= self.ttl)
-            .unwrap_or(false);
+            .is_some_and(|entry| entry.inserted_at.elapsed() >= self.ttl);
         if expired {
             cache.remove(url);
             return None;
@@ -100,7 +99,7 @@ impl MetadataCache {
     }
 
     pub fn size(&self) -> usize {
-        self.cache.lock().map(|c| c.len()).unwrap_or(0)
+        self.cache.lock().map_or(0, |c| c.len())
     }
 }
 

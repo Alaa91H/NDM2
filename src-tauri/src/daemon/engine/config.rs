@@ -28,11 +28,10 @@ impl Default for EngineConfig {
 
 fn cpu_count() -> u32 {
     std::thread::available_parallelism()
-        .map(|n| n.get() as u32)
-        .unwrap_or(4)
+        .map_or(4, |n| n.get() as u32)
 }
 
-/// Returns a shared singleton EngineConfig. First call detects system resources.
+/// Returns a shared singleton `EngineConfig`. First call detects system resources.
 pub fn global_config() -> &'static EngineConfig {
     static INSTANCE: OnceLock<EngineConfig> = OnceLock::new();
     INSTANCE.get_or_init(EngineConfig::detect)
@@ -85,7 +84,7 @@ impl EngineConfig {
         }
     }
 
-    pub fn retry_policy(&self) -> crate::daemon::engine::retry::RetryPolicy {
+    pub const fn retry_policy(&self) -> crate::daemon::engine::retry::RetryPolicy {
         crate::daemon::engine::retry::RetryPolicy {
             max_retries: self.max_retries,
             base_delay: Duration::from_millis(self.base_retry_delay_ms),

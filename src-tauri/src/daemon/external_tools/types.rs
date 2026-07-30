@@ -11,25 +11,25 @@ pub enum ToolId {
 }
 
 impl ToolId {
-    pub fn as_str(&self) -> &'static str {
+    pub const fn as_str(&self) -> &'static str {
         match self {
-            ToolId::Ffmpeg => "ffmpeg",
-            ToolId::YtDlp => "yt-dlp",
+            Self::Ffmpeg => "ffmpeg",
+            Self::YtDlp => "yt-dlp",
         }
     }
 
-    pub fn display_name(&self) -> &'static str {
+    pub const fn display_name(&self) -> &'static str {
         match self {
-            ToolId::Ffmpeg => "FFmpeg",
-            ToolId::YtDlp => "yt-dlp",
+            Self::Ffmpeg => "FFmpeg",
+            Self::YtDlp => "yt-dlp",
         }
     }
 
     #[allow(dead_code)]
-    pub fn description(&self) -> &'static str {
+    pub const fn description(&self) -> &'static str {
         match self {
-            ToolId::Ffmpeg => "Media Processing Engine",
-            ToolId::YtDlp => "Media URL Resolver",
+            Self::Ffmpeg => "Media Processing Engine",
+            Self::YtDlp => "Media URL Resolver",
         }
     }
 }
@@ -55,22 +55,22 @@ pub enum ToolStatus {
 }
 
 impl ToolStatus {
-    pub fn is_available(&self) -> bool {
-        matches!(self, ToolStatus::Installed)
+    pub const fn is_available(&self) -> bool {
+        matches!(self, Self::Installed)
     }
 
-    pub fn display_text(&self) -> &'static str {
+    pub const fn display_text(&self) -> &'static str {
         match self {
-            ToolStatus::NotInstalled => "Not Installed",
-            ToolStatus::Installed => "Installed",
-            ToolStatus::UpdateAvailable => "Update Available",
-            ToolStatus::Updating => "Updating",
-            ToolStatus::Installing => "Installing",
-            ToolStatus::Uninstalling => "Uninstalling",
-            ToolStatus::Broken => "Broken",
-            ToolStatus::Incompatible => "Incompatible",
-            ToolStatus::PermissionDenied => "Permission Denied",
-            ToolStatus::Unknown => "Unknown",
+            Self::NotInstalled => "Not Installed",
+            Self::Installed => "Installed",
+            Self::UpdateAvailable => "Update Available",
+            Self::Updating => "Updating",
+            Self::Installing => "Installing",
+            Self::Uninstalling => "Uninstalling",
+            Self::Broken => "Broken",
+            Self::Incompatible => "Incompatible",
+            Self::PermissionDenied => "Permission Denied",
+            Self::Unknown => "Unknown",
         }
     }
 }
@@ -85,9 +85,9 @@ pub struct Capability {
 impl Capability {
     pub fn new(id: &str, name: &str, description: &str) -> Self {
         Self {
-            id: id.to_string(),
-            name: name.to_string(),
-            description: description.to_string(),
+            id: id.to_owned(),
+            name: name.to_owned(),
+            description: description.to_owned(),
         }
     }
 }
@@ -115,11 +115,11 @@ impl Version {
             patch,
             pre_release: None,
             build_metadata: None,
-            raw: raw.to_string(),
+            raw: raw.to_owned(),
         }
     }
 
-    pub fn is_compatible_with(&self, minimum: &Version) -> bool {
+    pub const fn is_compatible_with(&self, minimum: &Self) -> bool {
         if self.major > minimum.major {
             return true;
         }
@@ -167,7 +167,7 @@ pub struct ToolInstallation {
 }
 
 impl ToolInstallation {
-    pub fn not_installed(tool_id: ToolId) -> Self {
+    pub const fn not_installed(tool_id: ToolId) -> Self {
         Self {
             tool_id,
             status: ToolStatus::NotInstalled,
@@ -267,7 +267,7 @@ impl Default for ToolRegistry {
         Self {
             tools: HashMap::new(),
             auto_check_updates: true,
-            check_interval: "startup".to_string(),
+            check_interval: "startup".to_owned(),
             auto_update: false,
         }
     }

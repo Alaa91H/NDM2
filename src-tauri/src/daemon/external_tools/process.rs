@@ -1,11 +1,13 @@
 use super::types::ProcessSpec;
 use crate::daemon::utils::hide_command_window;
+use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct ProcessOutput {
     pub stdout: String,
     pub stderr: String,
@@ -14,7 +16,6 @@ pub struct ProcessOutput {
     pub duration: Duration,
 }
 
-#[allow(dead_code)]
 pub fn run_tool(
     spec: &ProcessSpec,
     working_dir: Option<&PathBuf>,
@@ -42,25 +43,28 @@ pub fn run_tool(
 
     let deadline = spec.timeout.map(|t| Instant::now() + t);
 
-    let output = loop {
+    let (tx, rx) = mpsc::channel();
+    let stdout_thread = child.stdout.take().map(|mut r| {
+        let tx = tx.clone();
+        thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = r.read_to_end(&mut buf);
+            let _ = tx.send(("stdout", buf));
+        })
+    });
+    let stderr_thread = child.stderr.take().map(|mut r| {
+        let tx = tx.clone();
+        thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = r.read_to_end(&mut buf);
+            let _ = tx.send(("stderr", buf));
+        })
+    });
+    drop(tx);
+
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(status)) => {
-                let mut stdout_buf = Vec::new();
-                let mut stderr_buf = Vec::new();
-                if let Some(ref mut child_stdout) = child.stdout {
-                    use std::io::Read;
-                    let _ = child_stdout.read_to_end(&mut stdout_buf);
-                }
-                if let Some(ref mut child_stderr) = child.stderr {
-                    use std::io::Read;
-                    let _ = child_stderr.read_to_end(&mut stderr_buf);
-                }
-                break std::process::Output {
-                    status,
-                    stdout: stdout_buf,
-                    stderr: stderr_buf,
-                };
-            }
+            Ok(Some(s)) => break s,
             Ok(None) => {
                 if let Some(dl) = &deadline {
                     if Instant::now() >= *dl {
@@ -74,24 +78,37 @@ pub fn run_tool(
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
-            Err(e) => return Err(format!("Process wait failed: {}", e)),
+            Err(e) => return Err(format!("Process wait failed: {e}")),
         }
     };
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let elapsed = started.elapsed();
+    if let Some(h) = stdout_thread {
+        let _ = h.join();
+    }
+    if let Some(h) = stderr_thread {
+        let _ = h.join();
+    }
 
+    let mut stdout_buf = Vec::new();
+    let mut stderr_buf = Vec::new();
+    for (kind, buf) in &rx {
+        match kind {
+            "stdout" => stdout_buf = buf,
+            "stderr" => stderr_buf = buf,
+            _ => {}
+        }
+    }
+
+    let elapsed = started.elapsed();
     Ok(ProcessOutput {
-        stdout,
-        stderr,
-        success: output.status.success(),
-        exit_code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&stdout_buf).to_string(),
+        stderr: String::from_utf8_lossy(&stderr_buf).to_string(),
+        success: status.success(),
+        exit_code: status.code().unwrap_or(-1),
         duration: elapsed,
     })
 }
 
-#[allow(dead_code)]
 pub fn run_tool_capture(
     program: &str,
     args: &[&str],
@@ -99,8 +116,8 @@ pub fn run_tool_capture(
 ) -> Result<ProcessOutput, String> {
     run_tool(
         &ProcessSpec {
-            program: program.to_string(),
-            args: args.iter().map(|s| s.to_string()).collect(),
+            program: program.to_owned(),
+            args: args.iter().map(|s| (*s).to_owned()).collect(),
             timeout,
         },
         None,

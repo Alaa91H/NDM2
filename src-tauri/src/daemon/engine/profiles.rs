@@ -40,9 +40,9 @@ pub struct RetryProfileConfig {
 impl DownloadProfile {
     pub fn maximum_speed() -> Self {
         Self {
-            id: "maximum-speed".to_string(),
-            name: "Maximum Speed".to_string(),
-            description: "Aggressive settings for fastest downloads".to_string(),
+            id: "maximum-speed".to_owned(),
+            name: "Maximum Speed".to_owned(),
+            description: "Aggressive settings for fastest downloads".to_owned(),
             default_connections: 16,
             max_connections: 48,
             adaptive: true,
@@ -59,7 +59,7 @@ impl DownloadProfile {
                 jitter: true,
             },
             dynamic_segmentation: true,
-            checksum_algorithm: Some("sha256".to_string()),
+            checksum_algorithm: Some("sha256".to_owned()),
             rate_limit_kbps: None,
             segment_size_bytes: Some(2 * 1024 * 1024),
         }
@@ -67,9 +67,9 @@ impl DownloadProfile {
 
     pub fn balanced() -> Self {
         Self {
-            id: "balanced".to_string(),
-            name: "Balanced".to_string(),
-            description: "Balanced speed and resource usage".to_string(),
+            id: "balanced".to_owned(),
+            name: "Balanced".to_owned(),
+            description: "Balanced speed and resource usage".to_owned(),
             default_connections: 8,
             max_connections: 32,
             adaptive: true,
@@ -86,7 +86,7 @@ impl DownloadProfile {
                 jitter: true,
             },
             dynamic_segmentation: true,
-            checksum_algorithm: Some("sha256".to_string()),
+            checksum_algorithm: Some("sha256".to_owned()),
             rate_limit_kbps: None,
             segment_size_bytes: None,
         }
@@ -94,9 +94,9 @@ impl DownloadProfile {
 
     pub fn economical() -> Self {
         Self {
-            id: "economical".to_string(),
-            name: "Economical".to_string(),
-            description: "Conservative settings to save bandwidth".to_string(),
+            id: "economical".to_owned(),
+            name: "Economical".to_owned(),
+            description: "Conservative settings to save bandwidth".to_owned(),
             default_connections: 2,
             max_connections: 8,
             adaptive: false,
@@ -113,7 +113,7 @@ impl DownloadProfile {
                 jitter: false,
             },
             dynamic_segmentation: false,
-            checksum_algorithm: Some("md5".to_string()),
+            checksum_algorithm: Some("md5".to_owned()),
             rate_limit_kbps: Some(1024),
             segment_size_bytes: Some(4 * 1024 * 1024),
         }
@@ -121,9 +121,9 @@ impl DownloadProfile {
 
     pub fn background() -> Self {
         Self {
-            id: "background".to_string(),
-            name: "Background".to_string(),
-            description: "Minimal resource usage for background downloads".to_string(),
+            id: "background".to_owned(),
+            name: "Background".to_owned(),
+            description: "Minimal resource usage for background downloads".to_owned(),
             default_connections: 1,
             max_connections: 4,
             adaptive: false,
@@ -166,7 +166,7 @@ impl DownloadProfile {
         }
     }
 
-    pub fn to_retry_policy(&self) -> RetryPolicy {
+    pub const fn to_retry_policy(&self) -> RetryPolicy {
         RetryPolicy {
             max_retries: self.retry_policy.max_retries,
             base_delay: std::time::Duration::from_secs(self.retry_policy.base_delay_secs),
@@ -196,7 +196,7 @@ impl ProfileManager {
         profiles.insert(bg.id.clone(), bg);
         Self {
             profiles: Arc::new(Mutex::new(profiles)),
-            active_profile: Arc::new(Mutex::new("balanced".to_string())),
+            active_profile: Arc::new(Mutex::new("balanced".to_owned())),
         }
     }
 
@@ -218,7 +218,7 @@ impl ProfileManager {
         // and prevent ABBA deadlock. An invalid ID simply sets the field; the next
         // `active_profile()` call will fall back to `DownloadProfile::balanced`.
         if let Ok(mut active) = self.active_profile.lock() {
-            *active = profile_id.to_string();
+            *active = profile_id.to_owned();
             return true;
         }
         false

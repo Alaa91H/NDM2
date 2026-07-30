@@ -13,20 +13,19 @@ pub fn analyze_url(url: &str) -> UrlIntelligence {
     let parsed = reqwest::Url::parse(&normalized).ok();
     let scheme = parsed
         .as_ref()
-        .map(|u| u.scheme().to_string())
+        .map(|u| u.scheme().to_owned())
         .unwrap_or_default();
     let host = parsed
         .as_ref()
         .and_then(|u| u.host_str())
-        .unwrap_or("")
-        .to_string();
+        .unwrap_or("").to_owned();
     let port = parsed
         .as_ref()
-        .and_then(|u| u.port())
+        .and_then(tauri::Url::port)
         .unwrap_or_else(|| default_port(&scheme));
     let path = parsed
         .as_ref()
-        .map(|u| u.path().to_string())
+        .map(|u| u.path().to_owned())
         .unwrap_or_default();
     let query = parsed
         .as_ref()
@@ -35,7 +34,7 @@ pub fn analyze_url(url: &str) -> UrlIntelligence {
             if q.is_empty() {
                 None
             } else {
-                Some(q.to_string())
+                Some(q.to_owned())
             }
         })
         .unwrap_or_default();
@@ -46,13 +45,13 @@ pub fn analyze_url(url: &str) -> UrlIntelligence {
             if f.is_empty() {
                 None
             } else {
-                Some(f.to_string())
+                Some(f.to_owned())
             }
         })
         .unwrap_or_default();
 
     UrlIntelligence {
-        original_url: trimmed.to_string(),
+        original_url: trimmed.to_owned(),
         normalized_url: normalized,
         scheme,
         host,
@@ -67,19 +66,19 @@ pub fn analyze_url(url: &str) -> UrlIntelligence {
 
 fn normalize_url(url: &str) -> String {
     if url.starts_with("magnet:") || url.starts_with("sftp://") || url.starts_with("scp://") {
-        return url.to_string();
+        return url.to_owned();
     }
 
-    let mut result = url.to_string();
+    let mut result = url.to_owned();
 
     // Ensure scheme exists.
     if !result.contains("://") && !result.starts_with("ftp.") {
-        result = format!("https://{}", result);
+        result = format!("https://{result}");
     }
 
     // Remove default port.
     if let Ok(mut parsed) = reqwest::Url::parse(&result) {
-        let scheme = parsed.scheme().to_string();
+        let scheme = parsed.scheme().to_owned();
         let default = default_port(&scheme);
         if parsed.port() == Some(default) {
             let _ = parsed.set_port(None);
@@ -123,8 +122,7 @@ fn detect_encoding(url: &str) -> UrlEncoding {
     let is_idn = parsed
         .as_ref()
         .and_then(|u| u.host_str())
-        .map(|h| h.starts_with("xn--") || h.contains(".xn--"))
-        .unwrap_or(false);
+        .is_some_and(|h| h.starts_with("xn--") || h.contains(".xn--"));
 
     let punycode = if is_idn {
         parsed.as_ref().and_then(|u| u.host_str()).map(String::from)
@@ -135,8 +133,7 @@ fn detect_encoding(url: &str) -> UrlEncoding {
     let has_query_encoding = parsed
         .as_ref()
         .and_then(|u| u.query())
-        .map(|q| q.contains('%'))
-        .unwrap_or(false);
+        .is_some_and(|q| q.contains('%'));
 
     UrlEncoding {
         is_idn,

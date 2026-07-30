@@ -263,14 +263,13 @@ fn executable_available(command: &str) -> bool {
 }
 
 fn first_line(text: &str) -> String {
-    text.lines().next().unwrap_or("unknown").trim().to_string()
+    text.lines().next().unwrap_or("unknown").trim().to_owned()
 }
 
 fn second_token(line: &str) -> String {
     line.split_whitespace()
         .nth(1)
-        .unwrap_or("unknown")
-        .to_string()
+        .unwrap_or("unknown").to_owned()
 }
 
 fn lower_set(values: &[String]) -> HashSet<String> {
@@ -298,8 +297,7 @@ fn parse_long_flags(help: &str) -> HashSet<String> {
                     .split(['=', '[', '<', '|', ','])
                     .next()
                     .unwrap_or(cleaned)
-                    .trim()
-                    .to_string();
+                    .trim().to_owned();
                 if flag.starts_with("--") {
                     flags.insert(flag);
                 }
@@ -312,76 +310,76 @@ fn parse_long_flags(help: &str) -> HashSet<String> {
 fn linked_libcurl_features(version: &::curl::Version) -> Vec<String> {
     let mut features = Vec::new();
     if version.feature_ssl() {
-        features.push("SSL".to_string());
+        features.push("SSL".to_owned());
     }
     if version.feature_libz() {
-        features.push("libz".to_string());
+        features.push("libz".to_owned());
     }
     if version.feature_brotli() {
-        features.push("brotli".to_string());
+        features.push("brotli".to_owned());
     }
     if version.feature_zstd() {
-        features.push("zstd".to_string());
+        features.push("zstd".to_owned());
     }
     if version.feature_http2() {
-        features.push("HTTP2".to_string());
+        features.push("HTTP2".to_owned());
     }
     if version.feature_http3() {
-        features.push("HTTP3".to_string());
+        features.push("HTTP3".to_owned());
     }
     if version.feature_ipv6() {
-        features.push("IPv6".to_string());
+        features.push("IPv6".to_owned());
     }
     if version.feature_async_dns() {
-        features.push("AsynchDNS".to_string());
+        features.push("AsynchDNS".to_owned());
     }
     if version.feature_https_proxy() {
-        features.push("HTTPS-proxy".to_string());
+        features.push("HTTPS-proxy".to_owned());
     }
     if version.feature_largefile() {
-        features.push("Largefile".to_string());
+        features.push("Largefile".to_owned());
     }
     if version.feature_ntlm() {
-        features.push("NTLM".to_string());
+        features.push("NTLM".to_owned());
     }
     if version.feature_gss_negotiate() {
-        features.push("GSS".to_string());
+        features.push("GSS".to_owned());
     }
     if version.feature_spnego() {
-        features.push("SPNEGO".to_string());
+        features.push("SPNEGO".to_owned());
     }
     if version.feature_sspi() {
-        features.push("SSPI".to_string());
+        features.push("SSPI".to_owned());
     }
     if version.feature_unix_domain_socket() {
-        features.push("UnixSockets".to_string());
+        features.push("UnixSockets".to_owned());
     }
     if version.feature_debug() {
-        features.push("Debug".to_string());
+        features.push("Debug".to_owned());
     }
     if version.feature_unicode() {
-        features.push("Unicode".to_string());
+        features.push("Unicode".to_owned());
     }
     if version.feature_idn() {
-        features.push("IDN".to_string());
+        features.push("IDN".to_owned());
     }
     if version.feature_tlsauth_srp() {
-        features.push("TLS-SRP".to_string());
+        features.push("TLS-SRP".to_owned());
     }
     if version.feature_ntlm_wb() {
-        features.push("NTLM-WB".to_string());
+        features.push("NTLM-WB".to_owned());
     }
     if version.feature_conv() {
-        features.push("Conv".to_string());
+        features.push("Conv".to_owned());
     }
     if version.feature_hsts() {
-        features.push("HSTS".to_string());
+        features.push("HSTS".to_owned());
     }
     if version.feature_altsvc() {
-        features.push("Alt-Svc".to_string());
+        features.push("Alt-Svc".to_owned());
     }
     if version.feature_gsasl() {
-        features.push("GSASL".to_string());
+        features.push("GSASL".to_owned());
     }
     features
 }
@@ -496,35 +494,32 @@ fn linked_libcurl_flags(version: &::curl::Version) -> HashSet<String> {
         "--etag-save",
         "--etag-compare",
     ] {
-        flags.insert(flag.to_string());
+        flags.insert(flag.to_owned());
     }
     if version.feature_http2() {
-        flags.insert("--http2".to_string());
-        flags.insert("--http2-prior-knowledge".to_string());
+        flags.insert("--http2".to_owned());
+        flags.insert("--http2-prior-knowledge".to_owned());
     }
     if version.feature_http3() {
-        flags.insert("--http3".to_string());
-        flags.insert("--http3-only".to_string());
+        flags.insert("--http3".to_owned());
+        flags.insert("--http3-only".to_owned());
     }
     flags
 }
 
 fn expected_libcurl_version() -> String {
     option_env!("NOVA_BUILD_LIBCURL_VERSION")
-        .unwrap_or("unmanaged")
-        .to_string()
+        .unwrap_or("unmanaged").to_owned()
 }
 
 fn expected_libcurl_tag() -> String {
     option_env!("NOVA_BUILD_LIBCURL_TAG")
-        .unwrap_or("unmanaged")
-        .to_string()
+        .unwrap_or("unmanaged").to_owned()
 }
 
 fn expected_libcurl_sha256() -> String {
     option_env!("NOVA_BUILD_LIBCURL_SHA256")
-        .unwrap_or("unmanaged")
-        .to_string()
+        .unwrap_or("unmanaged").to_owned()
 }
 
 fn expected_csv_set(value: &str) -> HashSet<String> {
@@ -532,7 +527,7 @@ fn expected_csv_set(value: &str) -> HashSet<String> {
         .split(',')
         .map(str::trim)
         .filter(|v| !v.is_empty() && *v != "unmanaged")
-        .map(|v| v.to_ascii_lowercase())
+        .map(str::to_ascii_lowercase)
         .collect()
 }
 
@@ -560,26 +555,23 @@ fn checkable_features() -> HashSet<String> {
         "ntlm",
     ]
     .iter()
-    .map(|s| s.to_string())
+    .map(|s| (*s).to_owned())
     .collect()
 }
 
 fn expected_libcurl_feature_profile() -> String {
     option_env!("NOVA_BUILD_LIBCURL_FEATURE_PROFILE")
-        .unwrap_or("unmanaged")
-        .to_string()
+        .unwrap_or("unmanaged").to_owned()
 }
 
 fn expected_libcurl_prefix() -> String {
     option_env!("NOVA_BUILD_LIBCURL_PREFIX")
-        .unwrap_or("unmanaged")
-        .to_string()
+        .unwrap_or("unmanaged").to_owned()
 }
 
 fn libcurl_link_mode() -> String {
     option_env!("NOVA_BUILD_LIBCURL_LINK_MODE")
-        .unwrap_or("system-or-vendored-fallback")
-        .to_string()
+        .unwrap_or("system-or-vendored-fallback").to_owned()
 }
 
 fn normalize_libcurl_version(value: &str) -> String {
@@ -587,12 +579,11 @@ fn normalize_libcurl_version(value: &str) -> String {
         .trim()
         .split(['-', '+'])
         .next()
-        .unwrap_or("")
-        .to_string()
+        .unwrap_or("").to_owned()
 }
 
 fn linked_libcurl_version() -> String {
-    ::curl::Version::get().version().to_string()
+    ::curl::Version::get().version().to_owned()
 }
 
 fn libcurl_version_matches_expected() -> bool {
@@ -604,7 +595,7 @@ fn libcurl_version_matches_expected() -> bool {
 
 fn linked_libcurl_tls_backend() -> String {
     let linked = ::curl::Version::get();
-    linked.ssl_version().unwrap_or("none").to_string()
+    linked.ssl_version().unwrap_or("none").to_owned()
 }
 
 fn linked_libcurl_model() -> (
@@ -616,7 +607,7 @@ fn linked_libcurl_model() -> (
     HashSet<String>,
 ) {
     let linked = ::curl::Version::get();
-    let protocols: Vec<String> = linked.protocols().map(|p| p.to_string()).collect();
+    let protocols: Vec<String> = linked.protocols().map(std::borrow::ToOwned::to_owned).collect();
     let features = linked_libcurl_features(&linked);
     let version_line = format!("libcurl {}", linked.version());
     let tls = linked_libcurl_tls_backend();
@@ -854,22 +845,22 @@ fn curl_supported_http_versions(
 ) -> Vec<String> {
     let mut versions = Vec::new();
     if has_flag(flags, "--http1.0") {
-        versions.push("1.0".to_string());
+        versions.push("1.0".to_owned());
     }
     if has_flag(flags, "--http1.1") {
-        versions.push("1.1".to_string());
+        versions.push("1.1".to_owned());
     }
     if has_flag(flags, "--http2") && has_feature(features, "http2") {
-        versions.push("2".to_string());
+        versions.push("2".to_owned());
     }
     if has_flag(flags, "--http2-prior-knowledge") && has_feature(features, "http2") {
-        versions.push("2-prior-knowledge".to_string());
+        versions.push("2-prior-knowledge".to_owned());
     }
     if has_flag(flags, "--http3") && has_feature(features, "http3") {
-        versions.push("3".to_string());
+        versions.push("3".to_owned());
     }
     if has_flag(flags, "--http3-only") && has_feature(features, "http3") {
-        versions.push("3-only".to_string());
+        versions.push("3-only".to_owned());
     }
     versions
 }
@@ -881,17 +872,17 @@ pub fn curl_status() -> Value {
     let supported_keys: HashSet<String> = CURL_DIRECT_OPTION_KEYS
         .iter()
         .filter(|key| curl_key_supported(key, available, &protocol_set, &feature_set, &flags))
-        .map(|key| (*key).to_string())
+        .map(|key| (*key).to_owned())
         .collect();
     let all_keys: HashSet<String> = CURL_DIRECT_OPTION_KEYS
         .iter()
-        .map(|key| (*key).to_string())
+        .map(|key| (*key).to_owned())
         .collect();
     let unsupported_keys: HashSet<String> = all_keys.difference(&supported_keys).cloned().collect();
     let supported_raw: HashSet<String> = CANDIDATE_CURL_RAW_OPTIONS
         .iter()
         .filter(|flag| flags.contains(**flag))
-        .map(|flag| (*flag).to_string())
+        .map(|flag| (*flag).to_owned())
         .collect();
     let http_versions = curl_supported_http_versions(&feature_set, &flags);
     let tls_backend = linked_libcurl_tls_backend();
@@ -903,8 +894,8 @@ pub fn curl_status() -> Value {
         "runtimeCore": "in-process-libcurl-multi",
         "available": available,
         "binary": "linked-libcurl",
-        "version": if available { second_token(&version_line) } else { "unknown".to_string() },
-        "versionText": if available { version_line } else { "unknown".to_string() },
+        "version": if available { second_token(&version_line) } else { "unknown".to_owned() },
+        "versionText": if available { version_line } else { "unknown".to_owned() },
         "source": "https://github.com/curl/curl",
         "verifiedBy": ["linked libcurl Version::get() only; curl CLI is diagnostic-only"],
         "tls": {
@@ -924,9 +915,9 @@ pub fn curl_status() -> Value {
             "linkMode": libcurl_link_mode(),
             "runtimeVersion": linked_libcurl_version(),
             "normalizedRuntimeVersion": normalize_libcurl_version(&linked_libcurl_version()),
-            "runtimeProtocols": protocols.clone(),
-            "runtimeFeatures": features.clone(),
-            "runtimeTlsBackend": tls_backend.clone(),
+            "runtimeProtocols": protocols,
+            "runtimeFeatures": features,
+            "runtimeTlsBackend": tls_backend,
             "versionMatchesExpected": libcurl_version_matches_expected(),
             "protocolsMatchExpected": expected_libcurl_protocols().is_empty() || ["http", "https"].iter().all(|p| protocol_set.contains(*p)),
             "featuresMatchExpected": expected_libcurl_features().is_empty() || expected_libcurl_features().intersection(&checkable_features()).all(|f| feature_set.contains(f)),
@@ -1022,12 +1013,12 @@ fn curl_direct_supported_set() -> (
     let keys = CURL_DIRECT_OPTION_KEYS
         .iter()
         .filter(|key| curl_key_supported(key, available, &protocol_set, &feature_set, &flags))
-        .map(|key| (*key).to_string())
+        .map(|key| (*key).to_owned())
         .collect();
     let raw = CANDIDATE_CURL_RAW_OPTIONS
         .iter()
         .filter(|flag| flags.contains(**flag))
-        .map(|flag| (*flag).to_string())
+        .map(|flag| (*flag).to_owned())
         .collect();
     let http_versions = curl_supported_http_versions(&feature_set, &flags);
     (available, keys, raw, flags, http_versions)
@@ -1049,9 +1040,7 @@ pub fn validate_linked_libcurl_integrity() -> Result<(), String> {
         && normalize_libcurl_version(&expected) != normalize_libcurl_version(&linked_version)
     {
         return Err(format!(
-            "Linked libcurl mismatch: build expected {}, but runtime reports {}. Rebuild with pnpm run native-curl:build and ensure PKG_CONFIG_PATH points to bin/native-curl-manifest.json pkgConfigPath before Cargo/Tauri build.",
-            expected,
-            linked_version
+            "Linked libcurl mismatch: build expected {expected}, but runtime reports {linked_version}. Rebuild with pnpm run native-curl:build and ensure PKG_CONFIG_PATH points to bin/native-curl-manifest.json pkgConfigPath before Cargo/Tauri build."
         ));
     }
     let expected_protocols = expected_libcurl_protocols();
@@ -1059,7 +1048,7 @@ pub fn validate_linked_libcurl_integrity() -> Result<(), String> {
         let missing: Vec<String> = ["http", "https"]
             .iter()
             .filter(|p| !protocol_set.contains(**p))
-            .map(|s| s.to_string())
+            .map(|s| (*s).to_owned())
             .collect();
         if !missing.is_empty() {
             return Err(format!(
@@ -1099,10 +1088,10 @@ pub fn validate_curl_direct_options(
     let (available, supported_keys, supported_raw, flags, http_versions) =
         curl_direct_supported_set();
     if !available {
-        return Err("curl is not available. The direct-download engine cannot start.".to_string());
+        return Err("curl is not available. The direct-download engine cannot start.".to_owned());
     }
     if resumable && !flags.contains("--continue-at") {
-        return Err("This curl build does not expose --continue-at, so resumable direct downloads are not supported.".to_string());
+        return Err("This curl build does not expose --continue-at, so resumable direct downloads are not supported.".to_owned());
     }
     let mut unsupported = Vec::new();
     for (key, value) in direct_options {
@@ -1124,7 +1113,7 @@ pub fn validate_curl_direct_options(
         ));
     }
     if resumable && direct_options.get("removeOnError").and_then(Value::as_bool) == Some(true) {
-        return Err("curl option removeOnError is incompatible with resumable downloads because curl cannot combine --remove-on-error with --continue-at -. Disable resumable or remove removeOnError.".to_string());
+        return Err("curl option removeOnError is incompatible with resumable downloads because curl cannot combine --remove-on-error with --continue-at -. Disable resumable or remove removeOnError.".to_owned());
     }
     if let Some(version) = direct_options
         .get("httpVersion")
@@ -1141,13 +1130,12 @@ pub fn validate_curl_direct_options(
             "3" | "http3" => "3",
             "3-only" | "http3-only" => "3-only",
             other => other,
-        }
-        .to_string();
+        }.to_owned();
         if !http_versions.iter().any(|item| item == &normalized) {
             return Err(format!(
                 "Requested HTTP version '{}' is not supported by this curl build. Supported versions: {}",
                 version,
-                if http_versions.is_empty() { "none".to_string() } else { http_versions.join(", ") }
+                if http_versions.is_empty() { "none".to_owned() } else { http_versions.join(", ") }
             ));
         }
     }
@@ -1161,7 +1149,7 @@ pub fn validate_curl_direct_options(
         for line in raw.lines().map(str::trim).filter(|line| !line.is_empty()) {
             let flag = line.split_whitespace().next().unwrap_or("");
             if !supported_raw.contains(flag) {
-                rejected.push(flag.to_string());
+                rejected.push(flag.to_owned());
             }
         }
         if !rejected.is_empty() {
@@ -1182,9 +1170,9 @@ fn collect_ytdlp_help(command: &str) -> String {
 
 fn ytdlp_model(ytdlp_bin: &str) -> (bool, String, HashSet<String>) {
     let version = hidden_output(ytdlp_bin, &["--version"])
-        .map(|v| v.trim().to_string())
+        .map(|v| v.trim().to_owned())
         .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| "unknown".to_string());
+        .unwrap_or_else(|| "unknown".to_owned());
     let available = version != "unknown" || executable_available(ytdlp_bin);
     let flags = if available {
         parse_long_flags(&collect_ytdlp_help(ytdlp_bin))
@@ -1296,26 +1284,26 @@ pub fn ytdlp_status_with_context(ytdlp_bin: &str, ffmpeg_available: bool) -> Val
     let supported_keys: HashSet<String> = YTDLP_MEDIA_OPTION_KEYS
         .iter()
         .filter(|key| ytdlp_key_supported(key, available, &flags, ffmpeg_available))
-        .map(|key| (*key).to_string())
+        .map(|key| (*key).to_owned())
         .collect();
     let all_keys: HashSet<String> = YTDLP_MEDIA_OPTION_KEYS
         .iter()
-        .map(|key| (*key).to_string())
+        .map(|key| (*key).to_owned())
         .collect();
     let unsupported_keys: HashSet<String> = all_keys.difference(&supported_keys).cloned().collect();
-    let mut external_downloaders = vec!["native".to_string()];
+    let mut external_downloaders = vec!["native".to_owned()];
     if ffmpeg_available {
-        external_downloaders.push("ffmpeg".to_string());
+        external_downloaders.push("ffmpeg".to_owned());
     }
     if available && flags.contains("--downloader") {
         if executable_available("http") || executable_available("httpie") {
-            external_downloaders.push("httpie".to_string());
+            external_downloaders.push("httpie".to_owned());
         }
         if executable_available("wget") {
-            external_downloaders.push("wget".to_string());
+            external_downloaders.push("wget".to_owned());
         }
         if executable_available("axel") {
-            external_downloaders.push("axel".to_string());
+            external_downloaders.push("axel".to_owned());
         }
     }
     external_downloaders.sort();
@@ -1397,7 +1385,7 @@ fn parse_ffmpeg_list(output: &str) -> HashSet<String> {
                             .chars()
                             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
                     {
-                        values.insert(item.to_string());
+                        values.insert(item.to_owned());
                     }
                 }
             }
@@ -1433,9 +1421,9 @@ fn parse_ffmpeg_protocols(output: &str) -> (HashSet<String>, HashSet<String>) {
                     .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
                 {
                     if target_name == "input" {
-                        input.insert(item.to_string());
+                        input.insert(item.to_owned());
                     } else {
-                        output_set.insert(item.to_string());
+                        output_set.insert(item.to_owned());
                     }
                 }
             }
@@ -1448,9 +1436,7 @@ pub fn ffmpeg_status(ffmpeg_bin: &str) -> Value {
     let output = hidden_output(ffmpeg_bin, &["-version"]);
     let available = output.is_some() || executable_available(ffmpeg_bin);
     let version_text = output
-        .as_deref()
-        .map(first_line)
-        .unwrap_or_else(|| "unknown".to_string());
+        .as_deref().map_or_else(|| "unknown".to_owned(), first_line);
     let formats = if available {
         parse_ffmpeg_list(&hidden_output_any(ffmpeg_bin, &["-formats"]).unwrap_or_default())
     } else {
@@ -1700,7 +1686,7 @@ pub fn validate_ytdlp_media_options(
     let (available, _, flags) = ytdlp_model(ytdlp_bin);
     if !available {
         return Err(
-            "yt-dlp is not available. The media extraction engine cannot start.".to_string(),
+            "yt-dlp is not available. The media extraction engine cannot start.".to_owned(),
         );
     }
     let ffmpeg_ok = media
@@ -1713,12 +1699,12 @@ pub fn validate_ytdlp_media_options(
         if media_option_requested(media, key)
             && !ytdlp_key_supported(key, available, &flags, ffmpeg_ok)
         {
-            unsupported.push((*key).to_string());
+            unsupported.push((*key).to_owned());
         }
     }
     if let Some(mode) = media.mode.as_deref().map(str::trim) {
         if mode.eq_ignore_ascii_case("audio") && !ffmpeg_ok {
-            unsupported.push("mode=audio requires ffmpeg".to_string());
+            unsupported.push("mode=audio requires ffmpeg".to_owned());
         }
     }
     if let Some(downloader) = media
@@ -1730,43 +1716,42 @@ pub fn validate_ytdlp_media_options(
         match downloader {
             "auto" | "native" => {}
             "curl" => unsupported
-                .push("The curl external downloader binary is no longer bundled. Use 'native' for yt-dlp's built-in HTTP client.".to_string()),
+                .push("The curl external downloader binary is no longer bundled. Use 'native' for yt-dlp's built-in HTTP client.".to_owned()),
             "ffmpeg" if ffmpeg_ok => {}
             "ffmpeg" => unsupported
-                .push("externalDownloader=ffmpeg requires an available ffmpeg binary".to_string()),
+                .push("externalDownloader=ffmpeg requires an available ffmpeg binary".to_owned()),
             "httpie" => {
                 if !(flags.contains("--downloader") || flags.contains("--external-downloader")) {
                     unsupported.push(
-                        "externalDownloader=httpie is not supported by this yt-dlp build"
-                            .to_string(),
+                        "externalDownloader=httpie is not supported by this yt-dlp build".to_owned(),
                     );
                 } else if !(executable_available("http") || executable_available("httpie")) {
                     unsupported.push(
-                        "externalDownloader=httpie requires the httpie executable".to_string(),
+                        "externalDownloader=httpie requires the httpie executable".to_owned(),
                     );
                 }
             }
             "wget" => {
                 if !(flags.contains("--downloader") || flags.contains("--external-downloader")) {
                     unsupported.push(
-                        "externalDownloader=wget is not supported by this yt-dlp build".to_string(),
+                        "externalDownloader=wget is not supported by this yt-dlp build".to_owned(),
                     );
                 } else if !executable_available("wget") {
                     unsupported
-                        .push("externalDownloader=wget requires the wget executable".to_string());
+                        .push("externalDownloader=wget requires the wget executable".to_owned());
                 }
             }
             "axel" => {
                 if !(flags.contains("--downloader") || flags.contains("--external-downloader")) {
                     unsupported.push(
-                        "externalDownloader=axel is not supported by this yt-dlp build".to_string(),
+                        "externalDownloader=axel is not supported by this yt-dlp build".to_owned(),
                     );
                 } else if !executable_available("axel") {
                     unsupported
-                        .push("externalDownloader=axel requires the axel executable".to_string());
+                        .push("externalDownloader=axel requires the axel executable".to_owned());
                 }
             }
-            other => unsupported.push(format!("externalDownloader={} is not allowed", other)),
+            other => unsupported.push(format!("externalDownloader={other} is not allowed")),
         }
     }
     if !unsupported.is_empty() {
@@ -1817,7 +1802,7 @@ pub fn all_engine_status(ytdlp_bin: &str, ffmpeg_bin: &str) -> Value {
             "torrentMagnet": Value::Null
         },
         "engines": {
-            "curl": curl.clone(),
+            "curl": curl,
             "libcurlMulti": curl,
             "ytdlp": ytdlp,
             "ffmpeg": ffmpeg

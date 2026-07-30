@@ -22,8 +22,8 @@ impl Default for AdaptiveConfig {
         let max_conns = cfg.max_connections_per_download;
         let avg_cores = (cfg.worker_threads / 2).max(1);
         let _mem_gb = cfg.write_buffer_bytes / (256 * 1024);
-        let speed_high = (avg_cores as u64 * 2 * 1024 * 1024).max(2 * 1024 * 1024);
-        let speed_low = (avg_cores as u64 * 64 * 1024).max(100 * 1024);
+        let speed_high = (u64::from(avg_cores) * 2 * 1024 * 1024).max(2 * 1024 * 1024);
+        let speed_low = (u64::from(avg_cores) * 64 * 1024).max(100 * 1024);
         Self {
             min_connections: MIN_CONNECTIONS,
             max_connections: max_conns,
@@ -103,10 +103,8 @@ impl AdaptiveConnectionManager {
                     *stall = Some(Instant::now());
                 }
             }
-        } else {
-            if let Ok(mut stall) = self.stall_start.lock() {
-                *stall = None;
-            }
+        } else if let Ok(mut stall) = self.stall_start.lock() {
+            *stall = None;
         }
     }
 
@@ -130,8 +128,7 @@ impl AdaptiveConnectionManager {
             .lock()
             .ok()
             .and_then(|s| *s)
-            .map(|t| t.elapsed() > self.config.stall_threshold)
-            .unwrap_or(false);
+            .is_some_and(|t| t.elapsed() > self.config.stall_threshold);
 
         if is_stalled && current > self.config.min_connections {
             let new_count = (current / 2).max(self.config.min_connections);
@@ -147,7 +144,7 @@ impl AdaptiveConnectionManager {
 
         if speed > self.config.speed_high_threshold && current < self.config.max_connections {
             let speed_ratio = speed as f64 / self.config.speed_high_threshold as f64;
-            let increase = ((speed_ratio - 1.0) * current as f64).ceil() as u32;
+            let increase = ((speed_ratio - 1.0) * f64::from(current)).ceil() as u32;
             let new_count = (current + increase).min(self.config.max_connections);
             if new_count > current {
                 return Some(Adjustment {
@@ -199,14 +196,13 @@ impl AdaptiveConnectionManager {
     fn avg_speed(&self) -> u64 {
         self.speed_samples
             .lock()
-            .map(|samples| {
+            .map_or(0, |samples| {
                 if samples.is_empty() {
                     0
                 } else {
                     samples.iter().sum::<u64>() / samples.len() as u64
                 }
             })
-            .unwrap_or(0)
     }
 }
 

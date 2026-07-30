@@ -43,12 +43,12 @@ pub fn load(data_dir: &str) -> PersistedState {
         Ok(raw) => match serde_json::from_str(&raw) {
             Ok(parsed) => parsed,
             Err(e) => {
-                log::warn!("Corrupt downloads-state.json, starting fresh: {}", e);
+                log::warn!("Corrupt downloads-state.json, starting fresh: {e}");
                 // Preserve the corrupt file for diagnostics instead of
                 // silently overwriting it on the next save.
                 let backup = path.with_extension("json.corrupt");
                 if let Err(copy_err) = std::fs::copy(&path, &backup) {
-                    log::warn!("Failed to back up corrupt state file: {}", copy_err);
+                    log::warn!("Failed to back up corrupt state file: {copy_err}");
                 }
                 PersistedState::default()
             }
@@ -63,17 +63,13 @@ fn build_snapshot(state: &AppState) -> PersistedState {
     // preventing AB-BA deadlock with transfer.rs (which locks download_stats → curl_jobs).
     let (media_args, curl_args, tasks, telegram_last_update_id) = {
         let media_jobs = lock_or_err!(state.media_jobs);
-        let curl_jobs = lock_or_err!(state.curl_jobs);
         let snapshot = lock_or_err!(state.task_snapshot);
 
         let media_args: HashMap<String, Vec<String>> = media_jobs
             .iter()
             .map(|(id, job)| (id.clone(), job.args.clone()))
             .collect();
-        let curl_args: HashMap<String, Vec<String>> = curl_jobs
-            .iter()
-            .map(|(id, job)| (id.clone(), job.args.clone()))
-            .collect();
+        let curl_args: HashMap<String, Vec<String>> = HashMap::new();
         let tasks: Vec<Task> = snapshot.values().cloned().collect();
         let telegram_last_update_id = *lock_or_err!(state.telegram_last_update_id);
         (media_args, curl_args, tasks, telegram_last_update_id)
@@ -99,29 +95,29 @@ pub fn save(state: &AppState) -> bool {
     let payload = match serde_json::to_string(&snapshot) {
         Ok(p) => p,
         Err(e) => {
-            log::error!("Failed to serialize download state: {}", e);
+            log::error!("Failed to serialize download state: {e}");
             return false;
         }
     };
     let tmp_path = path.with_extension("json.tmp");
     if let Err(e) = std::fs::write(&tmp_path, &payload) {
-        log::error!("Failed to write temporary state file: {}", e);
+        log::error!("Failed to write temporary state file: {e}");
         return false;
     }
     match std::fs::File::open(&tmp_path) {
         Ok(f) => {
             if let Err(e) = f.sync_all() {
-                log::warn!("Failed to sync temporary state file to disk: {}", e);
+                log::warn!("Failed to sync temporary state file to disk: {e}");
             }
         }
         Err(e) => {
-            log::error!("Failed to open temporary state file for fsync: {}", e);
+            log::error!("Failed to open temporary state file for fsync: {e}");
             let _ = std::fs::remove_file(&tmp_path);
             return false;
         }
     }
     if let Err(e) = std::fs::rename(&tmp_path, &path) {
-        log::error!("Failed to rename state file into place: {}", e);
+        log::error!("Failed to rename state file into place: {e}");
         let _ = std::fs::remove_file(&tmp_path);
         return false;
     }
@@ -178,7 +174,7 @@ pub fn start_persistence_loop(state: SharedState) {
                         state.persist_dirty.store(true, Ordering::Release);
                     }
                     Err(join_err) => {
-                        log::error!("Persistence task panicked; will retry: {}", join_err);
+                        log::error!("Persistence task panicked; will retry: {join_err}");
                         state.persist_dirty.store(true, Ordering::Release);
                     }
                     _ => {}
@@ -260,7 +256,7 @@ mod tests {
                 crate::daemon::engine::config::global_config().retry_policy(),
             ),
             plugin_api: crate::daemon::engine::plugin_api::PluginApi::new(),
-            engine_trackers: Mutex::new(HashMap::new()),
+            engine_trackers: RwLock::new(HashMap::new()),
             mirror_managers: Mutex::new(HashMap::new()),
             extractor_registry: crate::daemon::engine::extractor::SharedExtractorRegistry::new(
                 crate::daemon::engine::extractor::ExtractorRegistry::new(),
@@ -330,10 +326,6 @@ mod tests {
             "c1".to_string(),
             CurlJob {
                 task: sample_task("c1", "libcurl-multi", "downloading"),
-                args: vec![
-                    "--location".to_string(),
-                    "https://example.com/c1".to_string(),
-                ],
                 direct_options: HashMap::new(),
                 cancel_token: Arc::new(AtomicBool::new(false)),
                 run_generation: Arc::new(AtomicU64::new(0)),

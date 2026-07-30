@@ -11,14 +11,14 @@ pub async fn serve_index(
     let path = std::path::Path::new(&state.resource_dir).join("index.html");
     let content = tokio::fs::read(&path)
         .await
-        .map_err(|e| (StatusCode::NOT_FOUND, format!("Index not found: {}", e)))?;
+        .map_err(|e| (StatusCode::NOT_FOUND, format!("Index not found: {e}")))?;
     axum::response::Response::builder()
         .header("content-type", "text/html; charset=utf-8")
         .body(Body::from(content))
         .map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Response build error: {}", e),
+                format!("Response build error: {e}"),
             )
         })
 }
@@ -32,17 +32,17 @@ pub async fn serve_asset(
         .join(&path);
     let canonical = file_path
         .canonicalize()
-        .map_err(|_| (StatusCode::NOT_FOUND, "Asset not found".to_string()))?;
+        .map_err(|_| (StatusCode::NOT_FOUND, "Asset not found".to_owned()))?;
     let base = std::path::Path::new(&state.resource_dir)
         .join("assets")
         .canonicalize()
-        .map_err(|_| (StatusCode::NOT_FOUND, "Asset base not found".to_string()))?;
+        .map_err(|_| (StatusCode::NOT_FOUND, "Asset base not found".to_owned()))?;
     if !canonical.starts_with(&base) {
-        return Err((StatusCode::FORBIDDEN, "Forbidden".to_string()));
+        return Err((StatusCode::FORBIDDEN, "Forbidden".to_owned()));
     }
     let content = tokio::fs::read(&canonical)
         .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "Asset not found".to_string()))?;
+        .map_err(|_| (StatusCode::NOT_FOUND, "Asset not found".to_owned()))?;
 
     let mime = mime_for_path(&path);
     axum::response::Response::builder()
@@ -51,7 +51,7 @@ pub async fn serve_asset(
         .map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Response build error: {}", e),
+                format!("Response build error: {e}"),
             )
         })
 }
@@ -62,14 +62,14 @@ pub async fn serve_spa_fallback(
     let path = std::path::Path::new(&state.resource_dir).join("index.html");
     let content = tokio::fs::read(&path)
         .await
-        .map_err(|e| (StatusCode::NOT_FOUND, format!("Index not found: {}", e)))?;
+        .map_err(|e| (StatusCode::NOT_FOUND, format!("Index not found: {e}")))?;
     axum::response::Response::builder()
         .header("content-type", "text/html; charset=utf-8")
         .body(Body::from(content))
         .map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Response build error: {}", e),
+                format!("Response build error: {e}"),
             )
         })
 }

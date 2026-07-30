@@ -6,12 +6,12 @@ use std::time::{Duration, Instant};
 
 use ::curl::easy::Easy2;
 
-use super::*;
+use super::{DirectDownloadPlan, requested_connections, CurlTransferConfig, HtmlHeadCapture, apply_easy_options, ResponseCapture, SegmentProgress, create_easy_for_range_ext, CurlMultiGuard, drive_multi_socket, drive_multi_wait_perform};
 use crate::daemon::direct::{
     EventLoopMode, FileWriter, IntegrityMetadata, IntegrityValidator, RetryPolicy, SegmentPlanner,
     SegmentRange as ByteRange,
 };
-use crate::daemon::engine::adaptive::AdaptationAction;
+
 use crate::daemon::engine::config::global_config;
 use crate::daemon::engine::policy_engine::{DecisionCategory, DecisionContext};
 use crate::daemon::state::SharedState;
@@ -39,16 +39,53 @@ fn build_decision_context(
         } else {
             ""
         }
+    }.to_owned();
+
+    // Acquire locks in documented order: curl_jobs (2), engine_trackers (4),
+    // then die_orchestrator/resource_manager (10).
+    let (active_downloads, total_downloaded, elapsed_secs) = {
+        if let Ok(jobs) = state.curl_jobs.lock() {
+            let active = jobs
+                .values()
+                .filter(|j| j.task.status == "downloading")
+                .count() as u32;
+            if let Some(job) = jobs.get(id) {
+                (
+                    active,
+                    job.task.downloaded_bytes,
+                    job.start_time.elapsed().as_secs_f64(),
+                )
+            } else {
+                (active, 0u64, 0.0)
+            }
+        } else {
+            (1u32, 0u64, 0.0)
+        }
+    };
+
+    let attempted_segments = plan.connections;
+    let mut completed_segments = 0u32;
+    let mut failed_segments = 0u32;
+    if let Ok(trackers) = state.engine_trackers.read() {
+        if let Some(tracker) = trackers.get(id) {
+            if let Some(seg) = tracker.segments.as_ref() {
+                let info = seg.segments();
+                completed_segments = info.iter().filter(|s| s.progress >= 1.0).count() as u32;
+                failed_segments = info
+                    .iter()
+                    .filter(|s| !s.active && s.downloaded == 0 && s.total_bytes > 0)
+                    .count() as u32;
+            }
+        }
     }
-    .to_string();
 
     let (server_stability, throughput_ceiling, per_conn_ceiling, is_rate_limited) = {
         if let Ok(die) = state.die_orchestrator.lock() {
             if let Ok(ps) = die.profile_store.lock() {
                 let profile = ps.get_for_host(&host);
-                let stability = profile.map(|p| p.stability_score as f32).unwrap_or(0.5);
-                let tput = profile.map(|p| p.throughput_ceiling).unwrap_or(0);
-                let per_conn = profile.map(|p| p.per_connection_ceiling).unwrap_or(0);
+                let stability = profile.map_or(0.5, |p| p.stability_score as f32);
+                let tput = profile.map_or(0, |p| p.throughput_ceiling);
+                let per_conn = profile.map_or(0, |p| p.per_connection_ceiling);
                 let rate_limited = ps.is_rate_limited(&host);
                 (stability, tput, per_conn, rate_limited)
             } else {
@@ -72,47 +109,6 @@ fn build_decision_context(
             (0.0, 0.0, 0.0)
         }
     };
-
-    let active_downloads = state
-        .curl_jobs
-        .lock()
-        .map(|j| {
-            j.values()
-                .filter(|j| j.task.status == "downloading")
-                .count() as u32
-        })
-        .unwrap_or(1);
-
-    let (total_downloaded, elapsed_secs) = {
-        if let Ok(jobs) = state.curl_jobs.lock() {
-            if let Some(job) = jobs.get(id) {
-                (
-                    job.task.downloaded_bytes,
-                    job.start_time.elapsed().as_secs_f64(),
-                )
-            } else {
-                (0u64, 0.0)
-            }
-        } else {
-            (0u64, 0.0)
-        }
-    };
-
-    let attempted_segments = plan.connections;
-    let mut completed_segments = 0u32;
-    let mut failed_segments = 0u32;
-    if let Ok(trackers) = state.engine_trackers.lock() {
-        if let Some(tracker) = trackers.get(id) {
-            if let Some(seg) = tracker.segments.as_ref() {
-                let info = seg.segments();
-                completed_segments = info.iter().filter(|s| s.progress >= 1.0).count() as u32;
-                failed_segments = info
-                    .iter()
-                    .filter(|s| !s.active && s.downloaded == 0 && s.total_bytes > 0)
-                    .count() as u32;
-            }
-        }
-    }
 
     DecisionContext {
         category: DecisionCategory::Connection,
@@ -141,36 +137,34 @@ fn build_decision_context(
     }
 }
 
-pub(crate) fn task_from_body(
+pub fn task_from_body(
     body: &crate::daemon::types::CreateDownloadBody,
     id: &str,
     name: String,
     output_path: &Path,
-    args: Vec<String>,
     direct_options: HashMap<String, serde_json::Value>,
 ) -> CurlJob {
     use crate::daemon::utils::infer_file_type;
     let category = body
         .category
         .clone()
-        .unwrap_or_else(|| infer_file_type(&name).to_string());
+        .unwrap_or_else(|| infer_file_type(&name).to_owned());
     let file_type = body
         .file_type
         .clone()
-        .unwrap_or_else(|| infer_file_type(&name).to_string());
+        .unwrap_or_else(|| infer_file_type(&name).to_owned());
     let initial_size = body.size_bytes.unwrap_or(0);
     let downloaded = FileWriter::current_size(output_path);
     let task = crate::daemon::types::Task {
-        id: id.to_string(),
+        id: id.to_owned(),
         name,
-        url: body.url.as_deref().unwrap_or("").to_string(),
+        url: body.url.as_deref().unwrap_or("").to_owned(),
         file_type,
         status: if body.start_immediately.unwrap_or(true) {
             "downloading"
         } else {
             "queued"
-        }
-        .to_string(),
+        }.to_owned(),
         size_bytes: initial_size,
         downloaded_bytes: downloaded,
         speed_bytes_per_sec: 0,
@@ -178,14 +172,14 @@ pub(crate) fn task_from_body(
         elapsed_seconds: 0,
         date_added: now_str(),
         category,
-        queue_id: body.queue_id.clone().unwrap_or_else(|| "main".to_string()),
+        queue_id: body.queue_id.clone().unwrap_or_else(|| "main".to_owned()),
         connections: requested_connections(body.connections),
         resumable: body.resumable.unwrap_or(true),
         save_path: output_path.to_string_lossy().to_string(),
         description: body
             .description
             .clone()
-            .unwrap_or_else(|| "Direct download via libcurl multi".to_string()),
+            .unwrap_or_else(|| "Direct download via libcurl multi".to_owned()),
         segments: build_segments(
             requested_connections(body.connections),
             initial_size,
@@ -193,21 +187,19 @@ pub(crate) fn task_from_body(
             0,
         ),
         referer: body.referer.clone(),
-        engine: "libcurl-multi".to_string(),
-        engine_id: id.to_string(),
+        engine: "libcurl-multi".to_owned(),
+        engine_id: id.to_owned(),
         engine_status: Some(
             if body.start_immediately.unwrap_or(true) {
                 "starting"
             } else {
                 "queued"
-            }
-            .to_string(),
+            }.to_owned(),
         ),
         error_message: None,
     };
     CurlJob {
         task,
-        args,
         direct_options,
         cancel_token: Arc::new(AtomicBool::new(false)),
         run_generation: Arc::new(AtomicU64::new(0)),
@@ -216,7 +208,7 @@ pub(crate) fn task_from_body(
     }
 }
 
-pub(crate) fn plan_from_job(job: &CurlJob) -> DirectDownloadPlan {
+pub fn plan_from_job(job: &CurlJob) -> DirectDownloadPlan {
     let config = CurlTransferConfig::from(&job.direct_options);
     let allow_overwrite = config.bool_("allowOverwrite").unwrap_or(true);
     let forced_single = config.bool_("forceSingleConnection").unwrap_or(false);
@@ -225,16 +217,16 @@ pub(crate) fn plan_from_job(job: &CurlJob) -> DirectDownloadPlan {
         && job.task.resumable
         && job.task.size_bytes >= global_config().min_segment_bytes
         && job.task.connections > 1;
-    let etag = config.str_("etag").map(str::to_string);
-    let last_modified = config.str_("lastModified").map(str::to_string);
-    let (validator, validator_is_etag) = if let Some(et) = etag.clone() {
+    let etag = config.str_("etag").map(str::to_owned);
+    let last_modified = config.str_("lastModified").map(str::to_owned);
+    let (validator, validator_is_etag) = if let Some(et) = etag {
         (Some(et), true)
-    } else if let Some(lm) = last_modified.clone() {
+    } else if let Some(lm) = last_modified {
         (Some(lm), false)
     } else {
         (None, false)
     };
-    let digest_sha256 = config.str_("digestSha256").map(str::to_string);
+    let digest_sha256 = config.str_("digestSha256").map(str::to_owned);
     let link_mirrors = config.array_("linkMirrors");
     let mirror_priorities = config
         .array_u32_("mirrorPriorities")
@@ -259,7 +251,7 @@ pub(crate) fn plan_from_job(job: &CurlJob) -> DirectDownloadPlan {
         remove_on_error: config.bool_("removeOnError").unwrap_or(false),
         referer: config
             .str_("referer")
-            .map(str::to_string)
+            .map(str::to_owned)
             .or_else(|| job.task.referer.clone()),
         config,
         validator,
@@ -272,7 +264,7 @@ pub(crate) fn plan_from_job(job: &CurlJob) -> DirectDownloadPlan {
     }
 }
 
-pub(crate) fn split_ranges(
+pub fn split_ranges(
     total_size: u64,
     connections: u32,
     output_path: &Path,
@@ -284,11 +276,11 @@ pub(crate) fn split_ranges(
     )
 }
 
-fn part_size(range: &ByteRange) -> u64 {
+const fn part_size(range: &ByteRange) -> u64 {
     range.len()
 }
 
-pub(crate) fn remove_stale_parts_for(output_path: &Path) {
+pub fn remove_stale_parts_for(output_path: &Path) {
     FileWriter::remove_stale_parts_for(output_path);
 }
 
@@ -374,8 +366,7 @@ fn resolve_effective_target(plan: &DirectDownloadPlan) -> (String, bool, Preflig
         let mut easy = Easy2::new(HtmlHeadCapture::default());
         if apply_easy_options(&mut easy, &hop_plan, Some((0, 0))).is_err() {
             log::warn!(
-                "resolve_effective_target: apply_easy_options failed for hop, returning current={}",
-                current
+                "resolve_effective_target: apply_easy_options failed for hop, returning current={current}"
             );
             return (current, true, preflight);
         }
@@ -383,10 +374,7 @@ fn resolve_effective_target(plan: &DirectDownloadPlan) -> (String, bool, Preflig
 
         if let Err(e) = easy.perform() {
             log::warn!(
-                "resolve_effective_target: preflight perform failed for {}: {}, returning current={}",
-                current,
-                e,
-                current
+                "resolve_effective_target: preflight perform failed for {current}: {e}, returning current={current}"
             );
             return (current, true, preflight);
         }
@@ -396,9 +384,7 @@ fn resolve_effective_target(plan: &DirectDownloadPlan) -> (String, bool, Preflig
             .effective_url()
             .ok()
             .flatten()
-            .filter(|u| u.starts_with("http"))
-            .map(|u| u.to_string())
-            .unwrap_or_else(|| current.clone());
+            .filter(|u| u.starts_with("http")).map_or_else(|| current.clone(), std::borrow::ToOwned::to_owned);
 
         if let Ok(t) = easy.total_time() {
             preflight.initial_rtt_us = t.as_micros() as u64;
@@ -423,10 +409,10 @@ fn resolve_effective_target(plan: &DirectDownloadPlan) -> (String, bool, Preflig
         {
             if let Some(ver) = easy.get_ref().http_version() {
                 preflight.protocol = match ver.as_str() {
-                    "1.0" => "HTTP/1.0".to_string(),
-                    "1.1" => "HTTP/1.1".to_string(),
-                    "2" => "h2".to_string(),
-                    _ => format!("HTTP/{}", ver),
+                    "1.0" => "HTTP/1.0".to_owned(),
+                    "1.1" => "HTTP/1.1".to_owned(),
+                    "2" => "h2".to_owned(),
+                    _ => format!("HTTP/{ver}"),
                 };
             }
         }
@@ -435,8 +421,7 @@ fn resolve_effective_target(plan: &DirectDownloadPlan) -> (String, bool, Preflig
             .content_type()
             .ok()
             .flatten()
-            .map(|ct| ct.to_ascii_lowercase().contains("text/html"))
-            .unwrap_or(false);
+            .is_some_and(|ct| ct.to_ascii_lowercase().contains("text/html"));
 
         if is_html {
             if let Some(refresh) =
@@ -444,7 +429,7 @@ fn resolve_effective_target(plan: &DirectDownloadPlan) -> (String, bool, Preflig
             {
                 let next = crate::daemon::utils::refreshed_url(refresh, &effective);
                 if next.starts_with("http") && next != current && next != effective {
-                    log::info!("resolve: meta-refresh {} -> {}", current, next);
+                    log::info!("resolve: meta-refresh {current} -> {next}");
                     current = next;
                     continue;
                 }
@@ -497,69 +482,75 @@ fn update_curl_task_progress(
 
     state.bandwidth_manager.report_speed(id, speed_u64);
 
-    if let Ok(trackers) = state.engine_trackers.lock() {
+    if let Ok(trackers) = state.engine_trackers.read() {
         if let Some(tracker) = trackers.get(id) {
             tracker.adaptive.report_speed(speed_u64);
         }
     }
 
-    let mut jobs = lock_or_err!(state.curl_jobs);
+    // Retry: try_lock with backoff to avoid silent drops on contention.
+    let mut jobs = loop {
+        if let Ok(jobs) = state.curl_jobs.try_lock() {
+            break jobs;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    };
     if let Some(job) = jobs.get_mut(id) {
         job.task.downloaded_bytes = downloaded;
-        job.task.size_bytes = total_size;
-        job.task.speed_bytes_per_sec = speed.max(0.0) as u64;
-        job.task.elapsed_seconds = job.start_time.elapsed().as_secs();
-        job.task.time_left_seconds = if speed > 0.0 && total_size > downloaded {
-            ((total_size - downloaded) as f64 / speed).ceil() as u64
-        } else {
-            0
-        };
-        if job.segment_prev_bytes.len() != ranges.len() {
-            job.segment_prev_bytes.resize(ranges.len(), 0);
-        }
-        let mut segment_speeds: Vec<u64> = Vec::with_capacity(ranges.len());
-        for (i, (range, progress, initial)) in ranges.iter().enumerate() {
-            let seg_total = part_size(range);
-            let seg_downloaded = (*initial + progress.load(Ordering::Relaxed)).min(seg_total);
-            let prev = job.segment_prev_bytes[i];
-            let seg_speed = if seg_downloaded > prev {
-                (seg_downloaded - prev) as f64 / elapsed
+            job.task.size_bytes = total_size;
+            job.task.speed_bytes_per_sec = speed.max(0.0) as u64;
+            job.task.elapsed_seconds = job.start_time.elapsed().as_secs();
+            job.task.time_left_seconds = if speed > 0.0 && total_size > downloaded {
+                ((total_size - downloaded) as f64 / speed).ceil() as u64
             } else {
-                0.0
+                0
             };
-            job.segment_prev_bytes[i] = seg_downloaded;
-            segment_speeds.push(seg_speed.max(0.0) as u64);
-        }
-        job.task.segments = ranges
-            .iter()
-            .enumerate()
-            .map(|(i, (range, progress, initial))| {
+            if job.segment_prev_bytes.len() != ranges.len() {
+                job.segment_prev_bytes.resize(ranges.len(), 0);
+            }
+            let mut segment_speeds: Vec<u64> = Vec::with_capacity(ranges.len());
+            for (i, (range, progress, initial)) in ranges.iter().enumerate() {
                 let seg_total = part_size(range);
                 let seg_downloaded = (*initial + progress.load(Ordering::Relaxed)).min(seg_total);
-                Segment {
-                    id: range.index as u32,
-                    progress: if seg_total > 0 {
-                        seg_downloaded as f64 / seg_total as f64
-                    } else {
-                        0.0
-                    },
-                    downloaded_bytes: seg_downloaded,
-                    total_bytes: seg_total,
-                    active: seg_downloaded < seg_total && job.task.status == "downloading",
-                    speed: segment_speeds[i],
-                }
-            })
-            .collect();
-        let task = job.task.clone();
-        drop(jobs);
-        lock_or_err!(state.task_snapshot).insert(id.to_string(), task);
-        state.mark_dirty();
-    }
+                let prev = job.segment_prev_bytes[i];
+                let seg_speed = if seg_downloaded > prev {
+                    (seg_downloaded - prev) as f64 / elapsed
+                } else {
+                    0.0
+                };
+                job.segment_prev_bytes[i] = seg_downloaded;
+                segment_speeds.push(seg_speed.max(0.0) as u64);
+            }
+            job.task.segments = ranges
+                .iter()
+                .enumerate()
+                .map(|(i, (range, progress, initial))| {
+                    let seg_total = part_size(range);
+                    let seg_downloaded = (*initial + progress.load(Ordering::Relaxed)).min(seg_total);
+                    Segment {
+                        id: range.index as u32,
+                        progress: if seg_total > 0 {
+                            seg_downloaded as f64 / seg_total as f64
+                        } else {
+                            0.0
+                        },
+                        downloaded_bytes: seg_downloaded,
+                        total_bytes: seg_total,
+                        active: seg_downloaded < seg_total && job.task.status == "downloading",
+                        speed: segment_speeds[i],
+                    }
+                })
+                .collect();
+            let task = job.task.clone();
+            drop(jobs);
+            lock_or_err!(state.task_snapshot).insert(id.to_owned(), task);
+            state.mark_dirty();
+        }
 }
 
 /// HTTP(S) transfers always yield a non-zero response code after a
 /// successful perform. Other protocols (FTP/SFTP/SCP/...) legitimately
-/// report response_code()==0 even on success, so the "no response" guards
+/// report `response_code()==0` even on success, so the "no response" guards
 /// must only apply to HTTP-family URLs.
 fn is_http_family(url: &str) -> bool {
     let lower = url.get(..8).unwrap_or(url).to_ascii_lowercase();
@@ -580,7 +571,7 @@ pub(super) struct TransferOutcome {
 }
 
 impl TransferOutcome {
-    fn plain(size: u64, validator: Option<String>) -> Self {
+    const fn plain(size: u64, validator: Option<String>) -> Self {
         Self {
             size,
             validator,
@@ -731,13 +722,14 @@ fn run_single_libcurl(
         let now = Instant::now();
         let elapsed = now.duration_since(last_tick).as_secs_f64().max(0.001);
         let speed = effective_downloaded.saturating_sub(last_total) as f64 / elapsed;
+        let prev_last_total = last_total;
         last_total = effective_downloaded;
         last_tick = now;
 
-        if effective_downloaded > on_disk_before {
+        if effective_downloaded > prev_last_total {
             last_progress_time = now;
         } else if now.duration_since(last_progress_time).as_secs() >= 60
-            && effective_downloaded == on_disk_before
+            && effective_downloaded == prev_last_total
         {
             log::warn!("Task {id}: stall detected — no data received for 60s, aborting transfer");
             cancel_for_tick.store(true, Ordering::Release);
@@ -746,30 +738,37 @@ fn run_single_libcurl(
         let speed_u64 = speed.max(0.0) as u64;
         state.bandwidth_manager.report_speed(id, speed_u64);
 
-        let mut jobs = lock_or_err!(state.curl_jobs);
-        if let Some(job) = jobs.get_mut(id) {
-            job.task.downloaded_bytes = effective_downloaded;
-            job.task.size_bytes = plan.total_size;
-            job.task.speed_bytes_per_sec = speed_u64;
-            job.task.elapsed_seconds = job.start_time.elapsed().as_secs();
-            job.task.time_left_seconds = if speed > 0.0 && plan.total_size > effective_downloaded {
-                ((plan.total_size - effective_downloaded) as f64 / speed).ceil() as u64
-            } else {
-                0
-            };
-            let task = job.task.clone();
-            drop(jobs);
-            lock_or_err!(state.task_snapshot).insert(id.to_string(), task);
-            state.mark_dirty();
+    // Retry loop: try_lock with backoff to avoid silent drops on contention.
+    let mut jobs = loop {
+        if let Ok(jobs) = state.curl_jobs.try_lock() {
+            break jobs;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    };
+    {
+            if let Some(job) = jobs.get_mut(id) {
+                job.task.downloaded_bytes = effective_downloaded;
+                job.task.size_bytes = plan.total_size;
+                job.task.speed_bytes_per_sec = speed_u64;
+                job.task.elapsed_seconds = job.start_time.elapsed().as_secs();
+                job.task.time_left_seconds = if speed > 0.0 && plan.total_size > effective_downloaded {
+                    ((plan.total_size - effective_downloaded) as f64 / speed).ceil() as u64
+                } else {
+                    0
+                };
+                let task = job.task.clone();
+                drop(jobs);
+                lock_or_err!(state.task_snapshot).insert(id.to_owned(), task);
+                state.mark_dirty();
+            }
         }
     };
     log::info!(
-        "Task {id}: starting curl multi drive loop (on_disk_before={on_disk_before}, preallocate={:?})",
-        preallocate
+        "Task {id}: starting curl multi drive loop (on_disk_before={on_disk_before}, preallocate={preallocate:?})"
     );
     if let Some(runtime) = socket_runtime.as_mut() {
         drive_multi_socket(
-            guard.multi(),
+            guard.multi()?,
             runtime,
             &handles,
             &cancel,
@@ -777,7 +776,7 @@ fn run_single_libcurl(
             &mut tick,
         )?;
     } else {
-        drive_multi_wait_perform(guard.multi(), &handles, &cancel, "transfer", &mut tick)?;
+        drive_multi_wait_perform(guard.multi()?, &handles, &cancel, "transfer", &mut tick)?;
     }
     let response = handles[0]
         .response_code()
@@ -804,20 +803,18 @@ fn run_single_libcurl(
                 &unconditional,
                 cancel,
                 retry_after,
-                streaming_digest_out.clone(),
+                streaming_digest_out,
             );
         }
         if on_disk == 0 {
             return Err(
-                "Server replied 304 Not Modified but no local file exists to validate against"
-                    .to_string(),
+                "Server replied 304 Not Modified but no local file exists to validate against".to_owned(),
             );
         }
         let (captured, encoded) = capture
             .lock()
             .ok()
-            .map(|cap| (cap.validator.clone(), cap.content_encoded))
-            .unwrap_or((None, false));
+            .map_or((None, false), |cap| (cap.validator.clone(), cap.content_encoded));
         return Ok(TransferOutcome {
             size: on_disk,
             validator: captured,
@@ -834,7 +831,7 @@ fn run_single_libcurl(
             );
             let _ = std::fs::remove_file(&plan.output_path);
         }
-        return Err("resource-changed-412".to_string());
+        return Err("resource-changed-412".to_owned());
     }
     if response == 416 {
         let existing = FileWriter::current_size(&plan.output_path);
@@ -846,7 +843,7 @@ fn run_single_libcurl(
             );
             let _ = std::fs::remove_file(&plan.output_path);
         }
-        return Err("range-not-satisfiable-416".to_string());
+        return Err("range-not-satisfiable-416".to_owned());
     }
     if response == 200 && resume_existing > 0 {
         log::warn!(
@@ -861,10 +858,10 @@ fn run_single_libcurl(
         {
             let _ = f.set_len(0);
         }
-        return Err("resume-corrupted-200".to_string());
+        return Err("resume-corrupted-200".to_owned());
     }
     if response >= 400 {
-        return Err(format!("HTTP error {}", response));
+        return Err(format!("HTTP error {response}"));
     }
     // response == 0 means no HTTP response was received at all — the transfer
     // failed before reaching the server (DNS failure, connection refused, TLS
@@ -877,7 +874,7 @@ fn run_single_libcurl(
         // Use the atomic counter (actual curl-written bytes) NOT file size,
         // because preallocated files inflate FileWriter::current_size() and
         // mask a zero-byte transfer as "complete".
-        let curl_written = downloaded_counter.load(Ordering::Relaxed);
+        let curl_written = downloaded_counter.load(Ordering::Acquire);
         log::warn!(
             "Task {id}: HTTP response=0 — curl_written={curl_written}, on_disk={}, total_size={}",
             FileWriter::current_size(&plan.output_path),
@@ -886,8 +883,7 @@ fn run_single_libcurl(
         if curl_written == 0 {
             return Err(
                 "Transfer failed: no HTTP response received (DNS, connection, or TLS error). \
-                 The download engine could not reach the server."
-                    .to_string(),
+                 The download engine could not reach the server.".to_owned(),
             );
         }
         // Partial data was received but the connection dropped before a complete
@@ -903,16 +899,14 @@ fn run_single_libcurl(
         // loudly so the user can retry instead of trusting a truncated file.
         if plan.total_size == 0 && curl_written > 0 {
             return Err(format!(
-                "Transfer ended without an HTTP response after {} bytes; the file may be incomplete",
-                curl_written
+                "Transfer ended without an HTTP response after {curl_written} bytes; the file may be incomplete"
             ));
         }
     }
     let (captured, encoded) = capture
         .lock()
         .ok()
-        .map(|cap| (cap.validator.clone(), cap.content_encoded))
-        .unwrap_or((None, false));
+        .map_or((None, false), |cap| (cap.validator.clone(), cap.content_encoded));
     Ok(TransferOutcome {
         size: FileWriter::current_size(&plan.output_path),
         validator: captured,
@@ -971,7 +965,7 @@ fn run_segmented_libcurl(
     let adaptive_engine = {
         let host = reqwest::Url::parse(&plan.url)
             .ok()
-            .and_then(|u| u.host_str().map(str::to_string))
+            .and_then(|u| u.host_str().map(str::to_owned))
             .unwrap_or_else(|| "unknown".into());
         let protocol = match preflight.protocol.as_str() {
             "h2" | "h2c" => {
@@ -992,7 +986,7 @@ fn run_segmented_libcurl(
         );
         if preflight.initial_rtt_us > 0 || preflight.ttfb_us > 0 {
             engine.seed_profile(
-                protocol.clone(),
+                protocol,
                 preflight.supports_range,
                 None,
                 if preflight.uses_tls {
@@ -1008,20 +1002,22 @@ fn run_segmented_libcurl(
         }
         if let Some(ref strat) = plan.config.rie_strategy {
             log::info!(
-                "Task {}: RIE strategy={} rie_conns={} effective_conns={}",
-                id,
-                strat,
-                rie_connections,
-                effective_connections
+                "Task {id}: RIE strategy={strat} rie_conns={rie_connections} effective_conns={effective_connections}"
             );
         }
         engine
     };
 
     {
-        let mut trackers = lock_or_err!(state.engine_trackers);
+        let mut trackers = match state.engine_trackers.write() {
+            Ok(g) => g,
+            Err(e) => {
+                log::error!("engine_trackers lock poisoned: {e}");
+                return Err("engine_trackers lock poisoned".into());
+            }
+        };
         trackers.insert(
-            id.to_string(),
+            id.to_owned(),
             crate::daemon::state::TaskEngineTracker {
                 adaptive:
                     crate::daemon::engine::adaptive_connections::AdaptiveConnectionManager::new(
@@ -1040,8 +1036,7 @@ fn run_segmented_libcurl(
     guard.configure_limits(
         global_config().connection_limits_for(effective_connections, &plan.url),
     )?;
-    guard
-        .multi()
+    guard.multi()?
         .pipelining(false, true)
         .map_err(|e| format!("Could not enable libcurl multiplexing: {e}"))?;
     let mut socket_runtime = if matches!(plan.config.event_loop_mode(), EventLoopMode::MultiSocket)
@@ -1054,7 +1049,7 @@ fn run_segmented_libcurl(
     let mut handles = Vec::new();
     let mut seg_captures: Vec<Arc<Mutex<ResponseCapture>>> = Vec::new();
     let per_segment_limit_bps = if task_limit > 0 {
-        Some((task_limit * 1024) / effective_connections.max(1) as u64)
+        Some((task_limit * 1024) / u64::from(effective_connections.max(1)))
     } else {
         None
     };
@@ -1127,7 +1122,7 @@ fn run_segmented_libcurl(
             seg_downloads.push(seg_downloaded);
             seg_speeds.push(seg_speed);
         }
-        if let Ok(mut trackers) = state.engine_trackers.lock() {
+        if let Ok(mut trackers) = state.engine_trackers.write() {
             if let Some(tracker) = trackers.get_mut(id) {
                 if let Some(ref mut engine) = tracker.adaptive_engine {
                     for (i, (&downloaded, &speed)) in
@@ -1137,73 +1132,11 @@ fn run_segmented_libcurl(
                             .segment_ctrl
                             .update_progress(i as u32, downloaded, speed);
                     }
-                    let decision = engine.evaluate(&telemetry_bus);
-                    for action in &decision.actions {
-                        match action {
-                            AdaptationAction::ThrottleAll {
-                                per_conn_bytes_per_sec,
-                            } => {
-                                log::info!(
-                                    "Task {}: throttling all connections to {} Bps",
-                                    id,
-                                    per_conn_bytes_per_sec
-                                );
-                            }
-                            AdaptationAction::SplitSegment {
-                                segment_id,
-                                at_byte,
-                            } => {
-                                log::info!(
-                                    "Task {}: split segment {} at byte {}",
-                                    id,
-                                    segment_id,
-                                    at_byte
-                                );
-                            }
-                            AdaptationAction::MergeSegments { a, b } => {
-                                log::info!("Task {}: merge segments {} and {}", id, a, b);
-                            }
-                            AdaptationAction::Redistribute {
-                                from_seg,
-                                to_seg,
-                                bytes,
-                            } => {
-                                log::info!(
-                                    "Task {}: redistribute {} bytes from seg {} to {}",
-                                    id,
-                                    bytes,
-                                    from_seg,
-                                    to_seg
-                                );
-                            }
-                            _ => {}
-                        }
-                    }
-                    if decision.target_connections != engine.current_connections()
-                        || !decision.actions.is_empty()
-                    {
-                        log::debug!(
-                            "Adaptive engine decision for task {}: conns={}, actions={}, reason={}, confidence={:.2}",
-                            id,
-                            decision.target_connections,
-                            decision.actions.len(),
-                            decision.reason,
-                            decision.confidence,
-                        );
-                        tracker
-                            .adaptive
-                            .current_connections
-                            .store(decision.target_connections, Ordering::Relaxed);
-                    }
-                } else if let Some(adj) = tracker.adaptive.should_adjust() {
-                    log::debug!(
-                        "Adaptive suggestion for task {}: {} -> {} ({})",
-                        id,
-                        adj.old_count,
-                        adj.new_count,
-                        adj.reason
-                    );
-                    tracker.adaptive.apply_adjustment(&adj);
+                    // Adaptive engine evaluate() and decision application are
+                    // disabled — the decisions (target_connections, segment
+                    // split/merge/etc.) have no code path that reconfigures
+                    // the active curl multi handle's easy handles. Progress
+                    // data is still fed to segment_ctrl for future use.
                 }
             }
         }
@@ -1214,11 +1147,11 @@ fn run_segmented_libcurl(
             &active,
             &mut last_total,
             &mut last_tick,
-        )
+        );
     };
     if let Some(runtime) = socket_runtime.as_mut() {
         drive_multi_socket(
-            guard.multi(),
+            guard.multi()?,
             runtime,
             &handles,
             &cancel,
@@ -1226,7 +1159,7 @@ fn run_segmented_libcurl(
             &mut tick,
         )?;
     } else {
-        drive_multi_wait_perform(guard.multi(), &handles, &cancel, "segment", &mut tick)?;
+        drive_multi_wait_perform(guard.multi()?, &handles, &cancel, "segment", &mut tick)?;
     }
     for (idx, handle) in handles.iter().enumerate() {
         let code = handle
@@ -1236,25 +1169,24 @@ fn run_segmented_libcurl(
             continue;
         }
         if code == 412 {
-            for r in ranges.iter() {
+            for r in &ranges {
                 let _ = std::fs::remove_file(&r.path);
             }
-            return Err("resource-changed-412".to_string());
+            return Err("resource-changed-412".to_owned());
         }
         if code == 416 {
-            for r in ranges.iter() {
+            for r in &ranges {
                 let _ = std::fs::remove_file(&r.path);
             }
-            return Err("range-not-satisfiable-416".to_string());
+            return Err("range-not-satisfiable-416".to_owned());
         }
         if is_http_family(&plan.url) && code != 206 && code != 200 {
             return Err(format!(
-                "Segment {} finished with unexpected HTTP status {}",
-                idx, code
+                "Segment {idx} finished with unexpected HTTP status {code}"
             ));
         }
-        if code == 200 && active.len() > 1 && is_http_family(&plan.url) {
-            return Err("Server did not honor byte-range requests; retry with one connection or probe the URL again.".to_string());
+        if code == 200 && ranges.len() > 1 && is_http_family(&plan.url) {
+            return Err("Server did not honor byte-range requests; retry with one connection or probe the URL again.".to_owned());
         }
     }
     update_curl_task_progress(
@@ -1268,8 +1200,7 @@ fn run_segmented_libcurl(
     let (captured_validator, encoded) = seg_captures
         .first()
         .and_then(|cap| cap.lock().ok())
-        .map(|cap| (cap.validator.clone(), cap.content_encoded))
-        .unwrap_or((None, false));
+        .map_or((None, false), |cap| (cap.validator.clone(), cap.content_encoded));
     merge_parts(&plan.output_path, &ranges).map(|s| TransferOutcome {
         size: s,
         validator: captured_validator,
@@ -1309,7 +1240,7 @@ fn run_libcurl_download(
     {
         if let Ok(mut jobs) = state.curl_jobs.lock() {
             if let Some(job) = jobs.get_mut(id) {
-                job.task.engine_status = Some("resolving-url".to_string());
+                job.task.engine_status = Some("resolving-url".to_owned());
             }
         }
         state.mark_dirty();
@@ -1321,7 +1252,7 @@ fn run_libcurl_download(
 
         if let Ok(mut jobs) = state.curl_jobs.lock() {
             if let Some(job) = jobs.get_mut(id) {
-                job.task.engine_status = Some("running-libcurl-multi".to_string());
+                job.task.engine_status = Some("running-libcurl-multi".to_owned());
             }
         }
         state.mark_dirty();
@@ -1337,14 +1268,11 @@ fn run_libcurl_download(
         }
         if plan.segmented && !supports_range {
             log::info!(
-                "Task {}: server does not honour byte ranges; using a single connection",
-                id
+                "Task {id}: server does not honour byte ranges; using a single connection"
             );
             plan.segmented = false;
         }
     }
-    let started_segmented = plan.segmented;
-
     // Auto-resolve filename conflicts before downloading. Professional download
     // managers (IDM, browser built-in) never block the user with "file exists"
     // errors; they append " (1)", " (2)" etc. to the filename. This also fixes
@@ -1381,7 +1309,7 @@ fn run_libcurl_download(
 
     for attempt in 0..retry_policy.attempts {
         if cancel.load(Ordering::Acquire) {
-            return Err("cancelled".to_string());
+            return Err("cancelled".to_owned());
         }
         if start_time.elapsed() >= MAX_RETRY_WALL_TIME {
             log::warn!(
@@ -1419,7 +1347,7 @@ fn run_libcurl_download(
             Ok(outcome) => {
                 let size = outcome.size;
                 let captured_validator = outcome.validator.clone();
-                if let Ok(mut trackers) = state.engine_trackers.lock() {
+                if let Ok(mut trackers) = state.engine_trackers.write() {
                     if let Some(tracker) = trackers.get_mut(id) {
                         tracker.retry_state.reset();
                     }
@@ -1450,21 +1378,17 @@ fn run_libcurl_download(
                         {
                             bytes
                                 .iter()
-                                .map(|b| format!("{:02x}", b))
+                                .map(|b| format!("{b:02x}"))
                                 .collect::<String>()
                         } else {
                             expected_raw.clone()
                         };
                         if actual_hex != expected_hex.to_lowercase() {
                             log::warn!(
-                                "Task {}: Content-Digest mismatch (expected {}, got {})",
-                                id,
-                                expected_hex,
-                                actual_hex
+                                "Task {id}: Content-Digest mismatch (expected {expected_hex}, got {actual_hex})"
                             );
                             return Err(format!(
-                                "Content-Digest verification failed: expected sha-256={}, got {}",
-                                expected_hex, actual_hex
+                                "Content-Digest verification failed: expected sha-256={expected_hex}, got {actual_hex}"
                             ));
                         }
                         log::info!(
@@ -1474,6 +1398,9 @@ fn run_libcurl_download(
                         );
                     }
                 }
+                if cancel.load(Ordering::Acquire) {
+                    return Err("cancelled".to_owned());
+                }
                 if let Some(etag_file) = plan.config.str_("etagSave") {
                     if let Some(ref captured) = captured_validator {
                         let _ = std::fs::write(etag_file, captured);
@@ -1482,7 +1409,7 @@ fn run_libcurl_download(
                 return Ok(size);
             }
             Err(error) if error == "cancelled" || cancel.load(Ordering::Acquire) => {
-                return Err("cancelled".to_string())
+                return Err("cancelled".to_owned())
             }
             Err(error) => {
                 // ── Self-healer + policy engine ──────────────────────────
@@ -1495,7 +1422,7 @@ fn run_libcurl_download(
                 {
                     let failure_count = state
                         .engine_trackers
-                        .lock()
+                        .read()
                         .ok()
                         .and_then(|t| t.get(id).map(|tr| tr.retry_state.attempt))
                         .unwrap_or(0);
@@ -1503,7 +1430,7 @@ fn run_libcurl_download(
                         build_decision_context(state, id, &plan, failure_count, 0, supports_range);
                     if let Ok(mut healer) = state.self_healer.lock() {
                         let recovery = healer.on_failure(&ctx.host, &error, &ctx);
-                        log::info!("Task {}: self-healer recovery decision: {:?}", id, recovery);
+                        log::info!("Task {id}: self-healer recovery decision: {recovery:?}");
                         // Wire the recovery decision into the retry loop.
                         if let crate::daemon::engine::policy_engine::PolicyDecision::Recovery {
                             ref action,
@@ -1514,9 +1441,7 @@ fn run_libcurl_download(
                             match action {
                                 RecoveryAction::Abort => {
                                     log::warn!(
-                                        "Task {}: self-healer recommends abort — {}",
-                                        id,
-                                        error
+                                        "Task {id}: self-healer recommends abort — {error}"
                                     );
                                     healer_abort = true;
                                 }
@@ -1532,14 +1457,12 @@ fn run_libcurl_download(
                                 }
                                 RecoveryAction::PauseAndRetry(dur) => {
                                     log::info!(
-                                        "Task {}: self-healer pausing {:?} before retry",
-                                        id,
-                                        dur
+                                        "Task {id}: self-healer pausing {dur:?} before retry"
                                     );
                                     healer_pause = Some(*dur);
                                 }
                                 RecoveryAction::RestartDownload => {
-                                    log::info!("Task {}: self-healer recommends full restart", id);
+                                    log::info!("Task {id}: self-healer recommends full restart");
                                 }
                                 _ => {}
                             }
@@ -1553,7 +1476,7 @@ fn run_libcurl_download(
                 if healer_abort {
                     return Err(error);
                 }
-                if let Ok(mut trackers) = state.engine_trackers.lock() {
+                if let Ok(mut trackers) = state.engine_trackers.write() {
                     if let Some(tracker) = trackers.get_mut(id) {
                         tracker.retry_state.record_failure(error.clone());
                     }
@@ -1590,43 +1513,39 @@ fn run_libcurl_download(
                 }
                 if plan.segmented {
                     log::info!(
-                        "Segmented attempt failed for task {}; trying single-connection fallback",
-                        id
+                        "Segmented attempt failed for task {id}; trying single-connection fallback"
                     );
                     plan.segmented = false;
-                    if !cancel.load(Ordering::Acquire) {
-                        match run_single_libcurl(
-                            state,
-                            id,
-                            &plan,
-                            cancel.clone(),
-                            retry_after.clone(),
-                            streaming_digest_out.clone(),
-                        ) {
-                            Ok(fb) => {
-                                crate::daemon::direct::record_host_ceiling(&plan.url, 1);
-                                validate_transfer_size(
-                                    plan.total_size,
-                                    fb.content_encoded,
-                                    fb.size,
-                                )?;
-                                return Ok(fb.size);
-                            }
-                            Err(fb_error)
-                                if fb_error == "cancelled" || cancel.load(Ordering::Acquire) =>
-                            {
-                                return Err("cancelled".to_string());
-                            }
-                            Err(fb_error) => {
-                                log::warn!(
-                                    "Single-connection fallback also failed for task {}: {}",
-                                    id,
-                                    fb_error
-                                );
-                            }
+                    if cancel.load(Ordering::Acquire) {
+                        return Err("cancelled".to_owned());
+                    }
+                    match run_single_libcurl(
+                        state,
+                        id,
+                        &plan,
+                        cancel.clone(),
+                        retry_after.clone(),
+                        streaming_digest_out.clone(),
+                    ) {
+                        Ok(fb) => {
+                            crate::daemon::direct::record_host_ceiling(&plan.url, 1);
+                            validate_transfer_size(
+                                plan.total_size,
+                                fb.content_encoded,
+                                fb.size,
+                            )?;
+                            return Ok(fb.size);
                         }
-                    } else {
-                        return Err("cancelled".to_string());
+                        Err(fb_error)
+                            if fb_error == "cancelled" || cancel.load(Ordering::Acquire) =>
+                        {
+                            return Err("cancelled".to_owned());
+                        }
+                        Err(fb_error) => {
+                            log::warn!(
+                                "Single-connection fallback also failed for task {id}: {fb_error}"
+                            );
+                        }
                     }
                 }
                 if RetryPolicy::is_permanent_error(&error)
@@ -1657,9 +1576,9 @@ fn run_libcurl_download(
                     let mut elapsed = Duration::ZERO;
                     while elapsed < actual_delay {
                         if cancel.load(Ordering::Acquire) {
-                            return Err("cancelled".to_string());
+                            return Err("cancelled".to_owned());
                         }
-                        let chunk = Duration::from_millis(500).min(actual_delay - elapsed);
+                        let chunk = Duration::from_millis(500).min(actual_delay.checked_sub(elapsed).unwrap());
                         std::thread::sleep(chunk);
                         elapsed += chunk;
                     }
@@ -1667,35 +1586,10 @@ fn run_libcurl_download(
             }
         }
     }
-    if started_segmented && !cancel.load(Ordering::Acquire) {
-        log::info!(
-            "Segmented download failed for task {}; final single-connection attempt",
-            id
-        );
-        plan.segmented = false;
-        match run_single_libcurl(
-            state,
-            id,
-            &plan,
-            cancel.clone(),
-            retry_after.clone(),
-            streaming_digest_out.clone(),
-        ) {
-            Ok(fb) => {
-                crate::daemon::direct::record_host_ceiling(&plan.url, 1);
-                validate_transfer_size(plan.total_size, fb.content_encoded, fb.size)?;
-                return Ok(fb.size);
-            }
-            Err(error) if error == "cancelled" || cancel.load(Ordering::Acquire) => {
-                return Err("cancelled".to_string());
-            }
-            Err(error) => last_error = error,
-        }
-    }
     Err(last_error)
 }
 
-pub(crate) fn mark_curl_task_finished(
+pub fn mark_curl_task_finished(
     state: &SharedState,
     id: &str,
     final_size: u64,
@@ -1717,25 +1611,25 @@ pub(crate) fn mark_curl_task_finished(
         if job.run_generation.load(Ordering::Acquire) != generation {
             return;
         }
-        job.task.status = "completed".to_string();
+        job.task.status = "completed".to_owned();
         job.task.downloaded_bytes = final_size;
         if job.task.size_bytes == 0 {
             job.task.size_bytes = final_size;
         }
         job.task.speed_bytes_per_sec = 0;
         job.task.time_left_seconds = 0;
-        job.task.engine_status = Some("completed".to_string());
+        job.task.engine_status = Some("completed".to_owned());
         job.task.error_message = None;
         job.task.segments =
             build_segments(job.task.connections, job.task.size_bytes, final_size, 0);
         let task = job.task.clone();
         drop(jobs);
-        lock_or_err!(state.task_snapshot).insert(id.to_string(), task);
+        lock_or_err!(state.task_snapshot).insert(id.to_owned(), task);
         state.mark_dirty();
     }
 }
 
-pub(crate) fn mark_curl_task_failed(
+pub fn mark_curl_task_failed(
     state: &SharedState,
     id: &str,
     message: String,
@@ -1763,16 +1657,16 @@ pub(crate) fn mark_curl_task_failed(
         if job.run_generation.load(Ordering::Acquire) != generation {
             return;
         }
-        job.task.status = if cancelled { "paused" } else { "error" }.to_string();
+        job.task.status = if cancelled { "paused" } else { "error" }.to_owned();
         job.task.speed_bytes_per_sec = 0;
         job.task.time_left_seconds = 0;
-        job.task.engine_status = Some(if cancelled { "paused" } else { "failed" }.to_string());
+        job.task.engine_status = Some(if cancelled { "paused" } else { "failed" }.to_owned());
         job.task.error_message = if cancelled { None } else { Some(message) };
         let task = job.task.clone();
         let remove_on_error = job
             .direct_options
             .get("removeOnError")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         let path = std::path::PathBuf::from(&job.task.save_path);
         drop(jobs);
@@ -1780,12 +1674,12 @@ pub(crate) fn mark_curl_task_failed(
             let _ = std::fs::remove_file(&path);
             remove_stale_parts_for(&path);
         }
-        lock_or_err!(state.task_snapshot).insert(id.to_string(), task);
+        lock_or_err!(state.task_snapshot).insert(id.to_owned(), task);
         state.mark_dirty();
     }
 }
 
-pub(crate) fn start_curl_process(state: &SharedState, id: &str) {
+pub fn start_curl_process(state: &SharedState, id: &str) {
     let record = {
         let mut jobs = lock_or_err!(state.curl_jobs);
         let Some(job) = jobs.get_mut(id) else {
@@ -1808,9 +1702,10 @@ pub(crate) fn start_curl_process(state: &SharedState, id: &str) {
             .run_generation
             .fetch_add(1, Ordering::Release)
             .saturating_add(1);
-        job.task.status = "downloading".to_string();
-        job.task.engine_status = Some("running-libcurl-multi".to_string());
+        job.task.status = "downloading".to_owned();
+        job.task.engine_status = Some("running-libcurl-multi".to_owned());
         job.task.error_message = None;
+        job.start_time = Instant::now();
         let plan = plan_from_job(job);
         let token = job.cancel_token.clone();
         log::info!(
@@ -1824,18 +1719,16 @@ pub(crate) fn start_curl_process(state: &SharedState, id: &str) {
 
     let watchdog_cancel = record.1.clone();
     let watchdog_generation = record.2;
-    let watchdog_id = id.to_string();
+    let watchdog_id = id.to_owned();
     let watchdog_state = state.clone();
     let watchdog_expected = record.0.total_size;
 
     let state2 = state.clone();
-    let id2 = id.to_string();
+    let id2 = id.to_owned();
     std::thread::spawn(move || {
         let (plan, cancel, generation) = record;
         log::info!(
-            "Starting libcurl multi transfer for task {} generation {}",
-            id2,
-            generation
+            "Starting libcurl multi transfer for task {id2} generation {generation}"
         );
         let remove_on_error = plan.remove_on_error;
         let output_path = plan.output_path.clone();
@@ -1846,8 +1739,7 @@ pub(crate) fn start_curl_process(state: &SharedState, id: &str) {
         match result {
             Ok(Ok(0)) => {
                 log::error!(
-                    "Task {id2}: download produced 0-byte file (expected {}); refusing to mark as complete",
-                    expected_size
+                    "Task {id2}: download produced 0-byte file (expected {expected_size}); refusing to mark as complete"
                 );
                 if remove_on_error {
                     let _ = std::fs::remove_file(&output_path);
@@ -1858,11 +1750,10 @@ pub(crate) fn start_curl_process(state: &SharedState, id: &str) {
                     &id2,
                     if expected_size > 0 {
                         format!(
-                            "Transfer produced an empty file but {} bytes were expected; refusing to mark the download as complete",
-                            expected_size
+                            "Transfer produced an empty file but {expected_size} bytes were expected; refusing to mark the download as complete"
                         )
                     } else {
-                        "Download produced an empty file (0 bytes). The server may have rejected the request or TLS may have failed.".to_string()
+                        "Download produced an empty file (0 bytes). The server may have rejected the request or TLS may have failed.".to_owned()
                     },
                     false,
                     generation,
@@ -1880,12 +1771,10 @@ pub(crate) fn start_curl_process(state: &SharedState, id: &str) {
                         .curl_jobs
                         .lock()
                         .ok()
-                        .map(|j| {
+                        .is_some_and(|j| {
                             j.get(&id2)
-                                .map(|job| job.task.error_message.is_some())
-                                .unwrap_or(false)
-                        })
-                        .unwrap_or(false);
+                                .is_some_and(|job| job.task.error_message.is_some())
+                        });
                     if watchdog_set_error {
                         log::info!(
                             "Task {id2}: watchdog already set error; preserving instead of marking cancelled"
@@ -1898,13 +1787,13 @@ pub(crate) fn start_curl_process(state: &SharedState, id: &str) {
             }
             Err(panic_info) => {
                 let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
-                    format!("Worker thread panicked: {}", s)
+                    format!("Worker thread panicked: {s}")
                 } else if let Some(s) = panic_info.downcast_ref::<String>() {
-                    format!("Worker thread panicked: {}", s)
+                    format!("Worker thread panicked: {s}")
                 } else {
-                    "Worker thread panicked with unknown payload".to_string()
+                    "Worker thread panicked with unknown payload".to_owned()
                 };
-                log::error!("{} (task: {})", msg, id2);
+                log::error!("{msg} (task: {id2})");
                 mark_curl_task_failed(&state2, &id2, msg, false, generation);
             }
         }
@@ -1948,18 +1837,15 @@ pub(crate) fn start_curl_process(state: &SharedState, id: &str) {
                     Ok(j) => j,
                     Err(_) => return,
                 };
-                match jobs.get(&watchdog_id) {
-                    Some(job) => (
-                        job.task.status.clone(),
-                        job.task.downloaded_bytes,
-                        job.task.speed_bytes_per_sec,
-                    ),
-                    None => {
-                        log::info!(
-                            "Watchdog for {watchdog_id}: job removed from curl_jobs, exiting"
-                        );
-                        return;
-                    }
+                if let Some(job) = jobs.get(&watchdog_id) { (
+                    job.task.status.clone(),
+                    job.task.downloaded_bytes,
+                    job.task.speed_bytes_per_sec,
+                ) } else {
+                    log::info!(
+                        "Watchdog for {watchdog_id}: job removed from curl_jobs, exiting"
+                    );
+                    return;
                 }
             };
 
@@ -1976,7 +1862,7 @@ pub(crate) fn start_curl_process(state: &SharedState, id: &str) {
             let elapsed = start.elapsed().as_secs();
 
             // Stall check: no bytes received for stall_timeout seconds
-            if last_progress_time.elapsed() >= stall_timeout && speed == 0 {
+            if last_progress_time.elapsed() >= stall_timeout {
                 log::warn!(
                     "Watchdog: task {watchdog_id} stalled for {}s with 0 bytes/s — force-cancelling transfer (downloaded={downloaded})",
                     stall_timeout.as_secs()
@@ -2005,8 +1891,7 @@ pub(crate) fn start_curl_process(state: &SharedState, id: &str) {
                     &watchdog_id,
                     watchdog_generation,
                     format!(
-                        "Download timed out after {} seconds. The transfer did not complete within the allowed time limit.",
-                        hard_deadline_secs
+                        "Download timed out after {hard_deadline_secs} seconds. The transfer did not complete within the allowed time limit."
                     ),
                 );
                 return;
@@ -2020,8 +1905,9 @@ pub(crate) fn start_curl_process(state: &SharedState, id: &str) {
             }
         }
     });
-    if let Ok(mut handles) = state.watchdog_handles.lock() {
-        handles.push(watchdog_handle);
+    match state.watchdog_handles.lock() {
+        Ok(mut handles) => handles.push(watchdog_handle),
+        Err(e) => log::error!("watchdog_handles lock poisoned: {e}"),
     }
 }
 
@@ -2039,7 +1925,7 @@ fn force_error_status(state: &SharedState, id: &str, generation: u64, message: S
     }
     let mut jobs = lock_or_err!(state.curl_jobs);
     if let Some(job) = jobs.get_mut(id) {
-        if job.task.status == "completed" {
+        if job.task.status == "completed" || job.task.status == "paused" {
             return;
         }
         if generation > 0 && job.run_generation.load(Ordering::Acquire) != generation {
@@ -2049,14 +1935,14 @@ fn force_error_status(state: &SharedState, id: &str, generation: u64, message: S
             );
             return;
         }
-        job.task.status = "error".to_string();
+        job.task.status = "error".to_owned();
         job.task.speed_bytes_per_sec = 0;
         job.task.time_left_seconds = 0;
-        job.task.engine_status = Some("watchdog-timeout".to_string());
+        job.task.engine_status = Some("watchdog-timeout".to_owned());
         job.task.error_message = Some(message);
         let task = job.task.clone();
         drop(jobs);
-        lock_or_err!(state.task_snapshot).insert(id.to_string(), task);
+        lock_or_err!(state.task_snapshot).insert(id.to_owned(), task);
         state.mark_dirty();
     }
 }
@@ -2087,9 +1973,9 @@ fn auto_rename_path(original: &std::path::Path) -> Option<std::path::PathBuf> {
     };
 
     for counter in 1u32..=9999 {
-        let new_stem = format!("{} ({})", stem, counter);
+        let new_stem = format!("{stem} ({counter})");
         let new_name = match ext {
-            Some(e) => format!("{}.{}", new_stem, e),
+            Some(e) => format!("{new_stem}.{e}"),
             None => new_stem,
         };
         let candidate = parent.join(&new_name);
@@ -2100,11 +1986,10 @@ fn auto_rename_path(original: &std::path::Path) -> Option<std::path::PathBuf> {
     // Exhausted the counter; append a timestamp + pid as a last resort.
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
     let new_stem = format!("{}_{}_{}", stem, ts, std::process::id());
     let new_name = match ext {
-        Some(e) => format!("{}.{}", new_stem, e),
+        Some(e) => format!("{new_stem}.{e}"),
         None => new_stem,
     };
     let candidate = parent.join(&new_name);

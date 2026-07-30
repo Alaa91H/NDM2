@@ -20,7 +20,7 @@ impl<'a> HttpNegotiator<'a> {
     pub fn new(client: &'a reqwest::Client, url: &str) -> Self {
         Self {
             client,
-            url: url.to_string(),
+            url: url.to_owned(),
             custom_headers: HashMap::new(),
         }
     }
@@ -59,7 +59,7 @@ impl<'a> HttpNegotiator<'a> {
                 errors.push(ResolutionError {
                     category: super::types::ErrorCategory::ConnectionFailure,
                     phase: ErrorPhase::HttpRequest,
-                    message: "HEAD request failed".to_string(),
+                    message: "HEAD request failed".to_owned(),
                     http_status: None,
                     retryable: true,
                     retry_after: None,
@@ -74,13 +74,11 @@ impl<'a> HttpNegotiator<'a> {
             .filter(|&s| s > 0);
         let head_supports_range = head_payload
             .and_then(|r| r.headers.get("accept-ranges"))
-            .map(|v| v.eq_ignore_ascii_case("bytes"))
-            .unwrap_or(false)
+            .is_some_and(|v| v.eq_ignore_ascii_case("bytes"))
             || head_payload
                 .as_ref()
                 .and_then(|r| r.headers.get("content-range"))
-                .map(|v| v.to_lowercase().starts_with("bytes "))
-                .unwrap_or(false);
+                .is_some_and(|v| v.to_lowercase().starts_with("bytes "));
 
         // Stage 2: GET Range: bytes=0-0 — proves range support + gets size + gets content.
         let range_result = self.probe_get_range().await;
@@ -160,7 +158,7 @@ impl<'a> HttpNegotiator<'a> {
             last_modified,
             digest_sha256,
             file_name,
-            file_type: file_type.to_string(),
+            file_type: file_type.to_owned(),
         };
 
         // Detect best final URL from redirects.
@@ -241,19 +239,19 @@ impl<'a> HttpNegotiator<'a> {
                 let status = resp.status().as_u16();
                 let final_url = resp.url().to_string();
                 let headers = header_map_to_string(resp.headers());
-                let hop = if final_url != self.url {
+                let hop = if final_url == self.url {
+                    None
+                } else {
                     Some(RedirectHop {
                         from: self.url.clone(),
                         to: final_url.clone(),
                         status_code: status,
-                        method: "HEAD".to_string(),
+                        method: "HEAD".to_owned(),
                         host_changed: extract_host(&final_url) != extract_host(&self.url),
                         scheme_changed: extract_scheme(&final_url) != extract_scheme(&self.url),
                         security_downgrade: extract_scheme(&self.url) == "https"
                             && extract_scheme(&final_url) == "http",
                     })
-                } else {
-                    None
                 };
 
                 Some(ProbeResult {
@@ -301,19 +299,19 @@ impl<'a> HttpNegotiator<'a> {
                 let status = resp.status().as_u16();
                 let final_url = resp.url().to_string();
                 let headers = header_map_to_string(resp.headers());
-                let hop = if final_url != self.url {
+                let hop = if final_url == self.url {
+                    None
+                } else {
                     Some(RedirectHop {
                         from: self.url.clone(),
                         to: final_url.clone(),
                         status_code: status,
-                        method: "GET".to_string(),
+                        method: "GET".to_owned(),
                         host_changed: extract_host(&final_url) != extract_host(&self.url),
                         scheme_changed: extract_scheme(&final_url) != extract_scheme(&self.url),
                         security_downgrade: extract_scheme(&self.url) == "https"
                             && extract_scheme(&final_url) == "http",
                     })
-                } else {
-                    None
                 };
 
                 Some(ProbeResult {
@@ -357,19 +355,19 @@ impl<'a> HttpNegotiator<'a> {
                 let status = resp.status().as_u16();
                 let final_url = resp.url().to_string();
                 let headers = header_map_to_string(resp.headers());
-                let hop = if final_url != self.url {
+                let hop = if final_url == self.url {
+                    None
+                } else {
                     Some(RedirectHop {
                         from: self.url.clone(),
                         to: final_url.clone(),
                         status_code: status,
-                        method: "GET".to_string(),
+                        method: "GET".to_owned(),
                         host_changed: extract_host(&final_url) != extract_host(&self.url),
                         scheme_changed: extract_scheme(&final_url) != extract_scheme(&self.url),
                         security_downgrade: extract_scheme(&self.url) == "https"
                             && extract_scheme(&final_url) == "http",
                     })
-                } else {
-                    None
                 };
 
                 Some(ProbeResult {
@@ -446,28 +444,26 @@ fn detect_capabilities(
         .as_ref()
         .or(get_result.as_ref())
         .and_then(|r| r.headers.get("content-encoding"))
-        .map(|ce| {
+        .map_or(CapabilityState::Unknown, |ce| {
             if ce.eq_ignore_ascii_case("identity") {
                 CapabilityState::NotSupported
             } else {
                 CapabilityState::Confirmed
             }
-        })
-        .unwrap_or(CapabilityState::Unknown);
+        });
 
     // Detect chunked transfer from Transfer-Encoding header.
     let chunked_transfer = head_result
         .as_ref()
         .or(get_result.as_ref())
         .and_then(|r| r.headers.get("transfer-encoding"))
-        .map(|te| {
+        .map_or(CapabilityState::Unknown, |te| {
             if te.to_ascii_lowercase().contains("chunked") {
                 CapabilityState::Confirmed
             } else {
                 CapabilityState::NotSupported
             }
-        })
-        .unwrap_or(CapabilityState::Unknown);
+        });
 
     // Detect HTTP/2 multiplexing from response status line (parsed into
     // header map as a synthetic key by the probe runner, or from the
@@ -476,14 +472,13 @@ fn detect_capabilities(
         .as_ref()
         .or(get_result.as_ref())
         .and_then(|r| r.headers.get("http-version"))
-        .map(|hv| {
-            if hv.starts_with("2") || hv.starts_with("h2") {
+        .map_or(CapabilityState::Unknown, |hv| {
+            if hv.starts_with('2') || hv.starts_with("h2") {
                 CapabilityState::Confirmed
             } else {
                 CapabilityState::NotSupported
             }
-        })
-        .unwrap_or(CapabilityState::Unknown);
+        });
 
     ServerCapabilities {
         range_support,
@@ -507,7 +502,7 @@ fn header_map_to_string(map: &reqwest::header::HeaderMap) -> HashMap<String, Str
         .filter_map(|(k, v)| {
             v.to_str()
                 .ok()
-                .map(|val| (k.as_str().to_string(), val.to_string()))
+                .map(|val| (k.as_str().to_owned(), val.to_owned()))
         })
         .collect()
 }
@@ -522,7 +517,7 @@ fn extract_host(url: &str) -> String {
 fn extract_scheme(url: &str) -> String {
     reqwest::Url::parse(url)
         .ok()
-        .map(|u| u.scheme().to_string())
+        .map(|u| u.scheme().to_owned())
         .unwrap_or_default()
 }
 
@@ -537,7 +532,7 @@ fn extract_filename_from_cd(cd: &str) -> Option<String> {
         if let Some(val) = fstar.split("filename*=").nth(1) {
             let val = val.trim().trim_matches('\'');
             if let Some(encoded) = val.split("''").nth(1) {
-                return Some(percent_decode(encoded).to_string());
+                return Some(percent_decode(encoded));
             }
         }
     }
@@ -548,7 +543,7 @@ fn extract_filename_from_cd(cd: &str) -> Option<String> {
         let name = after.trim().trim_matches('"').trim_matches('\'');
         let name = name.split(';').next().unwrap_or(name).trim();
         if !name.is_empty() {
-            return Some(name.to_string());
+            return Some(name.to_owned());
         }
     }
     None
@@ -571,7 +566,7 @@ fn percent_decode(input: &str) -> String {
         result.push(bytes[i]);
         i += 1;
     }
-    String::from_utf8(result).unwrap_or_else(|_| input.to_string())
+    String::from_utf8(result).unwrap_or_else(|_| input.to_owned())
 }
 
 fn extract_filename_from_url(url: &str) -> String {
@@ -584,14 +579,14 @@ fn extract_filename_from_url(url: &str) -> String {
                 .filter(|s| !s.is_empty() && *s != "/")
                 .map(String::from)
         })
-        .unwrap_or_else(|| "download".to_string())
+        .unwrap_or_else(|| "download".to_owned())
 }
 
 fn extract_sha256_from_headers(result: &ProbeResult) -> Option<String> {
     // Check Digest header: sha-256=...
     if let Some(digest) = result.headers.get("digest") {
         if let Some(val) = digest.split("sha-256=").nth(1) {
-            let val = val.trim().trim_end_matches(',').trim().to_string();
+            let val = val.trim().trim_end_matches(',').trim().to_owned();
             if !val.is_empty() {
                 return Some(val);
             }
@@ -600,7 +595,7 @@ fn extract_sha256_from_headers(result: &ProbeResult) -> Option<String> {
     // Check Content-Digest header (RFC 9530).
     if let Some(digest) = result.headers.get("content-digest") {
         if let Some(val) = digest.split("sha-256=").nth(1) {
-            let val = val.trim().trim_end_matches(',').trim().to_string();
+            let val = val.trim().trim_end_matches(',').trim().to_owned();
             if !val.is_empty() {
                 return Some(val);
             }

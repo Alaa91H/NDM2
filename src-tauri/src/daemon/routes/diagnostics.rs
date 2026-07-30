@@ -8,14 +8,14 @@ use std::time::Instant;
 use crate::daemon::curl::curl_version;
 use crate::daemon::state::SharedState;
 
-use super::common::*;
+use super::common::hidden_output;
 static DAEMON_START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 
-pub(crate) fn record_daemon_start() {
+pub fn record_daemon_start() {
     DAEMON_START.get_or_init(Instant::now);
 }
 
-pub(crate) fn process_memory_usage_mb() -> u64 {
+pub fn process_memory_usage_mb() -> u64 {
     #[cfg(target_os = "linux")]
     {
         if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
@@ -111,7 +111,7 @@ fn network_interfaces() -> Vec<String> {
                     .lines()
                     .map(str::trim)
                     .filter(|v| !v.is_empty())
-                    .map(str::to_string)
+                    .map(str::to_owned)
                     .collect();
             }
         }
@@ -139,24 +139,23 @@ fn network_interfaces() -> Vec<String> {
 }
 
 pub async fn handle_diagnostics(State(state): State<SharedState>) -> Json<serde_json::Value> {
-    let media_jobs_count = state.media_jobs.lock().map(|j| j.len()).unwrap_or(0);
-    let curl_jobs_count = state.curl_jobs.lock().map(|j| j.len()).unwrap_or(0);
+    let media_jobs_count = state.media_jobs.lock().map_or(0, |j| j.len());
+    let curl_jobs_count = state.curl_jobs.lock().map_or(0, |j| j.len());
     let uptime_secs = DAEMON_START
         .get()
-        .map(|t| t.elapsed().as_secs())
-        .unwrap_or(0);
+        .map_or(0, |t| t.elapsed().as_secs());
     let engine_caps = state.engine_capabilities();
     let curl_available = engine_caps
         .pointer("/engines/curl/available")
-        .and_then(|v| v.as_bool())
+        .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
     let ytdlp_available = engine_caps
         .pointer("/engines/ytdlp/available")
-        .and_then(|v| v.as_bool())
+        .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
     let ffmpeg_available = engine_caps
         .pointer("/engines/ffmpeg/available")
-        .and_then(|v| v.as_bool())
+        .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
 
     // Run full E2E diagnostics (with timeout)
@@ -197,9 +196,9 @@ pub async fn handle_post_diagnostics(
     );
 
     // Save report to file if requested
-    if body.get("save").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if body.get("save").and_then(serde_json::Value::as_bool).unwrap_or(false) {
         let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-        let filename = format!("nova-diagnostics-{}.json", timestamp);
+        let filename = format!("nova-diagnostics-{timestamp}.json");
         let report_path = std::path::Path::new(&state.data_dir)
             .join("diagnostics")
             .join(&filename);
@@ -210,7 +209,7 @@ pub async fn handle_post_diagnostics(
             &report_path,
             serde_json::to_string_pretty(&body).unwrap_or_default(),
         ) {
-            Ok(_) => {
+            Ok(()) => {
                 return Json(serde_json::json!({
                     "ok": true,
                     "saved": true,
@@ -219,7 +218,7 @@ pub async fn handle_post_diagnostics(
                 }));
             }
             Err(e) => {
-                log::warn!("Failed to save diagnostics report: {}", e);
+                log::warn!("Failed to save diagnostics report: {e}");
                 return Json(serde_json::json!({
                     "ok": true,
                     "saved": false,
@@ -232,7 +231,7 @@ pub async fn handle_post_diagnostics(
     Json(serde_json::json!({"ok": true}))
 }
 
-pub(crate) fn register_routes(router: Router<SharedState>) -> Router<SharedState> {
+pub fn register_routes(router: Router<SharedState>) -> Router<SharedState> {
     router.route(
         "/api/diagnostics",
         get(handle_diagnostics).post(handle_post_diagnostics),

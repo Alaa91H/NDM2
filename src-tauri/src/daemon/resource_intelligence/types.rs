@@ -218,7 +218,7 @@ impl Default for RetryDecision {
             max_attempts: 3,
             attempt_count: 0,
             strategy: RetryStrategy::DoNotRetry,
-            reason: "No error recorded".to_string(),
+            reason: "No error recorded".to_owned(),
             circuit_breaker_active: false,
         }
     }

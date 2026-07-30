@@ -23,7 +23,7 @@ impl ConvergenceDetector {
     pub fn new() -> Self {
         Self {
             history: VecDeque::with_capacity(60),
-            last_adjustment: Instant::now() - Duration::from_secs(60),
+            last_adjustment: Instant::now().checked_sub(Duration::from_secs(60)).unwrap_or(Instant::now()),
             adjustments_in_window: 0,
             window_start: Instant::now(),
             consecutive_no_improvement: 0,
@@ -133,7 +133,7 @@ impl ConvergenceDetector {
     }
 
     pub fn current_speed(&self) -> u64 {
-        self.history.back().map(|s| s.aggregate_speed).unwrap_or(0)
+        self.history.back().map_or(0, |s| s.aggregate_speed)
     }
 
     pub fn speed_trend(&self, window: usize) -> f32 {

@@ -116,7 +116,7 @@ fn calculate_backoff(attempt: u32, stability_score: f64) -> u64 {
 
     // Jitter: random factor between 0.5 and 1.5.
     // Use a simple deterministic pseudo-random based on attempt for reproducibility.
-    let jitter_factor = 1.0 + ((attempt as f64 * 7.31).sin() * 0.5);
+    let jitter_factor = (f64::from(attempt) * 7.31).sin().mul_add(0.5, 1.0);
 
     // Stability adjustment: less stable = longer backoff.
     let stability_factor = 1.0 + (1.0 - stability_score);

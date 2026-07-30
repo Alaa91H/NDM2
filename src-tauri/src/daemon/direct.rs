@@ -61,7 +61,7 @@ impl CurlUrlHandle {
         ::curl::init();
         let raw = unsafe { curl_url() };
         if raw.is_null() {
-            Err("Could not allocate libcurl URL handle".to_string())
+            Err("Could not allocate libcurl URL handle".to_owned())
         } else {
             Ok(Self { raw })
         }
@@ -69,7 +69,7 @@ impl CurlUrlHandle {
 
     fn set_url(&self, value: &str) -> Result<(), String> {
         let value = CString::new(value)
-            .map_err(|_| "Invalid direct download URL: contains NUL byte".to_string())?;
+            .map_err(|_| "Invalid direct download URL: contains NUL byte".to_owned())?;
         let code = unsafe { curl_url_set(self.raw, CURLUPART_URL, value.as_ptr(), 0) };
         if code == CURLUE_OK {
             Ok(())
@@ -115,7 +115,7 @@ impl Drop for CurlUrlHandle {
 fn curl_url_error(code: CurlUrlCode) -> String {
     let message = unsafe { curl_url_strerror(code) };
     if message.is_null() {
-        format!("libcurl URL error {}", code)
+        format!("libcurl URL error {code}")
     } else {
         unsafe { CStr::from_ptr(message) }
             .to_string_lossy()
@@ -136,27 +136,26 @@ impl DirectUrl {
     pub fn parse(raw: &str) -> Result<Self, String> {
         let value = raw.trim();
         if value.is_empty() {
-            return Err("Missing url".to_string());
+            return Err("Missing url".to_owned());
         }
         if value.starts_with('-') {
-            return Err("Invalid url: must not start with '-'".to_string());
+            return Err("Invalid url: must not start with '-'".to_owned());
         }
         let parsed = CurlUrlHandle::new()?;
         parsed.set_url(value)?;
         let normalized = parsed
             .get_part(CURLUPART_URL, 0)?
-            .ok_or_else(|| "Invalid direct download URL: missing URL".to_string())?;
+            .ok_or_else(|| "Invalid direct download URL: missing URL".to_owned())?;
         let scheme = parsed
             .get_part(CURLUPART_SCHEME, 0)?
-            .ok_or_else(|| "Invalid direct download URL: missing scheme".to_string())?
+            .ok_or_else(|| "Invalid direct download URL: missing scheme".to_owned())?
             .to_ascii_lowercase();
         if !matches!(
             scheme.as_str(),
             "http" | "https" | "ftp" | "ftps" | "sftp" | "scp"
         ) {
             return Err(format!(
-                "Unsupported direct download protocol '{}'. Use HTTP, HTTPS, FTP, FTPS, SFTP, or SCP.",
-                scheme
+                "Unsupported direct download protocol '{scheme}'. Use HTTP, HTTPS, FTP, FTPS, SFTP, or SCP."
             ));
         }
         let host = parsed.get_part(CURLUPART_HOST, 0)?;
@@ -165,14 +164,14 @@ impl DirectUrl {
             "http" | "https" | "ftp" | "ftps" | "sftp" | "scp"
         ) && host.is_none()
         {
-            return Err("Direct download URL must include a host.".to_string());
+            return Err("Direct download URL must include a host.".to_owned());
         }
         let port = parsed
             .get_part(CURLUPART_PORT, CURLU_DEFAULT_PORT)?
             .and_then(|value| value.parse::<u16>().ok());
         let path = parsed
             .get_part(CURLUPART_PATH, 0)?
-            .unwrap_or_else(|| "/".to_string());
+            .unwrap_or_else(|| "/".to_owned());
         Ok(Self {
             normalized,
             scheme,
@@ -192,7 +191,7 @@ pub struct SegmentRange {
 }
 
 impl SegmentRange {
-    pub fn len(&self) -> u64 {
+    pub const fn len(&self) -> u64 {
         self.end.saturating_sub(self.start).saturating_add(1)
     }
 }
@@ -222,20 +221,19 @@ impl SegmentPlanner {
         let file_base = output_path
             .file_name()
             .and_then(|value| value.to_str())
-            .unwrap_or("download")
-            .to_string();
+            .unwrap_or("download").to_owned();
         let dir = output_path.parent().unwrap_or_else(|| Path::new(""));
         let mut ranges = Vec::with_capacity(count);
         let mut start = 0u64;
         for index in 0..count {
-            let extra = if index < rem as usize { 1 } else { 0 };
+            let extra = u64::from(index < rem as usize);
             let len = base + extra;
             let end = start.saturating_add(len).saturating_sub(1);
             ranges.push(SegmentRange {
                 index,
                 start,
                 end,
-                path: dir.join(format!("{}.part{:03}", file_base, index)),
+                path: dir.join(format!("{file_base}.part{index:03}")),
             });
             start = end.saturating_add(1);
         }
@@ -258,8 +256,7 @@ impl FileWriter {
 
     pub fn current_size(path: &Path) -> u64 {
         std::fs::metadata(path)
-            .map(|metadata| metadata.len())
-            .unwrap_or(0)
+            .map_or(0, |metadata| metadata.len())
     }
 
     pub fn cleanup_parts(ranges: &[SegmentRange]) {
@@ -281,7 +278,7 @@ impl FileWriter {
                 let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
                     continue;
                 };
-                if name.starts_with(&format!("{}.part", file_name)) {
+                if name.starts_with(&format!("{file_name}.part")) {
                     let _ = std::fs::remove_file(path);
                 }
             }
@@ -291,12 +288,12 @@ impl FileWriter {
     pub fn merge_parts(output_path: &Path, ranges: &[SegmentRange]) -> Result<u64, String> {
         // Include a random suffix to prevent collisions if two NOVA processes
         // merge the same file concurrently or the same file is re-downloaded.
-        let random_suffix: u64 = std::time::SystemTime::now()
+        let random_suffix: u64 = u64::from(std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .subsec_nanos() as u64
-            ^ (std::process::id() as u64) << 24;
-        let tmp_path = output_path.with_extension(format!("nova-merge-tmp-{:x}", random_suffix));
+            .subsec_nanos())
+            ^ u64::from(std::process::id()) << 24;
+        let tmp_path = output_path.with_extension(format!("nova-merge-tmp-{random_suffix:x}"));
         let _ = std::fs::remove_file(&tmp_path);
         let mut out = OpenOptions::new()
             .create(true)
@@ -342,8 +339,7 @@ impl FileWriter {
         let final_size = Self::current_size(output_path);
         if final_size != total {
             return Err(format!(
-                "Merged file size mismatch: expected {} bytes, got {} bytes",
-                total, final_size
+                "Merged file size mismatch: expected {total} bytes, got {final_size} bytes"
             ));
         }
         Self::cleanup_parts(ranges);
@@ -367,7 +363,7 @@ impl RetryPolicy {
         if attempt == 0 || self.attempts <= 1 {
             return Duration::ZERO;
         }
-        let exp = (attempt.saturating_sub(1)) as f64;
+        let exp = f64::from(attempt.saturating_sub(1) );
         let base = self.delay.as_secs_f64() * self.backoff_multiplier.powf(exp);
         let capped = base.min(self.max_delay.as_secs_f64());
         if self.jitter {
@@ -378,7 +374,7 @@ impl RetryPolicy {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .subsec_nanos();
-            let jitter = (nanos as f64 / u32::MAX as f64) * jitter_range;
+            let jitter = (f64::from(nanos) / f64::from(u32::MAX)) * jitter_range;
             Duration::from_secs_f64((capped + jitter).max(0.1))
         } else {
             Duration::from_secs_f64(capped)
@@ -420,6 +416,9 @@ impl RetryPolicy {
             || lower.contains("operation timed out")
             || lower.contains("ssl")
             || lower.contains("tls")
+            || lower.contains("429")
+            || lower.contains("502")
+            || lower.contains("503")
     }
 
     pub fn is_permanent_error(error: &str) -> bool {
@@ -516,7 +515,7 @@ pub struct IntegrityValidator {
 }
 
 impl IntegrityValidator {
-    pub fn new(metadata: IntegrityMetadata) -> Self {
+    pub const fn new(metadata: IntegrityMetadata) -> Self {
         Self { metadata }
     }
 
@@ -531,8 +530,7 @@ impl IntegrityValidator {
         if let Some(expected) = self.metadata.expected_size {
             if actual != expected {
                 return Err(format!(
-                    "Downloaded file size mismatch: expected {} bytes, got {} bytes",
-                    expected, actual
+                    "Downloaded file size mismatch: expected {expected} bytes, got {actual} bytes"
                 ));
             }
         }

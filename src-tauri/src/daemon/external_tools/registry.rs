@@ -25,7 +25,7 @@ pub fn load_registry(data_dir: &str) -> ToolRegistry {
 pub fn save_registry(data_dir: &str, registry: &ToolRegistry) -> Result<(), String> {
     let path = registry_path(data_dir);
     let json = serde_json::to_string_pretty(registry)
-        .map_err(|e| format!("Failed to serialize registry: {}", e))?;
+        .map_err(|e| format!("Failed to serialize registry: {e}"))?;
     std::fs::write(&path, json)
         .map_err(|e| format!("Failed to write registry to {}: {}", path.display(), e))
 }
@@ -39,11 +39,11 @@ pub fn register_tool(
     custom_path: bool,
 ) {
     registry.tools.insert(
-        tool_id.to_string(),
+        tool_id.to_owned(),
         ToolRegistryEntry {
-            tool_id: tool_id.to_string(),
-            path: path.to_string(),
-            version: version.map(|s| s.to_string()),
+            tool_id: tool_id.to_owned(),
+            path: path.to_owned(),
+            version: version.map(std::borrow::ToOwned::to_owned),
             installed_by_app,
             installed_at: Some(chrono::Utc::now().to_rfc3339()),
             custom_path,
@@ -58,13 +58,13 @@ pub fn unregister_tool(registry: &mut ToolRegistry, tool_id: &str) {
 
 pub fn update_tool_path(registry: &mut ToolRegistry, tool_id: &str, path: &str) {
     if let Some(entry) = registry.tools.get_mut(tool_id) {
-        entry.path = path.to_string();
+        entry.path = path.to_owned();
         entry.custom_path = true;
     }
 }
 
 pub fn update_tool_version(registry: &mut ToolRegistry, tool_id: &str, version: &str) {
     if let Some(entry) = registry.tools.get_mut(tool_id) {
-        entry.version = Some(version.to_string());
+        entry.version = Some(version.to_owned());
     }
 }

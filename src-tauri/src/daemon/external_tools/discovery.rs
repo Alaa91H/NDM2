@@ -9,7 +9,7 @@ pub fn discover_tool(tool: &dyn ExternalTool, registry: &ToolRegistry) -> Vec<To
             let path = PathBuf::from(&entry.path);
             candidates.push(ToolPathCandidate {
                 path: path.clone(),
-                source: "registry (custom)".to_string(),
+                source: "registry (custom)".to_owned(),
                 exists: path.exists(),
                 is_executable: is_executable_path(&path),
             });
@@ -36,7 +36,7 @@ pub fn discover_tool(tool: &dyn ExternalTool, registry: &ToolRegistry) -> Vec<To
             if !candidates.iter().any(|c| c.path == full_path) {
                 candidates.push(ToolPathCandidate {
                     path: full_path,
-                    source: "PATH".to_string(),
+                    source: "PATH".to_owned(),
                     exists: true,
                     is_executable: true,
                 });
@@ -59,8 +59,7 @@ fn is_executable_path(path: &std::path::Path) -> bool {
     if cfg!(windows) {
         path.extension()
             .and_then(|e| e.to_str())
-            .map(|e| matches!(e.to_lowercase().as_str(), "exe" | "cmd" | "bat" | "com"))
-            .unwrap_or(false)
+            .is_some_and(|e| matches!(e.to_lowercase().as_str(), "exe" | "cmd" | "bat" | "com"))
     } else {
         #[cfg(unix)]
         {

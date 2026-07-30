@@ -26,7 +26,7 @@ impl ThreadPool {
         for i in 0..size {
             let rx = rx.clone();
             let ac = active_count.clone();
-            let handle = thread::Builder::new()
+            match thread::Builder::new()
                 .name(format!("nova-worker-{i}"))
                 .spawn(move || loop {
                     let task = {
@@ -44,11 +44,11 @@ impl ThreadPool {
                             ac.fetch_sub(1, Ordering::Relaxed);
                             if let Err(panic) = result {
                                 let msg = if let Some(s) = panic.downcast_ref::<&str>() {
-                                    s.to_string()
+                                    (*s).to_owned()
                                 } else if let Some(s) = panic.downcast_ref::<String>() {
                                     s.clone()
                                 } else {
-                                    "unknown".to_string()
+                                    "unknown".to_owned()
                                 };
                                 log::error!("Worker thread task panicked: {msg}");
                             }
@@ -56,8 +56,13 @@ impl ThreadPool {
                         Err(_) => break,
                     }
                 })
-                .expect("failed to spawn worker thread");
-            handles.push(handle);
+            {
+                Ok(handle) => handles.push(handle),
+                Err(e) => {
+                    log::error!("Failed to spawn nova worker thread {i}: {e}");
+                    break;
+                }
+            }
         }
 
         Self {
@@ -79,7 +84,7 @@ impl ThreadPool {
         self.active_count.load(Ordering::Relaxed)
     }
 
-    pub fn max_size(&self) -> u32 {
+    pub const fn max_size(&self) -> u32 {
         self.max_size
     }
 

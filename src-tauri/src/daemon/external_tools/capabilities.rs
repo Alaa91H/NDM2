@@ -44,7 +44,7 @@ impl CapabilityResolver {
                     .find(|c| c.id == capability_id)
                 {
                     return CapabilityAvailability {
-                        capability_id: capability_id.to_string(),
+                        capability_id: capability_id.to_owned(),
                         available: true,
                         tool_id: installation.tool_id,
                         requires_message: None,
@@ -72,7 +72,7 @@ impl CapabilityResolver {
         };
 
         CapabilityAvailability {
-            capability_id: capability_id.to_string(),
+            capability_id: capability_id.to_owned(),
             available: false,
             tool_id: required_tool,
             requires_message: Some(format!(

@@ -22,7 +22,7 @@ pub enum ProtocolVersion {
 }
 
 impl ProtocolVersion {
-    pub fn from_curl_http_version(version: u32) -> Self {
+    pub const fn from_curl_http_version(version: u32) -> Self {
         match version {
             1 => Self::Http11,
             2 => Self::Http2,
@@ -78,7 +78,7 @@ pub struct ServerProfile {
 impl ServerProfile {
     pub fn new(host: &str) -> Self {
         Self {
-            host: host.to_string(),
+            host: host.to_owned(),
             ..Default::default()
         }
     }
@@ -205,7 +205,7 @@ impl ServerProfiler {
 
     pub fn get_or_create(&mut self, host: &str) -> &mut ServerProfile {
         self.profiles
-            .entry(host.to_string())
+            .entry(host.to_owned())
             .or_insert_with(|| ServerProfile::new(host))
     }
 
@@ -284,8 +284,7 @@ impl ServerProfiler {
                 if profile.rate_limit_detected
                     && profile
                         .rate_limit_cooldown_until
-                        .map(|t| Instant::now() >= t)
-                        .unwrap_or(false) =>
+                        .is_some_and(|t| Instant::now() >= t) =>
             {
                 profile.rate_limit_detected = false;
                 profile.rate_limit_cooldown_until = None;
@@ -317,11 +316,12 @@ impl ServerProfiler {
 
     pub fn learn_optimal_connections(&mut self, host: &str, connections: u32, speed: u64) {
         let profile = self.get_or_create(host);
-        if profile.per_connection_ceiling == 0 || speed > profile.per_connection_ceiling {
-            profile.per_connection_ceiling = speed;
+        let per_conn = speed / u64::from(connections.max(1));
+        if profile.per_connection_ceiling == 0 || per_conn > profile.per_connection_ceiling {
+            profile.per_connection_ceiling = per_conn;
         }
         if speed > 0 && connections > 0 {
-            let per_conn = speed / connections as u64;
+            let per_conn = speed / u64::from(connections);
             if per_conn > 0 {
                 profile.optimal_connections = connections;
             }
@@ -330,7 +330,7 @@ impl ServerProfiler {
     }
 
     pub fn active_hosts(&self) -> Vec<&str> {
-        self.profiles.keys().map(|s| s.as_str()).collect()
+        self.profiles.keys().map(std::string::String::as_str).collect()
     }
 }
 
@@ -581,7 +581,7 @@ mod tests {
         p.learn_optimal_connections("h", 4, 800_000);
         let prof = p.get("h").unwrap();
         assert_eq!(prof.optimal_connections, 4);
-        assert_eq!(prof.per_connection_ceiling, 800_000);
+        assert_eq!(prof.per_connection_ceiling, 200_000);
     }
 
     #[test]

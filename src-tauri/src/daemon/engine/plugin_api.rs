@@ -46,7 +46,7 @@ impl PluginApi {
     pub fn new() -> Self {
         Self {
             plugins: Arc::new(Mutex::new(Vec::new())),
-            api_version: "1.0.0".to_string(),
+            api_version: "1.0.0".to_owned(),
         }
     }
 
@@ -65,9 +65,9 @@ impl PluginApi {
         let mut plugins = self
             .plugins
             .lock()
-            .map_err(|e| format!("Lock poisoned: {}", e))?;
+            .map_err(|e| format!("Lock poisoned: {e}"))?;
         if plugins.iter().any(|p| p.manifest.id == entry.manifest.id) {
-            return Err("Plugin already registered".to_string());
+            return Err("Plugin already registered".to_owned());
         }
         plugins.push(entry);
         Ok(())
@@ -77,11 +77,11 @@ impl PluginApi {
         let mut plugins = self
             .plugins
             .lock()
-            .map_err(|e| format!("Lock poisoned: {}", e))?;
+            .map_err(|e| format!("Lock poisoned: {e}"))?;
         let before = plugins.len();
         plugins.retain(|p| p.manifest.id != plugin_id);
         if plugins.len() == before {
-            return Err("Plugin not found".to_string());
+            return Err("Plugin not found".to_owned());
         }
         Ok(())
     }
@@ -90,13 +90,13 @@ impl PluginApi {
         let mut plugins = self
             .plugins
             .lock()
-            .map_err(|e| format!("Lock poisoned: {}", e))?;
+            .map_err(|e| format!("Lock poisoned: {e}"))?;
         if let Some(plugin) = plugins.iter_mut().find(|p| p.manifest.id == plugin_id) {
             plugin.state.enabled = true;
             plugin.state.error = None;
             Ok(())
         } else {
-            Err("Plugin not found".to_string())
+            Err("Plugin not found".to_owned())
         }
     }
 
@@ -104,12 +104,12 @@ impl PluginApi {
         let mut plugins = self
             .plugins
             .lock()
-            .map_err(|e| format!("Lock poisoned: {}", e))?;
+            .map_err(|e| format!("Lock poisoned: {e}"))?;
         if let Some(plugin) = plugins.iter_mut().find(|p| p.manifest.id == plugin_id) {
             plugin.state.enabled = false;
             Ok(())
         } else {
-            Err("Plugin not found".to_string())
+            Err("Plugin not found".to_owned())
         }
     }
 
@@ -121,14 +121,14 @@ impl PluginApi {
         let mut plugins = self
             .plugins
             .lock()
-            .map_err(|e| format!("Lock poisoned: {}", e))?;
+            .map_err(|e| format!("Lock poisoned: {e}"))?;
         if let Some(plugin) = plugins.iter_mut().find(|p| p.manifest.id == plugin_id) {
             for (key, value) in settings {
                 plugin.state.settings.insert(key, value);
             }
             Ok(())
         } else {
-            Err("Plugin not found".to_string())
+            Err("Plugin not found".to_owned())
         }
     }
 

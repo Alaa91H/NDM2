@@ -83,7 +83,7 @@ impl DownloadRuleEngine {
         }
         if let Ok(mut inner) = self.inner.lock() {
             inner.rules.push(rule.clone());
-            inner.compiled.push((rule.id.clone(), compiled_conditions));
+            inner.compiled.push((rule.id, compiled_conditions));
             // Sort both vectors by priority using a permutation index
             let mut indices: Vec<usize> = (0..inner.rules.len()).collect();
             indices.sort_by_key(|&i| inner.rules[i].priority);
@@ -132,20 +132,19 @@ impl DownloadRuleEngine {
                 RuleCondition::UrlMatches { .. } => cc
                     .regex
                     .as_ref()
-                    .map(|re| re.is_match(url))
-                    .unwrap_or(false),
+                    .is_some_and(|re| re.is_match(url)),
                 RuleCondition::UrlContains { text } => url.contains(text.as_str()),
                 RuleCondition::UrlExtension { extensions } => {
                     let lower = url.to_lowercase();
                     extensions
                         .iter()
-                        .any(|ext| lower.ends_with(&format!(".{}", ext)))
+                        .any(|ext| lower.ends_with(&format!(".{ext}")))
                 }
                 RuleCondition::FileSizeAbove { bytes } => {
-                    size_bytes.map(|s| s > *bytes).unwrap_or(false)
+                    size_bytes.is_some_and(|s| s > *bytes)
                 }
                 RuleCondition::FileSizeBelow { bytes } => {
-                    size_bytes.map(|s| s < *bytes).unwrap_or(false)
+                    size_bytes.is_some_and(|s| s < *bytes)
                 }
                 RuleCondition::HostnameEquals { hostname: h } => hostname.eq_ignore_ascii_case(h),
                 RuleCondition::HostnameContains { text } => {

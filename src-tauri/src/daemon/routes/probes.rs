@@ -12,7 +12,7 @@ use crate::daemon::state::SharedState;
 use crate::daemon::types::CreateDownloadBody;
 use crate::daemon::utils::infer_file_type;
 
-use super::common::*;
+use super::common::{header_string, extract_sha256_digest, extract_best_size, content_disposition_filename, fallback_file_name, PROBE_USER_AGENT, PROBE_HEAD_TIMEOUT_SECS, PROBE_RANGE_TIMEOUT_SECS, is_cloudflare_challenge, hidden_output_timed, hidden_output};
 use crate::daemon::utils::{parse_meta_refresh_url, refreshed_url};
 
 fn probe_payload(
@@ -46,7 +46,7 @@ fn probe_payload(
         .filter_map(|v| v.to_str().ok())
         .flat_map(crate::daemon::utils::parse_link_mirrors)
         .collect();
-    let mirror_priorities: Vec<u64> = parsed_mirrors.iter().map(|m| m.priority as u64).collect();
+    let mirror_priorities: Vec<u64> = parsed_mirrors.iter().map(|m| u64::from(m.priority)).collect();
     let link_mirrors: Vec<String> = parsed_mirrors.into_iter().map(|m| m.url).collect();
 
     serde_json::json!({
@@ -176,12 +176,12 @@ async fn probe_stage_head(
                 let is_html = ct.contains("text/html");
                 let has_size = payload
                     .get("sizeBytes")
-                    .and_then(|v| v.as_u64())
+                    .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0)
                     > 0;
                 let has_range = payload
                     .get("supportsSegments")
-                    .and_then(|v| v.as_bool())
+                    .and_then(serde_json::Value::as_bool)
                     .unwrap_or(false);
                 // HEAD on CDNs that return HTML redirect pages (meta-refresh,
                 // Cloudflare challenge) will have a bogus Content-Length for
@@ -201,7 +201,7 @@ async fn probe_stage_head(
             }
         }
         Err(e) => {
-            log::warn!("probe HEAD {} failed: {}", url, e);
+            log::warn!("probe HEAD {url} failed: {e}");
             None
         }
     }
@@ -240,7 +240,7 @@ fn probe_payload_from_cache(cached: &CachedMetadata) -> serde_json::Value {
 fn cache_probe_payload(state: &SharedState, url: &str, payload: &serde_json::Value) {
     let size = payload
         .get("sizeBytes")
-        .and_then(|v| v.as_u64())
+        .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
     let method = payload
         .get("probeMethod")
@@ -262,21 +262,21 @@ fn cache_probe_payload(state: &SharedState, url: &str, payload: &serde_json::Val
         payload
             .get(key)
             .and_then(|v| v.as_str())
-            .map(str::to_string)
+            .map(str::to_owned)
     };
     let mut headers = HashMap::new();
     if let Some(final_url) = get_str("finalUrl") {
-        headers.insert("finalUrl".to_string(), final_url);
+        headers.insert("finalUrl".to_owned(), final_url);
     }
     if let Some(mirrors) = payload.get("linkMirrors").and_then(|v| v.as_array()) {
         if !mirrors.is_empty() {
             if let Ok(json) = serde_json::to_string(mirrors) {
-                headers.insert("linkMirrors".to_string(), json);
+                headers.insert("linkMirrors".to_owned(), json);
             }
         }
     }
     state.metadata_cache.put(CachedMetadata {
-        url: url.to_string(),
+        url: url.to_owned(),
         filename: get_str("fileName").unwrap_or_default(),
         content_type: get_str("contentType").filter(|v| !v.is_empty()),
         content_length: Some(size),
@@ -286,7 +286,7 @@ fn cache_probe_payload(state: &SharedState, url: &str, payload: &serde_json::Val
         last_modified: get_str("lastModified").filter(|v| !v.is_empty()),
         accept_ranges: payload
             .get("resumable")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false),
         checksum: None,
         headers,
@@ -297,7 +297,7 @@ fn cache_probe_payload(state: &SharedState, url: &str, payload: &serde_json::Val
     });
 }
 
-pub(crate) async fn probe_url_with_options(
+pub async fn probe_url_with_options(
     state: &SharedState,
     url: &str,
     body: Option<&CreateDownloadBody>,
@@ -311,7 +311,7 @@ pub(crate) async fn probe_url_with_options(
 
     // SSRF protection: reject URLs targeting internal networks
     if let Err(e) = crate::daemon::utils::is_safe_target_url(url) {
-        log::warn!("Blocked probe of unsafe URL {}: {}", url, e);
+        log::warn!("Blocked probe of unsafe URL {url}: {e}");
         return Err((
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": e})),
@@ -374,7 +374,7 @@ async fn probe_url_uncached(
             );
             let has_size = payload
                 .get("sizeBytes")
-                .and_then(|v| v.as_u64())
+                .and_then(serde_json::Value::as_u64)
                 .unwrap_or(0)
                 > 0;
             if has_size && best_payload.is_none() {
@@ -391,8 +391,7 @@ async fn probe_url_uncached(
         }
         if is_html {
             log::info!(
-                "probe GET range=0-0 {} -> HTML response (redirect page?), skipping to Stage 3b",
-                url
+                "probe GET range=0-0 {url} -> HTML response (redirect page?), skipping to Stage 3b"
             );
         }
     }
@@ -435,7 +434,7 @@ async fn probe_url_uncached(
                 );
                 let has_size = payload
                     .get("sizeBytes")
-                    .and_then(|v| v.as_u64())
+                    .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0)
                     > 0;
                 if has_size {
@@ -447,8 +446,7 @@ async fn probe_url_uncached(
             }
             if is_html {
                 log::info!(
-                    "probe GET range=0-1023 {} -> HTML response (redirect page?), skipping to Stage 3b",
-                    url
+                    "probe GET range=0-1023 {url} -> HTML response (redirect page?), skipping to Stage 3b"
                 );
             }
         }
@@ -477,7 +475,7 @@ async fn probe_url_uncached(
     {
         let status = resp.status().as_u16();
         let stage_final = resp.url().to_string();
-        let status_reason = resp.status().canonical_reason().unwrap_or("").to_string();
+        let status_reason = resp.status().canonical_reason().unwrap_or("").to_owned();
         let content_type = header_string(resp.headers(), "content-type");
         let headers_snapshot = resp.headers().clone();
         let content_length = resp.content_length().unwrap_or(0);
@@ -504,7 +502,7 @@ async fn probe_url_uncached(
                 );
                 let has_size = payload
                     .get("sizeBytes")
-                    .and_then(|v| v.as_u64())
+                    .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0)
                     > 0;
                 if has_size {
@@ -517,7 +515,7 @@ async fn probe_url_uncached(
             // If body is HTML, try to extract a meta-refresh redirect URL
             if is_html {
                 if let Some(refresh_url) = parse_meta_refresh_url(&body_text) {
-                    log::info!("probe meta-refresh redirect for {}: {}", url, refresh_url);
+                    log::info!("probe meta-refresh redirect for {url}: {refresh_url}");
                     // Follow the meta-refresh URL with a new GET request
                     if let Ok(refreshed) = apply_probe_request_options(
                         client
@@ -550,14 +548,11 @@ async fn probe_url_uncached(
             // instead of the file; the download engine re-resolves the effective
             // URL and retries, so just note it here.
             if is_cloudflare_challenge(&body_text) {
-                log::info!("probe: challenge/interstitial page detected for {}", url);
+                log::info!("probe: challenge/interstitial page detected for {url}");
             }
         } else {
             log::warn!(
-                "probe GET (encoding) {} -> {} {}",
-                url,
-                status,
-                status_reason
+                "probe GET (encoding) {url} -> {status} {status_reason}"
             );
         }
         body_text
@@ -590,7 +585,7 @@ pub async fn handle_probe(
     Query(params): Query<HashMap<String, String>>,
     State(state): State<SharedState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let url = params.get("url").map(|s| s.as_str()).unwrap_or("");
+    let url = params.get("url").map_or("", |s| s.as_str());
     probe_url_with_options(&state, url, None).await
 }
 
@@ -607,7 +602,7 @@ pub async fn handle_ytdlp_probe(
     Query(params): Query<HashMap<String, String>>,
     State(state): State<SharedState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let url = params.get("url").map(|s| s.as_str()).unwrap_or("");
+    let url = params.get("url").map_or("", |s| s.as_str());
     if url.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -621,7 +616,7 @@ pub async fn handle_ytdlp_probe(
         ));
     }
     if let Err(e) = crate::daemon::utils::is_safe_target_url(url) {
-        log::warn!("Blocked yt-dlp probe of unsafe URL {}: {}", url, e);
+        log::warn!("Blocked yt-dlp probe of unsafe URL {url}: {e}");
         return Err((
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": e})),
@@ -629,7 +624,7 @@ pub async fn handle_ytdlp_probe(
     }
 
     let ytdlp_bin = state.ytdlp_bin.clone();
-    let url2 = url.to_string();
+    let url2 = url.to_owned();
     let output = tokio::task::spawn_blocking(move || {
         hidden_output_timed(
             &ytdlp_bin,
@@ -639,7 +634,7 @@ pub async fn handle_ytdlp_probe(
     })
     .await
     .map_err(|e| {
-        log::error!("yt-dlp spawn failed: {}", e);
+        log::error!("yt-dlp spawn failed: {e}");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": "Probe failed"})),
@@ -647,13 +642,13 @@ pub async fn handle_ytdlp_probe(
     })?
     .map_err(|e| {
         if e.kind() == std::io::ErrorKind::TimedOut {
-            log::warn!("yt-dlp probe timed out for {}", url);
+            log::warn!("yt-dlp probe timed out for {url}");
             return (
                 StatusCode::GATEWAY_TIMEOUT,
                 Json(serde_json::json!({"error": "Probe timed out"})),
             );
         }
-        log::error!("yt-dlp probe failed: {}", e);
+        log::error!("yt-dlp probe failed: {e}");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": "Probe failed"})),
@@ -662,7 +657,7 @@ pub async fn handle_ytdlp_probe(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        log::error!("yt-dlp probe stderr: {}", stderr);
+        log::error!("yt-dlp probe stderr: {stderr}");
         return Err((
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "Probe failed"})),
@@ -671,14 +666,14 @@ pub async fn handle_ytdlp_probe(
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let info: serde_json::Value = serde_json::from_str(&stdout).map_err(|e| {
-        log::error!("yt-dlp probe parse failed: {}", e);
+        log::error!("yt-dlp probe parse failed: {e}");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": "Probe failed"})),
         )
     })?;
 
-    let duration = info.get("duration").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let duration = info.get("duration").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
     let hours = (duration / 3600.0).floor();
     let minutes = ((duration % 3600.0) / 60.0).floor();
     let seconds = (duration % 60.0).floor();
@@ -706,7 +701,7 @@ pub async fn handle_ytdlp_probe_playlist(
     Query(params): Query<HashMap<String, String>>,
     State(state): State<SharedState>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let url = params.get("url").map(|s| s.as_str()).unwrap_or("");
+    let url = params.get("url").map_or("", |s| s.as_str());
     if url.is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -720,7 +715,7 @@ pub async fn handle_ytdlp_probe_playlist(
         ));
     }
     if let Err(e) = crate::daemon::utils::is_safe_target_url(url) {
-        log::warn!("Blocked yt-dlp playlist probe of unsafe URL {}: {}", url, e);
+        log::warn!("Blocked yt-dlp playlist probe of unsafe URL {url}: {e}");
         return Err((
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": e})),
@@ -728,7 +723,7 @@ pub async fn handle_ytdlp_probe_playlist(
     }
 
     let ytdlp_bin = state.ytdlp_bin.clone();
-    let url2 = url.to_string();
+    let url2 = url.to_owned();
     let output = tokio::task::spawn_blocking(move || {
         hidden_output_timed(
             &ytdlp_bin,
@@ -744,7 +739,7 @@ pub async fn handle_ytdlp_probe_playlist(
     })
     .await
     .map_err(|e| {
-        log::error!("yt-dlp spawn failed: {}", e);
+        log::error!("yt-dlp spawn failed: {e}");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": "Probe failed"})),
@@ -752,13 +747,13 @@ pub async fn handle_ytdlp_probe_playlist(
     })?
     .map_err(|e| {
         if e.kind() == std::io::ErrorKind::TimedOut {
-            log::warn!("yt-dlp playlist probe timed out for {}", url);
+            log::warn!("yt-dlp playlist probe timed out for {url}");
             return (
                 StatusCode::GATEWAY_TIMEOUT,
                 Json(serde_json::json!({"error": "Probe timed out"})),
             );
         }
-        log::error!("yt-dlp probe failed: {}", e);
+        log::error!("yt-dlp probe failed: {e}");
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": "Probe failed"})),
@@ -767,7 +762,7 @@ pub async fn handle_ytdlp_probe_playlist(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        log::error!("yt-dlp probe playlist stderr: {}", stderr);
+        log::error!("yt-dlp probe playlist stderr: {stderr}");
         return Err((
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "Probe failed"})),
@@ -776,7 +771,7 @@ pub async fn handle_ytdlp_probe_playlist(
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut entries = Vec::new();
-    let mut playlist_title = "Playlist".to_string();
+    let mut playlist_title = "Playlist".to_owned();
 
     for line in stdout.lines() {
         if line.trim().is_empty() {
@@ -788,10 +783,9 @@ pub async fn handle_ytdlp_probe_playlist(
                     .get("playlist_title")
                     .or(info.get("title"))
                     .and_then(|v| v.as_str())
-                    .unwrap_or("Playlist")
-                    .to_string();
+                    .unwrap_or("Playlist").to_owned();
             }
-            let dur = info.get("duration").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let dur = info.get("duration").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
             let hours = (dur / 3600.0).floor();
             let minutes = ((dur % 3600.0) / 60.0).floor();
             let seconds = (dur % 60.0).floor();
@@ -824,12 +818,11 @@ pub async fn handle_ytdlp_probe_playlist(
 
 pub async fn handle_ytdlp_ffmpeg(State(state): State<SharedState>) -> Json<serde_json::Value> {
     let available = hidden_output(&state.ffmpeg_bin, &["-version"])
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+        .is_ok_and(|o| o.status.success());
     Json(serde_json::json!({"available": available, "binary": state.ffmpeg_bin.clone()}))
 }
 
-pub(crate) fn register_routes(router: Router<SharedState>) -> Router<SharedState> {
+pub fn register_routes(router: Router<SharedState>) -> Router<SharedState> {
     router
         .route("/api/probe", get(handle_probe).post(handle_probe_post))
         .route("/api/ytdlp/probe", get(handle_ytdlp_probe))

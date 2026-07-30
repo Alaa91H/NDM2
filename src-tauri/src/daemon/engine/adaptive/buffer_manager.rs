@@ -37,7 +37,7 @@ impl BufferManager {
             peak_speed: 0,
             memory_pressure: 0.0,
             active_connections: 1,
-            last_adjustment: Instant::now() - Duration::from_secs(10),
+            last_adjustment: Instant::now().checked_sub(Duration::from_secs(10)).unwrap_or(Instant::now()),
             adjustment_interval: Duration::from_secs(3),
         }
     }
@@ -86,8 +86,8 @@ impl BufferManager {
             0.5
         };
 
-        let conn_factor = 1.0 / (self.active_connections as f64).sqrt().max(1.0);
-        let memory_factor = 1.0 - (self.memory_pressure * 0.7);
+        let conn_factor = 1.0 / f64::from(self.active_connections).sqrt().max(1.0);
+        let memory_factor = self.memory_pressure.mul_add(-0.7, 1.0);
 
         let adjusted = base * speed_factor * conn_factor * memory_factor;
         (adjusted as usize).clamp(MIN_WRITE_BUFFER, MAX_WRITE_BUFFER)
@@ -105,7 +105,7 @@ impl BufferManager {
             0.5
         };
 
-        let memory_factor = 1.0 - (self.memory_pressure * 0.5);
+        let memory_factor = self.memory_pressure.mul_add(-0.5, 1.0);
         let adjusted = base * speed_factor * memory_factor;
         (adjusted as usize).clamp(MIN_READ_BUFFER, MAX_READ_BUFFER)
     }
@@ -124,7 +124,7 @@ impl BufferManager {
         }
     }
 
-    pub fn current(&self) -> BufferRecommendation {
+    pub const fn current(&self) -> BufferRecommendation {
         BufferRecommendation {
             write_buffer: self.write_buffer,
             read_buffer: self.read_buffer,
@@ -132,15 +132,15 @@ impl BufferManager {
         }
     }
 
-    pub fn write_buffer(&self) -> usize {
+    pub const fn write_buffer(&self) -> usize {
         self.write_buffer
     }
 
-    pub fn read_buffer(&self) -> usize {
+    pub const fn read_buffer(&self) -> usize {
         self.read_buffer
     }
 
-    pub fn flush_interval(&self) -> Duration {
+    pub const fn flush_interval(&self) -> Duration {
         Duration::from_millis(self.flush_interval_ms)
     }
 }

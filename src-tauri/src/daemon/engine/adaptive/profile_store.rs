@@ -9,6 +9,8 @@ use super::server_profiler::{ProtocolVersion, ServerProfile};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PersistedProfile {
+    #[serde(default)]
+    pub schema_version: u32,
     pub host: String,
     pub protocol: String,
     pub supports_range: bool,
@@ -35,6 +37,7 @@ pub struct PersistedProfile {
 impl From<&ServerProfile> for PersistedProfile {
     fn from(p: &ServerProfile) -> Self {
         Self {
+            schema_version: 1,
             host: p.host.clone(),
             protocol: format!("{:?}", p.protocol),
             supports_range: p.supports_range == super::server_profiler::TriState::Yes,
@@ -49,7 +52,7 @@ impl From<&ServerProfile> for PersistedProfile {
             throughput_ceiling: p.throughput_ceiling,
             per_connection_ceiling: p.per_connection_ceiling,
             optimal_connections: p.optimal_connections,
-            stability_score: p.stability_score as f64,
+            stability_score: f64::from(p.stability_score),
             total_probes: p.total_probes,
             successful_probes: p.successful_probes,
             rate_limit_cooldown_until: None,
@@ -167,9 +170,9 @@ impl UnifiedProfileStore {
     pub fn get_or_create(&mut self, host: &str) -> &PersistedProfile {
         if !self.profiles.contains_key(host) {
             self.profiles.insert(
-                host.to_string(),
+                host.to_owned(),
                 PersistedProfile {
-                    host: host.to_string(),
+                    host: host.to_owned(),
                     ..Default::default()
                 },
             );
@@ -189,24 +192,23 @@ impl UnifiedProfileStore {
             }
             if old.median_rtt_us > 0 && persisted.initial_rtt_us > 0 {
                 let alpha = 0.3;
-                persisted.median_rtt_us = ((old.median_rtt_us as f64 * (1.0 - alpha))
-                    + (persisted.initial_rtt_us as f64 * alpha))
+                persisted.median_rtt_us = (old.median_rtt_us as f64).mul_add(1.0 - alpha, persisted.initial_rtt_us as f64 * alpha)
                     as u64;
             }
             persisted.bandwidth_plateau_detected = old.bandwidth_plateau_detected;
             persisted.detected_rate_limit_headers = old.detected_rate_limit_headers.clone();
         }
 
-        self.profiles.insert(host.to_string(), persisted);
+        self.profiles.insert(host.to_owned(), persisted);
         self.dirty = true;
     }
 
     pub fn merge_telemetry(&mut self, host: &str, rtt_us: u64, speed: u64, http_status: u16) {
         let entry = self
             .profiles
-            .entry(host.to_string())
+            .entry(host.to_owned())
             .or_insert_with(|| PersistedProfile {
-                host: host.to_string(),
+                host: host.to_owned(),
                 ..Default::default()
             });
 
@@ -216,7 +218,7 @@ impl UnifiedProfileStore {
             entry.median_rtt_us = if entry.median_rtt_us == 0 {
                 rtt_us
             } else {
-                ((entry.median_rtt_us as f64 * (1.0 - alpha)) + (rtt_us as f64 * alpha)) as u64
+                (entry.median_rtt_us as f64).mul_add(1.0 - alpha, rtt_us as f64 * alpha) as u64
             };
         }
         if speed > entry.throughput_ceiling {
@@ -269,9 +271,9 @@ impl UnifiedProfileStore {
             }
         } else if is_plateau {
             self.profiles.insert(
-                host.to_string(),
+                host.to_owned(),
                 PersistedProfile {
-                    host: host.to_string(),
+                    host: host.to_owned(),
                     bandwidth_plateau_detected: true,
                     per_connection_ceiling: avg,
                     ..Default::default()
@@ -285,16 +287,16 @@ impl UnifiedProfileStore {
     pub fn store_rate_limit_header(&mut self, host: &str, header: &str) {
         let entry = self
             .profiles
-            .entry(host.to_string())
+            .entry(host.to_owned())
             .or_insert_with(|| PersistedProfile {
-                host: host.to_string(),
+                host: host.to_owned(),
                 ..Default::default()
             });
         if !entry
             .detected_rate_limit_headers
-            .contains(&header.to_string())
+            .contains(&header.to_owned())
         {
-            entry.detected_rate_limit_headers.push(header.to_string());
+            entry.detected_rate_limit_headers.push(header.to_owned());
             self.dirty = true;
         }
     }
@@ -307,35 +309,42 @@ impl UnifiedProfileStore {
         self.profiles
             .get(host)
             .and_then(|p| p.rate_limit_cooldown_until)
-            .map(|until| {
+            .is_some_and(|until| {
                 let now = SystemTime::now()
                     .duration_since(SystemTime::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs();
                 until > now
             })
-            .unwrap_or(false)
     }
 
     pub fn save_if_dirty(&mut self) {
         if !self.dirty {
             return;
         }
-        self.save();
         self.dirty = false;
+        let profiles = self.profiles.clone();
+        let path = self.save_path.clone();
+        Self::write_to_disk(&profiles, &path);
     }
 
     pub fn save(&self) {
-        if let Ok(json) = serde_json::to_string_pretty(&self.profiles) {
+        let profiles = self.profiles.clone();
+        let path = self.save_path.clone();
+        Self::write_to_disk(&profiles, &path);
+    }
+
+    fn write_to_disk(profiles: &HashMap<String, PersistedProfile>, path: &PathBuf) {
+        if let Ok(json) = serde_json::to_string_pretty(profiles) {
             if let Err(e) =
-                fs::create_dir_all(self.save_path.parent().unwrap_or(std::path::Path::new(".")))
+                fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new(".")))
             {
                 log::error!("profile_store: failed to create dir: {e}");
             }
-            if let Err(e) = fs::write(&self.save_path, json) {
+            if let Err(e) = fs::write(path, json) {
                 log::error!(
                     "profile_store: failed to write {}: {e}",
-                    self.save_path.display()
+                    path.display()
                 );
             }
         }
@@ -346,7 +355,7 @@ impl UnifiedProfileStore {
     }
 
     pub fn known_hosts(&self) -> Vec<&str> {
-        self.profiles.keys().map(|s| s.as_str()).collect()
+        self.profiles.keys().map(std::string::String::as_str).collect()
     }
 
     fn load_from_disk(path: &PathBuf) -> HashMap<String, PersistedProfile> {
@@ -383,6 +392,7 @@ fn dirs() -> Option<PathBuf> {
 impl Default for PersistedProfile {
     fn default() -> Self {
         Self {
+            schema_version: 1,
             host: String::new(),
             protocol: "Http11".into(),
             supports_range: false,

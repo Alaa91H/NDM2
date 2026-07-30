@@ -8,6 +8,7 @@ const PORT_SCAN_RANGE: u16 = 10;
 const MAX_NATIVE_REQUEST_BYTES: u32 = 16 * 1024 * 1024;
 const MAX_NATIVE_RESPONSE_BYTES: usize = 1024 * 1024;
 
+#[must_use] 
 pub fn is_native_messaging_launch() -> bool {
     std::env::args().skip(1).any(|arg| {
         arg == "--native-host"
@@ -97,7 +98,7 @@ fn read_port_file() -> Option<u16> {
 
 /// Compute platform-specific paths where the daemon may have written its port.
 /// These MUST match the directories the daemon actually uses:
-/// - Tauri mode:      app_data_dir for identifier `com.nova.downloadmanager`
+/// - Tauri mode:      `app_data_dir` for identifier `com.nova.downloadmanager`
 /// - Integration mode: `<APPDATA|HOME>/nova-download-manager`
 ///
 /// Legacy `NOVA` paths are kept as a fallback for older installs.
@@ -213,7 +214,16 @@ fn write_native_message(value: &Value) -> io::Result<()> {
             "native response exceeds browser limit",
         ));
     }
-    let len = (bytes.len() as u32).to_le_bytes();
+    let msg_len = u32::try_from(bytes.len()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "native response too large: {} bytes exceeds u32 max",
+                bytes.len()
+            ),
+        )
+    })?;
+    let len = msg_len.to_le_bytes();
     let mut stdout = io::stdout();
     stdout.write_all(&len)?;
     stdout.write_all(&bytes)?;
@@ -277,10 +287,10 @@ fn handle_native_request(
                     b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
                         (b as char).to_string()
                     }
-                    _ => format!("%{:02X}", b),
+                    _ => format!("%{b:02X}"),
                 })
                 .collect();
-            let route = format!("/api/ytdlp/probe?url={}", encoded);
+            let route = format!("/api/ytdlp/probe?url={encoded}");
             http_json(client, state, "GET", &route, None, needs_auth)
         }
         "capabilities" => http_json(
@@ -315,7 +325,7 @@ fn task_command(
     let task_id = params
         .get("taskId")
         .and_then(Value::as_str)
-        .ok_or_else(|| "taskId is required".to_string())?;
+        .ok_or_else(|| "taskId is required".to_owned())?;
     http_json(
         client,
         state,
@@ -335,7 +345,7 @@ fn http_json(
     attach_auth: bool,
 ) -> Result<Value, String> {
     let base_url = {
-        let guard = state.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         guard.base_url.clone()
     };
     let url = format!("{base_url}{route}");
@@ -347,7 +357,7 @@ fn http_json(
 
     if attach_auth {
         let token = {
-            let guard = state.lock().unwrap_or_else(|e| e.into_inner());
+            let guard = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             guard.api_token.clone()
         };
         if let Some(token) = token {
@@ -373,14 +383,14 @@ fn http_json(
     if status == axum::http::StatusCode::UNAUTHORIZED && attach_auth {
         let new_token = {
             let base = {
-                let guard = state.lock().unwrap_or_else(|e| e.into_inner());
+                let guard = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 guard.base_url.clone()
             };
             obtain_api_token(client, &base)
         };
         if let Some(new_token) = new_token {
             {
-                let mut guard = state.lock().unwrap_or_else(|e| e.into_inner());
+                let mut guard = state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 guard.api_token = Some(new_token.clone());
             }
             // Retry once with the refreshed token.
@@ -406,8 +416,7 @@ fn http_json(
                 return Err(retry_value
                     .get("error")
                     .and_then(Value::as_str)
-                    .unwrap_or("NOVA loopback request failed")
-                    .to_string());
+                    .unwrap_or("NOVA loopback request failed").to_owned());
             }
             return Ok(retry_value);
         }
@@ -417,8 +426,7 @@ fn http_json(
         return Err(value
             .get("error")
             .and_then(Value::as_str)
-            .unwrap_or("NOVA loopback request failed")
-            .to_string());
+            .unwrap_or("NOVA loopback request failed").to_owned());
     }
     Ok(value)
 }

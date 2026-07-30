@@ -23,7 +23,7 @@ impl SegmentState {
         }
     }
 
-    pub fn total_bytes(&self) -> u64 {
+    pub const fn total_bytes(&self) -> u64 {
         self.end_byte.saturating_sub(self.start_byte)
     }
 
@@ -58,11 +58,11 @@ impl DynamicSegmentScheduler {
         if total_size == 0 {
             return vec![SegmentState::new(0, 0, 0)];
         }
-        let conns = connections.max(1);
-        let per_seg = total_size / conns as u64;
+        let conns = connections.max(1).min(total_size as u32);
+        let per_seg = total_size / u64::from(conns);
         let mut segs = Vec::with_capacity(conns as usize);
         for i in 0..conns {
-            let start = i as u64 * per_seg;
+            let start = u64::from(i) * per_seg;
             let end = if i == conns - 1 {
                 total_size
             } else {
@@ -111,12 +111,11 @@ impl DynamicSegmentScheduler {
         let downloaded: u64 = self
             .segments
             .lock()
-            .map(|segs| {
+            .map_or(0, |segs| {
                 segs.iter()
                     .map(|s| s.downloaded.load(Ordering::Relaxed))
                     .sum()
-            })
-            .unwrap_or(0);
+            });
         downloaded as f64 / total as f64
     }
 }

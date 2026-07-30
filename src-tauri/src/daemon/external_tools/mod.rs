@@ -32,7 +32,7 @@ impl ExternalToolManager {
             yt_dlp: tools::yt_dlp::YtDlpTool,
             registry: Mutex::new(registry),
             resolver: Mutex::new(CapabilityResolver::new()),
-            data_dir: data_dir.to_string(),
+            data_dir: data_dir.to_owned(),
             http,
         }
     }
@@ -59,8 +59,8 @@ impl ExternalToolManager {
 
     fn discover_inner(&self, tool: &dyn ExternalTool, reg: &mut ToolRegistry) -> ToolInstallation {
         let reg_entry = reg.tools.get(tool.id().as_str());
-        let custom_path = reg_entry.map(|e| e.custom_path).unwrap_or(false);
-        let installed_by_app = reg_entry.map(|e| e.installed_by_app).unwrap_or(false);
+        let custom_path = reg_entry.is_some_and(|e| e.custom_path);
+        let installed_by_app = reg_entry.is_some_and(|e| e.installed_by_app);
 
         if custom_path {
             if let Some(entry) = reg_entry {
@@ -118,7 +118,7 @@ impl ExternalToolManager {
                     .as_ref()
                     .map(|p| p.display().to_string())
                     .unwrap_or_default();
-                let ver_display = installation.version.as_ref().map(|v| v.to_string());
+                let ver_display = installation.version.as_ref().map(std::string::ToString::to_string);
                 registry::register_tool(
                     reg,
                     tool.id().as_str(),
@@ -155,7 +155,7 @@ impl ExternalToolManager {
         let update_info = self.check_for_updates(tool_id);
 
         if !update_info.available {
-            return Err("No update available".to_string());
+            return Err("No update available".to_owned());
         }
 
         let install_dir = self.get_install_dir(tool_id);
@@ -173,7 +173,7 @@ impl ExternalToolManager {
         let path_buf = PathBuf::from(path);
 
         if !path_buf.exists() {
-            return Err(format!("Path does not exist: {}", path));
+            return Err(format!("Path does not exist: {path}"));
         }
 
         let report = health::check_health(tool, &path_buf);
@@ -257,11 +257,11 @@ impl ExternalToolManager {
             .collect();
 
         ToolState {
-            id: tool_id.as_str().to_string(),
-            name: tool.name().to_string(),
-            description: tool.description().to_string(),
-            status: installation.status.display_text().to_string(),
-            version: installation.version.as_ref().map(|v| v.to_string()),
+            id: tool_id.as_str().to_owned(),
+            name: tool.name().to_owned(),
+            description: tool.description().to_owned(),
+            status: installation.status.display_text().to_owned(),
+            version: installation.version.as_ref().map(std::string::ToString::to_string),
             latest_version: update_info.latest_version.clone(),
             path: installation.path.as_ref().map(|p| p.display().to_string()),
             custom_path: installation.custom_path,
@@ -274,8 +274,8 @@ impl ExternalToolManager {
             health_ok: installation.health_ok,
             error: installation.error_message,
             download_url: update_info.download_url,
-            source_url: Some(tool.source().base_url.to_string()),
-            source_name: Some(tool.source().name.to_string()),
+            source_url: Some(tool.source().base_url.to_owned()),
+            source_name: Some(tool.source().name.to_owned()),
         }
     }
 

@@ -14,23 +14,23 @@ pub enum DownloadPriority {
 }
 
 impl DownloadPriority {
-    pub fn bandwidth_share(&self) -> f64 {
+    pub const fn bandwidth_share(&self) -> f64 {
         match self {
-            DownloadPriority::Critical => 0.30,
-            DownloadPriority::High => 0.25,
-            DownloadPriority::Normal => 0.20,
-            DownloadPriority::Low => 0.15,
-            DownloadPriority::Background => 0.10,
+            Self::Critical => 0.30,
+            Self::High => 0.25,
+            Self::Normal => 0.20,
+            Self::Low => 0.15,
+            Self::Background => 0.10,
         }
     }
 
-    pub fn from_u32(v: u32) -> Self {
+    pub const fn from_u32(v: u32) -> Self {
         match v {
-            0 => DownloadPriority::Critical,
-            1 => DownloadPriority::High,
-            3 => DownloadPriority::Low,
-            4 => DownloadPriority::Background,
-            _ => DownloadPriority::Normal,
+            0 => Self::Critical,
+            1 => Self::High,
+            3 => Self::Low,
+            4 => Self::Background,
+            _ => Self::Normal,
         }
     }
 }
@@ -162,7 +162,7 @@ impl PriorityBandwidthQueue {
             Err(_) => return,
         };
         let total_bw = self.total_bandwidth_kbps.load(AtomicOrder::Relaxed);
-        let active = self.active_downloads.load(AtomicOrder::Relaxed) as f64;
+        let active = f64::from(self.active_downloads.load(AtomicOrder::Relaxed));
         if active == 0.0 {
             return;
         }
@@ -184,7 +184,7 @@ impl PriorityBandwidthQueue {
                 continue;
             }
             let share = entry.priority.bandwidth_share();
-            let count = priority_counts.get(&entry.priority).copied().unwrap_or(1) as f64;
+            let count = f64::from(priority_counts.get(&entry.priority).copied().unwrap_or(1));
             let per_task = (total_bw as f64 * share / count) as u64;
             entry.bandwidth_kbps.store(per_task, AtomicOrder::Relaxed);
         }
@@ -194,7 +194,7 @@ impl PriorityBandwidthQueue {
         if active == 0 {
             return total_bw;
         }
-        total_bw / active.max(1) as u64
+        total_bw / u64::from(active.max(1))
     }
 
     fn min_bandwidth_for_priority(priority: &DownloadPriority, total: u64) -> u64 {

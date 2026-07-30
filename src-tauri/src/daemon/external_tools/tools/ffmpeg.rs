@@ -9,11 +9,11 @@ impl ExternalTool for FfmpegTool {
         ToolId::Ffmpeg
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "FFmpeg"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Media Processing Engine"
     }
 

@@ -41,6 +41,19 @@ pub struct TaskEngineTracker {
 
 const ENGINE_CACHE_TTL_SECS: u64 = 120;
 
+/// Lock ordering (acquire in this order to prevent deadlocks):
+///   1. `media_jobs`
+///   2. `curl_jobs`
+///   3. `task_snapshot`
+///   4. `engine_trackers`
+///   5. `mirror_managers`
+///   6. `telegram_config` / `telegram_last_update_id`
+///   7. `download_stats`
+///   8. `watchdog_handles`
+///   9. `external_tools`
+///  10. `policy_engine` / `self_healer` / `die_orchestrator` / `resource_manager`
+///
+/// Never acquire a lower-numbered lock while holding a higher-numbered one.
 pub struct AppState {
     pub media_jobs: Mutex<HashMap<String, MediaJob>>,
     pub curl_jobs: Mutex<HashMap<String, CurlJob>>,
@@ -65,7 +78,7 @@ pub struct AppState {
     pub metadata_cache: MetadataCache,
     pub default_retry_policy: RwLock<RetryPolicy>,
     pub plugin_api: PluginApi,
-    pub engine_trackers: Mutex<HashMap<String, TaskEngineTracker>>,
+    pub engine_trackers: RwLock<HashMap<String, TaskEngineTracker>>,
     pub mirror_managers: Mutex<HashMap<String, MirrorManager>>,
     /// Registry of download extractors (curl, yt-dlp, etc.)
     pub extractor_registry: SharedExtractorRegistry,
@@ -75,7 +88,7 @@ pub struct AppState {
     pub download_stats: Mutex<DownloadStats>,
     /// Resource Intelligence Engine — analyzes URLs and selects download strategies.
     pub rie: ResourceIntelligenceEngine,
-    /// External Tool Manager — manages FFmpeg, yt-dlp, and other external tools.
+    /// External Tool Manager — manages `FFmpeg`, yt-dlp, and other external tools.
     pub external_tools: Arc<Mutex<ExternalToolManager>>,
     /// Policy Engine — central decision layer for all runtime decisions.
     pub policy_engine: Arc<Mutex<PolicyEngine>>,

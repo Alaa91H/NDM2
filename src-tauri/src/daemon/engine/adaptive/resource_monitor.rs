@@ -24,8 +24,7 @@ impl Default for ResourceSnapshot {
 impl ResourceSnapshot {
     fn detect_cpu_count() -> u32 {
         std::thread::available_parallelism()
-            .map(|n| n.get() as u32)
-            .unwrap_or(4)
+            .map_or(4, |n| n.get() as u32)
     }
 }
 
@@ -34,10 +33,6 @@ pub struct ResourceMonitor {
     sample_interval: Duration,
     cpu_count: u32,
     available_memory_mb: u64,
-    disk_write_bytes: u64,
-    last_disk_write_bytes: u64,
-    last_disk_sample_time: Instant,
-    disk_write_mbps: u64,
     snapshot: ResourceSnapshot,
 }
 
@@ -49,10 +44,6 @@ impl ResourceMonitor {
             sample_interval: Duration::from_secs(2),
             cpu_count,
             available_memory_mb: 0,
-            disk_write_bytes: 0,
-            last_disk_write_bytes: 0,
-            last_disk_sample_time: Instant::now(),
-            disk_write_mbps: 0,
             snapshot: ResourceSnapshot {
                 cpu_count,
                 ..Default::default()
@@ -68,14 +59,13 @@ impl ResourceMonitor {
         self.last_sample = now;
 
         self.sample_memory();
-        self.sample_disk_io();
 
         self.snapshot = ResourceSnapshot {
             cpu_count: self.cpu_count,
             cpu_usage_pct: self.estimate_cpu_usage(),
             available_memory_mb: self.available_memory_mb,
-            disk_write_mbps: self.disk_write_mbps,
-            disk_active: self.disk_write_mbps > 0,
+            disk_write_mbps: 0,
+            disk_active: false,
         };
         &self.snapshot
     }
@@ -84,7 +74,7 @@ impl ResourceMonitor {
         ResourceSnapshot::detect_cpu_count()
     }
 
-    pub fn cpu_count(&self) -> u32 {
+    pub const fn cpu_count(&self) -> u32 {
         self.cpu_count
     }
 
@@ -100,8 +90,8 @@ impl ResourceMonitor {
         mem_factor.clamp(2, 32)
     }
 
-    pub fn disk_bottleneck(&self) -> bool {
-        self.disk_write_mbps > 0 && self.disk_write_mbps < 10
+    pub const fn disk_bottleneck(&self) -> bool {
+        self.snapshot.disk_write_mbps > 0 && self.snapshot.disk_write_mbps < 10
     }
 
     pub fn cpu_saturated(&self) -> bool {
@@ -109,11 +99,11 @@ impl ResourceMonitor {
     }
 
     pub fn disk_write_budget(&self, connections: u32) -> u64 {
-        if self.disk_write_mbps == 0 {
+        if self.snapshot.disk_write_mbps == 0 {
             return 0;
         }
-        let total_bps = self.disk_write_mbps * 1024 * 1024;
-        total_bps / connections.max(1) as u64
+        let total_bps = self.snapshot.disk_write_mbps * 1024 * 1024;
+        total_bps / u64::from(connections.max(1))
     }
 
     pub fn snapshot_clone(&self) -> ResourceSnapshot {
@@ -174,7 +164,7 @@ impl ResourceMonitor {
         }
 
         fn file_time_to_u64(ft: &FileTime) -> u64 {
-            ((ft.dw_high_date_time as u64) << 32) | (ft.dw_low_date_time as u64)
+            (u64::from(ft.dw_high_date_time) << 32) | u64::from(ft.dw_low_date_time)
         }
 
         let idle_ticks = file_time_to_u64(&idle);
@@ -189,10 +179,19 @@ impl ResourceMonitor {
 
         static PREV: std::sync::OnceLock<std::sync::Mutex<(u64, u64)>> = std::sync::OnceLock::new();
         let prev = PREV.get_or_init(|| std::sync::Mutex::new((0, 0)));
-        let mut guard = prev.lock().unwrap();
-        let (prev_idle, prev_total) = *guard;
-        *guard = (idle_ticks, total);
-        drop(guard);
+        let (prev_idle, prev_total) = match prev.lock() {
+            Ok(mut guard) => {
+                let v = *guard;
+                *guard = (idle_ticks, total);
+                v
+            }
+            Err(poisoned) => {
+                let mut guard = poisoned.into_inner();
+                let v = *guard;
+                *guard = (idle_ticks, total);
+                v
+            }
+        };
 
         let d_idle = idle_ticks.saturating_sub(prev_idle);
         let d_total = total.saturating_sub(prev_total);
@@ -206,8 +205,8 @@ impl ResourceMonitor {
     }
 
     fn estimate_cpu_usage_fallback(&self) -> f32 {
-        let load = self.disk_write_mbps as f32 / 100.0;
-        load.clamp(0.0, 1.0)
+        log::warn!("No OS-specific CPU sampling available; returning 0.0");
+        0.0
     }
 
     fn sample_memory(&mut self) {
@@ -263,27 +262,6 @@ impl ResourceMonitor {
         self.available_memory_mb = 2048;
     }
 
-    fn sample_disk_io(&mut self) {
-        let now = Instant::now();
-        let elapsed = now.duration_since(self.last_disk_sample_time);
-        if elapsed < Duration::from_millis(500) {
-            return;
-        }
-        self.last_disk_sample_time = now;
-
-        let total_written = self.disk_write_bytes;
-        let delta = total_written.saturating_sub(self.last_disk_write_bytes);
-        self.last_disk_write_bytes = total_written;
-
-        if elapsed.as_secs_f64() > 0.0 {
-            self.disk_write_mbps =
-                (delta as f64 / elapsed.as_secs_f64() / (1024.0 * 1024.0)) as u64;
-        }
-    }
-
-    pub fn record_disk_write(&mut self, bytes: u64) {
-        self.disk_write_bytes += bytes;
-    }
 }
 
 #[cfg(test)]
@@ -369,18 +347,8 @@ mod tests {
     }
 
     #[test]
-    fn record_disk_write_accumulates() {
-        let mut m = ResourceMonitor::new();
-        m.record_disk_write(1024);
-        m.record_disk_write(2048);
-        assert_eq!(m.disk_write_bytes, 3072);
-    }
-
-    #[test]
     fn snapshot_clone_returns_copy() {
-        let mut m = ResourceMonitor::new();
-        m.record_disk_write(1024 * 1024);
-        m.sample();
+        let m = ResourceMonitor::new();
         let mut snap = m.snapshot_clone();
         let original = snap.disk_write_mbps;
         snap.disk_write_mbps = 999;

@@ -6,11 +6,11 @@ use std::time::Duration;
 use ::curl::easy::{Easy2, Handler};
 use ::curl::multi::{Easy2Handle, Events, Multi, Socket, WaitFd};
 
-use super::*;
+use super::{PROGRESS_INTERVAL_MS, AtomicBool};
 use crate::daemon::direct::ConnectionLimits;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum MultiErrorKind {
+pub enum MultiErrorKind {
     Perform,
     SocketAction,
     Wait,
@@ -34,7 +34,7 @@ fn wrap_multi_error(kind: MultiErrorKind, source: String) -> String {
     format!("libcurl {kind}: {source}")
 }
 
-pub(crate) struct CurlMultiGuard {
+pub struct CurlMultiGuard {
     multi: Option<Multi>,
     handle_count: usize,
 }
@@ -47,17 +47,17 @@ impl CurlMultiGuard {
         }
     }
 
-    pub(crate) fn multi(&mut self) -> &mut Multi {
-        self.multi
-            .as_mut()
-            .expect("CurlMultiGuard: multi already consumed")
+    pub(crate) fn multi(&mut self) -> Result<&mut Multi, String> {
+        self.multi.as_mut().ok_or_else(|| {
+            "CurlMultiGuard: multi handle has already been consumed via into_inner()".to_owned()
+        })
     }
 
     pub(crate) fn add2<H: Handler>(&mut self, easy: Easy2<H>) -> Result<Easy2Handle<H>, String> {
         let multi = self
             .multi
             .as_mut()
-            .ok_or_else(|| "CurlMultiGuard: cannot add handle after into_inner()".to_string())?;
+            .ok_or_else(|| "CurlMultiGuard: cannot add handle after into_inner()".to_owned())?;
         let handle = multi
             .add2(easy)
             .map_err(|e| format!("Could not add transfer to libcurl multi: {e}"))?;
@@ -71,11 +71,11 @@ impl CurlMultiGuard {
     }
 
     pub(crate) fn configure_limits(&mut self, limits: ConnectionLimits) -> Result<(), String> {
-        configure_multi_limits(self.multi(), limits)
+        configure_multi_limits(self.multi()?, limits)
     }
 
     pub(crate) fn attach_socket_runtime(&mut self) -> Result<MultiSocketRuntime, String> {
-        MultiSocketRuntime::attach(self.multi())
+        MultiSocketRuntime::attach(self.multi()?)
     }
 }
 
@@ -172,7 +172,7 @@ pub(super) struct SocketInterest {
     output: bool,
 }
 
-pub(crate) struct MultiSocketRuntime {
+pub struct MultiSocketRuntime {
     updates: Arc<Mutex<Vec<SocketUpdate>>>,
     timeout: Arc<Mutex<Option<Duration>>>,
     pub(super) sockets: HashMap<Socket, SocketInterest>,
@@ -221,7 +221,7 @@ impl MultiSocketRuntime {
             let mut guard = self
                 .updates
                 .lock()
-                .map_err(|_| "libcurl socket update queue is poisoned".to_string())?;
+                .map_err(|_| "libcurl socket update queue is poisoned".to_owned())?;
             std::mem::take(&mut *guard)
         };
 
@@ -284,7 +284,7 @@ impl MultiSocketRuntime {
     }
 }
 
-pub(crate) fn configure_multi_limits(
+pub fn configure_multi_limits(
     multi: &mut Multi,
     limits: ConnectionLimits,
 ) -> Result<(), String> {
@@ -333,7 +333,7 @@ fn check_multi_messages<H: Handler>(
     }
 }
 
-pub(crate) fn drive_multi_wait_perform<H, F>(
+pub fn drive_multi_wait_perform<H, F>(
     multi: &Multi,
     handles: &[Easy2Handle<H>],
     cancel: &AtomicBool,
@@ -349,7 +349,7 @@ where
         .map_err(|e| wrap_multi_error(MultiErrorKind::Perform, e.to_string()))?;
     while running > 0 {
         if cancel.load(Ordering::Acquire) {
-            return Err("cancelled".to_string());
+            return Err("cancelled".to_owned());
         }
         multi
             .wait(&mut [], Duration::from_millis(PROGRESS_INTERVAL_MS))
@@ -364,7 +364,7 @@ where
     check_multi_messages(multi, handles, label)
 }
 
-pub(crate) fn drive_multi_socket<H, F>(
+pub fn drive_multi_socket<H, F>(
     multi: &Multi,
     runtime: &mut MultiSocketRuntime,
     handles: &[Easy2Handle<H>],
@@ -387,7 +387,7 @@ where
 
     while running > 0 {
         if cancel.load(Ordering::Acquire) {
-            return Err("cancelled".to_string());
+            return Err("cancelled".to_owned());
         }
 
         let timeout = runtime.wait_timeout();

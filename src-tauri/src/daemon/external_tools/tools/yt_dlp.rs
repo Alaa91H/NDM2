@@ -11,11 +11,11 @@ impl ExternalTool for YtDlpTool {
         ToolId::YtDlp
     }
 
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "yt-dlp"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Media URL Resolver"
     }
 

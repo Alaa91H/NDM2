@@ -218,10 +218,10 @@ pub struct CreateDownloadBody {
 }
 
 fn default_telegram_api_base() -> String {
-    "https://api.telegram.org".to_string()
+    "https://api.telegram.org".to_owned()
 }
 
-fn default_telegram_file_upload_limit_mb() -> u64 {
+const fn default_telegram_file_upload_limit_mb() -> u64 {
     50
 }
 
@@ -259,7 +259,6 @@ pub struct MediaJob {
 #[derive(Clone)]
 pub struct CurlJob {
     pub task: Task,
-    pub args: Vec<String>,
     pub direct_options: HashMap<String, serde_json::Value>,
     pub cancel_token: Arc<AtomicBool>,
     /// Monotonic run id used to prevent stale libcurl worker threads from

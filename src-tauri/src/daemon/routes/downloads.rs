@@ -23,7 +23,7 @@ use crate::daemon::types::{CreateDownloadBody, Task};
 use crate::daemon::ytdlp::create_ytdlp_task;
 use crate::lock_or_err;
 
-use super::common::*;
+use super::common::{daemon_error, fallback_file_name};
 use super::extension::{extension_candidate_to_download_body, legacy_v1_body_to_download_body};
 use super::probes::probe_url_with_options;
 
@@ -69,7 +69,7 @@ pub async fn handle_download_events(
             full_sync_counter += 1;
             if full_sync_counter >= 240 {
                 full_sync_counter = 0;
-                let payload = serde_json::to_string(&tasks).unwrap_or_else(|_| "[]".to_string());
+                let payload = serde_json::to_string(&tasks).unwrap_or_else(|_| "[]".to_owned());
                 last_snapshots.clear();
                 for t in &tasks {
                     last_snapshots.insert(t.id.clone(), 0);
@@ -128,7 +128,7 @@ pub async fn handle_download_events(
                     "changed": changed_tasks,
                     "removed": removed_ids,
                 });
-                let data = serde_json::to_string(&delta).unwrap_or_else(|_| "{}".to_string());
+                let data = serde_json::to_string(&delta).unwrap_or_else(|_| "{}".to_owned());
                 yield Ok::<Event, Infallible>(Event::default().event("downloads-delta").data(data));
             }
         }
@@ -163,17 +163,17 @@ fn apply_download_rules(
 ) -> ApplyRulesResult {
     let hostname = reqwest::Url::parse(url)
         .ok()
-        .and_then(|u| u.host_str().map(str::to_string))
+        .and_then(|u| u.host_str().map(str::to_owned))
         .unwrap_or_default();
     let matched = state.rule_engine.evaluate(url, &hostname, body.size_bytes);
     let mut priority = None;
     let mut mirrors = Vec::new();
     let mut rate_limit_kbps = None;
     for (rule_id, action) in matched {
-        let action_label = format!("{:?}", action);
+        let action_label = format!("{action:?}");
         match action {
             RuleAction::Reject { reason } => {
-                return Err(format!("Download rejected by rule {}: {}", rule_id, reason));
+                return Err(format!("Download rejected by rule {rule_id}: {reason}"));
             }
             RuleAction::SetCategory { category } => body.category = Some(category),
             RuleAction::SetPriority { priority: p } => priority = Some(priority_from_name(&p)),
@@ -192,9 +192,9 @@ fn apply_download_rules(
             RuleAction::SetRateLimit { kbps } => rate_limit_kbps = Some(kbps),
             RuleAction::AddHeader { name, value } => {
                 let options = body.direct_options.get_or_insert_with(HashMap::new);
-                let header_line = format!("{}: {}", name, value);
+                let header_line = format!("{name}: {value}");
                 let headers = options
-                    .entry("headers".to_string())
+                    .entry("headers".to_owned())
                     .or_insert_with(|| serde_json::Value::String(String::new()));
                 // Headers are stored as newline-separated strings for direct_str()
                 // compatibility. An existing array from the request body is also
@@ -228,7 +228,7 @@ fn apply_download_rules(
             RuleAction::RequireChecksum { algorithm } => {
                 let options = body.direct_options.get_or_insert_with(HashMap::new);
                 options.insert(
-                    "checksumAlgorithm".to_string(),
+                    "checksumAlgorithm".to_owned(),
                     serde_json::Value::String(algorithm),
                 );
             }
@@ -369,7 +369,7 @@ pub async fn handle_create_download(
                 if let Some(arr) = opts.get("linkMirrors").and_then(|v| v.as_array()) {
                     for v in arr {
                         if let Some(url) = v.as_str() {
-                            let url = url.to_string();
+                            let url = url.to_owned();
                             if !all_mirrors.contains(&url) {
                                 all_mirrors.push(url);
                             }
@@ -406,7 +406,7 @@ pub async fn handle_create_download(
             Ok(Json(task))
         }
         Err(e) => {
-            log::error!("Create download failed: {}", e);
+            log::error!("Create download failed: {e}");
             Err(daemon_error(e))
         }
     }
@@ -417,7 +417,7 @@ pub async fn handle_pause_task(
     Path(id): Path<String>,
 ) -> Result<Json<Task>, (StatusCode, Json<serde_json::Value>)> {
     pause_task(&state, &id).await.map(Json).map_err(|e| {
-        log::error!("Pause task failed: {}", e);
+        log::error!("Pause task failed: {e}");
         daemon_error(e)
     })
 }
@@ -427,7 +427,7 @@ pub async fn handle_resume_task(
     Path(id): Path<String>,
 ) -> Result<Json<Task>, (StatusCode, Json<serde_json::Value>)> {
     resume_task(&state, &id).await.map(Json).map_err(|e| {
-        log::error!("Resume task failed: {}", e);
+        log::error!("Resume task failed: {e}");
         daemon_error(e)
     })
 }
@@ -440,13 +440,12 @@ pub async fn handle_delete_task(
     let delete_files = params
         .get("deleteFiles")
         .or_else(|| params.get("deleteDisk"))
-        .map(|v| matches!(v.as_str(), "1" | "true" | "yes" | "on"))
-        .unwrap_or(false);
+        .is_some_and(|v| matches!(v.as_str(), "1" | "true" | "yes" | "on"));
     delete_task(&state, &id, delete_files)
         .await
-        .map(|_| Json(serde_json::json!({"ok": true, "deleteFiles": delete_files})))
+        .map(|()| Json(serde_json::json!({"ok": true, "deleteFiles": delete_files})))
         .map_err(|e| {
-            log::error!("Delete task failed: {}", e);
+            log::error!("Delete task failed: {e}");
             daemon_error(e)
         })
 }
@@ -468,7 +467,7 @@ pub async fn handle_update_task(
         .await
         .map(Json)
         .map_err(|e| {
-            log::error!("Update task failed: {}", e);
+            log::error!("Update task failed: {e}");
             daemon_error(e)
         })
 }
@@ -478,7 +477,7 @@ pub async fn handle_redownload_task(
     Path(id): Path<String>,
 ) -> Result<Json<Task>, (StatusCode, Json<serde_json::Value>)> {
     redownload_task(&state, &id).await.map(Json).map_err(|e| {
-        log::error!("Redownload task failed: {}", e);
+        log::error!("Redownload task failed: {e}");
         daemon_error(e)
     })
 }
@@ -501,7 +500,7 @@ fn apply_fast_resolve(body: &mut CreateDownloadBody) -> bool {
         .as_deref()
         .map(str::trim)
         .filter(|v| !v.is_empty())
-        .map(str::to_string)
+        .map(str::to_owned)
     else {
         return false;
     };
@@ -570,7 +569,7 @@ fn file_name_from_url(url: &str) -> Option<String> {
 /// Minimal percent-decoding for path segments (handles %20, %2F, etc.).
 fn percent_decode(input: &str) -> String {
     if !input.contains('%') {
-        return input.to_string();
+        return input.to_owned();
     }
     let bytes = input.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -738,21 +737,21 @@ async fn background_resolve_and_start(state: SharedState, task_id: String, origi
 
                 let opts = &mut job.direct_options;
                 if let Some(ref etag) = metadata.etag {
-                    opts.entry("etag".to_string())
+                    opts.entry("etag".to_owned())
                         .or_insert_with(|| serde_json::Value::String(etag.clone()));
                 }
                 if let Some(ref last_modified) = metadata.last_modified {
-                    opts.entry("lastModified".to_string())
+                    opts.entry("lastModified".to_owned())
                         .or_insert_with(|| serde_json::Value::String(last_modified.clone()));
                 }
                 if let Some(ref digest) = metadata.digest_sha256 {
                     opts.insert(
-                        "digestSha256".to_string(),
+                        "digestSha256".to_owned(),
                         serde_json::Value::String(digest.clone()),
                     );
                 }
                 if let Some(ref ct) = metadata.content_type {
-                    opts.entry("contentType".to_string())
+                    opts.entry("contentType".to_owned())
                         .or_insert_with(|| serde_json::Value::String(ct.clone()));
                 }
                 if !metadata.link_mirrors.is_empty() {
@@ -761,7 +760,7 @@ async fn background_resolve_and_start(state: SharedState, task_id: String, origi
                         .iter()
                         .map(|m| serde_json::Value::String(m.clone()))
                         .collect();
-                    opts.insert("linkMirrors".to_string(), serde_json::Value::Array(mirrors));
+                    opts.insert("linkMirrors".to_owned(), serde_json::Value::Array(mirrors));
                 }
                 if job.task.size_bytes == 0 && metadata.size_bytes > 0 {
                     job.task.size_bytes = metadata.size_bytes;
@@ -781,22 +780,22 @@ async fn background_resolve_and_start(state: SharedState, task_id: String, origi
                 job.task.resumable = metadata.resumable;
                 if let Some(ref strategy) = metadata.strategy {
                     opts.insert(
-                        "rieStrategy".to_string(),
+                        "rieStrategy".to_owned(),
                         serde_json::Value::String(strategy.clone()),
                     );
                 }
                 if let Some(connections) = metadata.connections {
                     opts.insert(
-                        "rieConnections".to_string(),
+                        "rieConnections".to_owned(),
                         serde_json::Value::Number(connections.into()),
                     );
                 }
                 opts.insert(
-                    "preflightResolved".to_string(),
+                    "preflightResolved".to_owned(),
                     serde_json::Value::Bool(true),
                 );
                 opts.insert(
-                    "preflightSupportsRange".to_string(),
+                    "preflightSupportsRange".to_owned(),
                     serde_json::Value::Bool(metadata.resumable),
                 );
                 updates_applied = true;
@@ -824,7 +823,7 @@ async fn background_resolve_and_start(state: SharedState, task_id: String, origi
         state.mark_dirty();
     }
 
-    start_curl_task_by_id(&state, &task_id).await;
+    start_curl_task_by_id(&state, &task_id);
 }
 
 /// Non-blocking probe that discovers the total file size for a download that
@@ -853,9 +852,9 @@ async fn background_size_probe(state: SharedState, task_id: String, url: String)
     };
     let probe_result = probe_url_with_options(&state, &url, Some(&probe_body)).await;
     let size = match probe_result {
-        Ok(json) => json.get("sizeBytes").and_then(|v| v.as_u64()).unwrap_or(0),
+        Ok(json) => json.get("sizeBytes").and_then(serde_json::Value::as_u64).unwrap_or(0),
         Err(e) => {
-            log::debug!("background_size_probe for {}: {:?}", task_id, e);
+            log::debug!("background_size_probe for {task_id}: {e:?}");
             return;
         }
     };
@@ -885,22 +884,20 @@ async fn background_size_probe(state: SharedState, task_id: String, url: String)
         state.priority_queue.update_size(&task_id, size);
         state.mark_dirty();
         log::info!(
-            "background_size_probe: updated task {} size to {} bytes",
-            task_id,
-            size
+            "background_size_probe: updated task {task_id} size to {size} bytes"
         );
     }
 }
 
 /// Start a previously-created curl task by its ID. Called by the background
 /// resolver once metadata is ready, or as a fallback if the probe fails.
-async fn start_curl_task_by_id(state: &SharedState, task_id: &str) {
+fn start_curl_task_by_id(state: &SharedState, task_id: &str) {
     // Transition the task status to "downloading" in the snapshot.
     if let Ok(mut tasks) = state.task_snapshot.lock() {
         if let Some(task) = tasks.get_mut(task_id) {
             if task.status == "queued" {
-                task.status = "downloading".to_string();
-                task.engine_status = Some("starting".to_string());
+                task.status = "downloading".to_owned();
+                task.engine_status = Some("starting".to_owned());
             }
         }
     }
@@ -923,7 +920,7 @@ pub async fn handle_captures(
             });
             match extension_candidate_to_download_body(&wrapper, true) {
                 Ok(download_body) => download_bodies.push(download_body),
-                Err(error) => log::warn!("Rejected browser-extension candidate: {}", error),
+                Err(error) => log::warn!("Rejected browser-extension candidate: {error}"),
             }
         }
     }
@@ -931,7 +928,7 @@ pub async fn handle_captures(
         let wrapper = serde_json::json!({"candidate": single_candidate});
         match extension_candidate_to_download_body(&wrapper, true) {
             Ok(download_body) => download_bodies.push(download_body),
-            Err(error) => log::warn!("Rejected browser-extension candidate: {}", error),
+            Err(error) => log::warn!("Rejected browser-extension candidate: {error}"),
         }
     }
     if let Some(urls) = body.get("urls").and_then(|v| v.as_array()) {
@@ -953,8 +950,8 @@ pub async fn handle_captures(
     for download_body in download_bodies {
         if let Some(ref url) = download_body.url {
             if let Err(e) = crate::daemon::utils::is_safe_target_url(url) {
-                log::warn!("Blocked SSRF in captures for {}: {}", url, e);
-                errors.push(format!("SSRF blocked: {}", e));
+                log::warn!("Blocked SSRF in captures for {url}: {e}");
+                errors.push(format!("SSRF blocked: {e}"));
                 continue;
             }
         }
@@ -985,7 +982,7 @@ pub async fn handle_captures(
         "accepted": !task_ids.is_empty(),
         "taskId": first_id,
         "taskIds": task_ids,
-        "message": if errors.is_empty() { "Captured".to_string() } else { errors.join("; ") }
+        "message": if errors.is_empty() { "Captured".to_owned() } else { errors.join("; ") }
     }))
 }
 
@@ -1025,7 +1022,7 @@ pub async fn handle_stats(State(state): State<SharedState>) -> Json<serde_json::
     }))
 }
 
-pub(crate) fn register_routes(router: Router<SharedState>) -> Router<SharedState> {
+pub fn register_routes(router: Router<SharedState>) -> Router<SharedState> {
     router
         .route("/api/health", get(handle_health))
         .route(

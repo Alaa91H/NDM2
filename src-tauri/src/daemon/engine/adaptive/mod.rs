@@ -6,7 +6,6 @@
 )]
 pub mod buffer_manager;
 pub mod convergence;
-pub mod disk_writer;
 pub mod profile_store;
 pub mod protocol_adapter;
 pub mod resource_monitor;
@@ -104,7 +103,7 @@ struct ConnectionSlot {
 }
 
 impl ConnectionSlot {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             bytes: AtomicU64::new(0),
             rtt_us: AtomicU64::new(0),
@@ -365,7 +364,7 @@ impl AdaptiveEngine {
             total_size,
             current_connections: connections,
             last_decision: AdaptationDecision::default(),
-            last_tick: Instant::now() - Duration::from_secs(10),
+            last_tick: Instant::now().checked_sub(Duration::from_secs(10)).unwrap_or(Instant::now()),
             tick_interval: Duration::from_secs(2),
         }
     }
@@ -610,8 +609,8 @@ impl AdaptiveEngine {
 
         if let Some(profile) = host_profile {
             if profile.per_connection_ceiling > 0 && self.protocol.prefer_multiplexing() {
-                let total_budget = profile.per_connection_ceiling * target as u64;
-                decision.per_connection_limit = Some(total_budget / target.max(1) as u64);
+                let total_budget = profile.per_connection_ceiling * u64::from(target);
+                decision.per_connection_limit = Some(total_budget / u64::from(target.max(1)));
             }
         }
 
@@ -634,7 +633,7 @@ impl AdaptiveEngine {
         decision
     }
 
-    pub fn current_connections(&self) -> u32 {
+    pub const fn current_connections(&self) -> u32 {
         self.current_connections
     }
 
@@ -642,11 +641,11 @@ impl AdaptiveEngine {
         &self.host
     }
 
-    pub fn last_decision(&self) -> &AdaptationDecision {
+    pub const fn last_decision(&self) -> &AdaptationDecision {
         &self.last_decision
     }
 
-    pub fn segment_controller(&self) -> &SegmentController {
+    pub const fn segment_controller(&self) -> &SegmentController {
         &self.segment_ctrl
     }
 
@@ -654,7 +653,7 @@ impl AdaptiveEngine {
         &mut self.segment_ctrl
     }
 
-    pub fn chunk_manager(&self) -> &ChunkManager {
+    pub const fn chunk_manager(&self) -> &ChunkManager {
         &self.chunk_manager
     }
 
@@ -662,7 +661,7 @@ impl AdaptiveEngine {
         &mut self.chunk_manager
     }
 
-    pub fn buffer_manager(&self) -> &BufferManager {
+    pub const fn buffer_manager(&self) -> &BufferManager {
         &self.buffer_manager
     }
 

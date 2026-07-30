@@ -39,7 +39,7 @@ pub fn check_latest_version(tool: &dyn ExternalTool, http: &reqwest::Client) -> 
                 current_version: None,
                 latest_version: None,
                 download_url: None,
-                release_notes: Some("FFmpeg must be installed via your system package manager or from https://ffmpeg.org/download.html".to_string()),
+                release_notes: Some("FFmpeg must be installed via your system package manager or from https://ffmpeg.org/download.html".to_owned()),
                 published_at: None,
             },
         },
@@ -48,7 +48,7 @@ pub fn check_latest_version(tool: &dyn ExternalTool, http: &reqwest::Client) -> 
 
 fn check_ffmpeg_latest(http: &reqwest::Client, os: &str) -> Result<UpdateInfo, String> {
     let handle = tokio::runtime::Handle::try_current()
-        .map_err(|_| "No tokio runtime available for async operation".to_string())?;
+        .map_err(|_| "No tokio runtime available for async operation".to_owned())?;
     let response = tokio::task::block_in_place(|| {
         handle.block_on(async {
             http.get("https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest")
@@ -61,23 +61,22 @@ fn check_ffmpeg_latest(http: &reqwest::Client, os: &str) -> Result<UpdateInfo, S
     match response {
         Ok(resp) => {
             let handle = tokio::runtime::Handle::try_current()
-                .map_err(|_| "No tokio runtime available for async operation".to_string())?;
+                .map_err(|_| "No tokio runtime available for async operation".to_owned())?;
             let body = tokio::task::block_in_place(|| handle.block_on(async { resp.text().await }));
             match body {
                 Ok(body) => {
                     let json: serde_json::Value = serde_json::from_str(&body)
-                        .map_err(|e| format!("Failed to parse GitHub response: {}", e))?;
+                        .map_err(|e| format!("Failed to parse GitHub response: {e}"))?;
 
                     let tag_name = json
                         .get("tag_name")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("unknown")
-                        .to_string();
+                        .unwrap_or("unknown").to_owned();
 
                     let published_at = json
                         .get("published_at")
                         .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
+                        .map(std::borrow::ToOwned::to_owned);
 
                     let mut download_url = None;
                     if let Some(assets) = json.get("assets").and_then(|v| v.as_array()) {
@@ -108,7 +107,7 @@ fn check_ffmpeg_latest(http: &reqwest::Client, os: &str) -> Result<UpdateInfo, S
                             };
 
                             if matches_platform && !url.is_empty() {
-                                download_url = Some(url.to_string());
+                                download_url = Some(url.to_owned());
                                 break;
                             }
                         }
@@ -119,20 +118,20 @@ fn check_ffmpeg_latest(http: &reqwest::Client, os: &str) -> Result<UpdateInfo, S
                         current_version: None,
                         latest_version: Some(tag_name),
                         download_url,
-                        release_notes: Some("FFmpeg build from BtbN/FFmpeg-Builds".to_string()),
+                        release_notes: Some("FFmpeg build from BtbN/FFmpeg-Builds".to_owned()),
                         published_at,
                     })
                 }
-                Err(e) => Err(format!("Failed to read response: {}", e)),
+                Err(e) => Err(format!("Failed to read response: {e}")),
             }
         }
-        Err(e) => Err(format!("GitHub API request failed: {}", e)),
+        Err(e) => Err(format!("GitHub API request failed: {e}")),
     }
 }
 
 fn check_ytdlp_latest(http: &reqwest::Client, os: &str) -> Result<UpdateInfo, String> {
     let handle = tokio::runtime::Handle::try_current()
-        .map_err(|_| "No tokio runtime available for async operation".to_string())?;
+        .map_err(|_| "No tokio runtime available for async operation".to_owned())?;
     let response = tokio::task::block_in_place(|| {
         handle.block_on(async {
             http.get("https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest")
@@ -145,28 +144,27 @@ fn check_ytdlp_latest(http: &reqwest::Client, os: &str) -> Result<UpdateInfo, St
     match response {
         Ok(resp) => {
             let handle = tokio::runtime::Handle::try_current()
-                .map_err(|_| "No tokio runtime available for async operation".to_string())?;
+                .map_err(|_| "No tokio runtime available for async operation".to_owned())?;
             let body = tokio::task::block_in_place(|| handle.block_on(async { resp.text().await }));
             match body {
                 Ok(body) => {
                     let json: serde_json::Value = serde_json::from_str(&body)
-                        .map_err(|e| format!("Failed to parse GitHub response: {}", e))?;
+                        .map_err(|e| format!("Failed to parse GitHub response: {e}"))?;
 
                     let tag_name = json
                         .get("tag_name")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("unknown")
-                        .to_string();
+                        .unwrap_or("unknown").to_owned();
 
                     let published_at = json
                         .get("published_at")
                         .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
+                        .map(std::borrow::ToOwned::to_owned);
 
                     let body_text = json
                         .get("body")
                         .and_then(|v| v.as_str())
-                        .map(|s| s.to_string());
+                        .map(std::borrow::ToOwned::to_owned);
 
                     let mut download_url = None;
                     if let Some(assets) = json.get("assets").and_then(|v| v.as_array()) {
@@ -185,7 +183,7 @@ fn check_ytdlp_latest(http: &reqwest::Client, os: &str) -> Result<UpdateInfo, St
                             };
 
                             if matches_platform && !url.is_empty() {
-                                download_url = Some(url.to_string());
+                                download_url = Some(url.to_owned());
                                 break;
                             }
                         }
@@ -200,10 +198,10 @@ fn check_ytdlp_latest(http: &reqwest::Client, os: &str) -> Result<UpdateInfo, St
                         published_at,
                     })
                 }
-                Err(e) => Err(format!("Failed to read response: {}", e)),
+                Err(e) => Err(format!("Failed to read response: {e}")),
             }
         }
-        Err(e) => Err(format!("GitHub API request failed: {}", e)),
+        Err(e) => Err(format!("GitHub API request failed: {e}")),
     }
 }
 
@@ -221,23 +219,25 @@ pub fn download_and_install(
 
     if !install_dir.exists() {
         std::fs::create_dir_all(install_dir)
-            .map_err(|e| format!("Failed to create install directory: {}", e))?;
+            .map_err(|e| format!("Failed to create install directory: {e}"))?;
     }
 
+    let rt_handle = tokio::runtime::Handle::try_current()
+        .map_err(|_| "No tokio runtime available for async operation".to_owned())?;
     let response = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async { http.get(download_url).send().await })
+        rt_handle.block_on(async { http.get(download_url).send().await })
     })
-    .map_err(|e| format!("Download request failed: {}", e))?;
+    .map_err(|e| format!("Download request failed: {e}"))?;
 
     let bytes = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async { response.bytes().await })
+        rt_handle.block_on(async { response.bytes().await })
     })
-    .map_err(|e| format!("Failed to read download: {}", e))?;
+    .map_err(|e| format!("Failed to read download: {e}"))?;
 
     let filename = download_url.rsplit('/').next().unwrap_or("tool");
     let dest_path = install_dir.join(filename);
 
-    std::fs::write(&dest_path, &bytes).map_err(|e| format!("Failed to write file: {}", e))?;
+    std::fs::write(&dest_path, &bytes).map_err(|e| format!("Failed to write file: {e}"))?;
 
     #[cfg(unix)]
     {

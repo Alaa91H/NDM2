@@ -1,23 +1,23 @@
-pub(crate) mod common;
-pub(crate) mod diagnostics;
-pub(crate) mod dns_routes;
-pub(crate) mod downloads;
-pub(crate) mod engine;
-pub(crate) mod extension;
-pub(crate) mod external_tools;
-pub(crate) mod probes;
-pub(crate) mod telegram_routes;
+pub mod common;
+pub mod diagnostics;
+pub mod dns_routes;
+pub mod downloads;
+pub mod engine;
+pub mod extension;
+pub mod external_tools;
+pub mod probes;
+pub mod telegram_routes;
 
 use crate::daemon::state::SharedState;
 use axum::Router;
 
-pub(crate) use self::downloads::{handle_pause_task, handle_resume_task};
+pub use self::downloads::{handle_pause_task, handle_resume_task};
 
-pub(crate) use self::engine::run_scheduler_tick;
+pub use self::engine::run_scheduler_tick;
 
-pub(crate) use self::diagnostics::record_daemon_start;
+pub use self::diagnostics::record_daemon_start;
 
-pub(crate) fn register_routes(router: Router<SharedState>) -> Router<SharedState> {
+pub fn register_routes(router: Router<SharedState>) -> Router<SharedState> {
     let router = downloads::register_routes(router);
     let router = engine::register_routes(router);
     let router = extension::register_routes(router);

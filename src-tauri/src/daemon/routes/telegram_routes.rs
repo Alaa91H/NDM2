@@ -7,7 +7,7 @@ use crate::daemon::telegram::{
     handle_telegram_update_config,
 };
 
-pub(crate) fn register_routes(router: Router<SharedState>) -> Router<SharedState> {
+pub fn register_routes(router: Router<SharedState>) -> Router<SharedState> {
     router
         .route(
             "/api/telegram/config",

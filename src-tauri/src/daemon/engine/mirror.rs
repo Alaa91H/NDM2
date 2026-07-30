@@ -25,7 +25,7 @@ pub struct MirrorManager {
 impl MirrorManager {
     pub fn new(primary_url: &str) -> Self {
         let mirrors = vec![MirrorSource {
-            url: primary_url.to_string(),
+            url: primary_url.to_owned(),
             priority: 0,
             region: None,
             bandwidth_estimate: None,
@@ -37,7 +37,7 @@ impl MirrorManager {
             active_mirror: Arc::new(std::sync::Mutex::new(Some(0))),
             failover_enabled: Arc::new(AtomicBool::new(true)),
             last_failover: Arc::new(std::sync::Mutex::new(
-                Instant::now() - Duration::from_secs(60),
+                Instant::now().checked_sub(Duration::from_secs(60)).unwrap_or(Instant::now()),
             )),
             failover_cooldown: Duration::from_secs(30),
         }
@@ -52,15 +52,13 @@ impl MirrorManager {
 
     pub fn set_mirrors(&self, mirrors: Vec<MirrorSource>) {
         if let Ok(mut m) = self.mirrors.lock() {
+            let is_empty = mirrors.is_empty();
             *m = mirrors;
             m.sort_by_key(|m| m.priority);
-        }
-        if let Ok(mut active) = self.active_mirror.lock() {
-            *active = if self.mirrors.lock().map(|m| !m.is_empty()).unwrap_or(false) {
-                Some(0)
-            } else {
-                None
-            };
+            drop(m);
+            if let Ok(mut active) = self.active_mirror.lock() {
+                *active = if is_empty { None } else { Some(0) };
+            }
         }
     }
 
@@ -89,7 +87,12 @@ impl MirrorManager {
             return None;
         }
 
+        // Lock both mirrors and active_mirror together to prevent TOCTOU race.
         let mut mirrors = match self.mirrors.lock() {
+            Ok(g) => g,
+            Err(_) => return None,
+        };
+        let mut active = match self.active_mirror.lock() {
             Ok(g) => g,
             Err(_) => return None,
         };
@@ -97,20 +100,21 @@ impl MirrorManager {
             m.healthy = false;
         }
         if let Some(idx) = mirrors.iter().position(|m| m.url == url) {
-            let next = mirrors
+            if let Some(new_idx) = mirrors
                 .iter()
                 .enumerate()
                 .filter(|(i, m)| *i != idx && m.healthy)
                 .min_by_key(|(_, m)| m.priority)
-                .map(|(i, _)| i);
-
-            if let Some(new_idx) = next {
-                drop(mirrors);
-                if let Ok(mut active) = self.active_mirror.lock() {
-                    *active = Some(new_idx);
-                }
+                .map(|(i, _)| i)
+            {
+                *active = Some(new_idx);
                 *last = Instant::now();
-                return self.active_url().into();
+                return mirrors
+                    .get(new_idx)
+                    .map(|m| m.url.clone())
+                    .or_else(|| mirrors.first().map(|m| m.url.clone()))
+                    .unwrap_or_default()
+                    .into();
             }
         }
         None

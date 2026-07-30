@@ -68,8 +68,8 @@ impl SelfHealer {
     pub fn on_failure(&mut self, host: &str, error: &str, ctx: &DecisionContext) -> PolicyDecision {
         self.failure_history.push_back(FailureRecord {
             timestamp: Instant::now(),
-            error: error.to_string(),
-            host: host.to_string(),
+            error: error.to_owned(),
+            host: host.to_owned(),
             recovery_applied: String::new(),
             succeeded: false,
         });
@@ -77,7 +77,7 @@ impl SelfHealer {
             self.failure_history.pop_front();
         }
 
-        *self.recovery_counts.entry(host.to_string()).or_insert(0) += 1;
+        *self.recovery_counts.entry(host.to_owned()).or_insert(0) += 1;
 
         if !self.can_recover() {
             return PolicyDecision::Recovery {
@@ -87,7 +87,7 @@ impl SelfHealer {
         }
 
         let decision = {
-            let pe = self.policy_engine.lock().unwrap_or_else(|e| e.into_inner());
+            let pe = self.policy_engine.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             pe.decide_recovery(ctx)
         };
 
@@ -95,7 +95,7 @@ impl SelfHealer {
             self.total_recoveries += 1;
             self.last_recovery = Some(Instant::now());
             if let Some(last) = self.failure_history.back_mut() {
-                last.recovery_applied = format!("{:?}", action);
+                last.recovery_applied = format!("{action:?}");
             }
         }
 
@@ -116,7 +116,7 @@ impl SelfHealer {
     }
 
     fn can_recover(&self) -> bool {
-        let window_start = Instant::now() - self.recovery_window;
+        let window_start = Instant::now().checked_sub(self.recovery_window).unwrap_or(Instant::now());
         // Count only records where recovery was actually applied, not all
         // failures. Raw failures (e.g., DNS timeouts from different hosts)
         // should not consume the recovery budget.
@@ -140,15 +140,15 @@ impl SelfHealer {
             HealthStatus::Healthy
         } else if recent_failures <= 3 {
             HealthStatus::Degraded {
-                reason: format!("{} failures in last 60s", recent_failures),
+                reason: format!("{recent_failures} failures in last 60s"),
             }
         } else if recent_failures <= 10 {
             HealthStatus::Critical {
-                reason: format!("{} failures in last 60s", recent_failures),
+                reason: format!("{recent_failures} failures in last 60s"),
             }
         } else {
             HealthStatus::Failed {
-                reason: format!("{} failures in last 60s", recent_failures),
+                reason: format!("{recent_failures} failures in last 60s"),
             }
         }
     }
@@ -159,7 +159,7 @@ impl SelfHealer {
             .recovery_counts
             .iter()
             .filter(|(_, &count)| count >= 3)
-            .map(|(host, count)| format!("{}: {} consecutive failures", host, count))
+            .map(|(host, count)| format!("{host}: {count} consecutive failures"))
             .collect();
 
         // Count consecutive failures from the end of history (most recent).
@@ -187,7 +187,7 @@ impl SelfHealer {
     }
 
     #[allow(dead_code)]
-    pub fn total_recoveries(&self) -> u32 {
+    pub const fn total_recoveries(&self) -> u32 {
         self.total_recoveries
     }
 

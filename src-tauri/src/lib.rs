@@ -20,25 +20,35 @@ const DAEMON_PORT_SCAN_LIMIT: u16 = 30;
 
 fn validate_file_path(path: &str) -> Result<PathBuf, String> {
     if path.contains('\0') {
-        return Err("Invalid path".to_string());
+        return Err("Invalid path".to_owned());
     }
     let target = PathBuf::from(path);
     if target
         .components()
         .any(|c| c == std::path::Component::ParentDir)
     {
-        return Err("Path traversal detected".to_string());
+        return Err("Path traversal detected".to_owned());
     }
     // Reject UNC paths (\\server\share\...) to prevent network share access.
     if let Some(first) = target.to_str().and_then(|s| s.chars().next()) {
         if first == '\\' {
-            return Err("UNC paths are not allowed".to_string());
+            return Err("UNC paths are not allowed".to_owned());
         }
     }
-    // Always canonicalize to resolve symlinks and prevent traversal.
-    target
-        .canonicalize()
-        .map_err(|_| "Path does not exist or is inaccessible".to_string())
+    // Accept targets whose parent exists even if the file doesn't (new downloads).
+    if target.exists() {
+        target
+            .canonicalize()
+            .map_err(|_| "Path does not exist or is inaccessible".to_owned())
+    } else if let Some(parent) = target.parent().filter(|p| !p.as_os_str().is_empty()) {
+        if parent.exists() {
+            Ok(target)
+        } else {
+            Err("Path does not exist or is inaccessible".to_owned())
+        }
+    } else {
+        Err("Path does not exist or is inaccessible".to_owned())
+    }
 }
 
 mod daemon;
@@ -56,16 +66,14 @@ struct BrowserExtensionPaths {
 
 #[tauri::command]
 fn get_version() -> String {
-    env!("CARGO_PKG_VERSION").to_string()
+    env!("CARGO_PKG_VERSION").to_owned()
 }
 
 #[tauri::command]
 fn get_daemon_url(state: tauri::State<DaemonUrl>) -> String {
     state
         .0
-        .lock()
-        .map(|g| g.clone())
-        .unwrap_or_else(|_| format!("http://127.0.0.1:{}", DEFAULT_DAEMON_PORT))
+        .lock().map_or_else(|_| format!("http://127.0.0.1:{DEFAULT_DAEMON_PORT}"), |g| g.clone())
 }
 
 /// Return the daemon's API bearer token so the trusted desktop webview can
@@ -98,24 +106,26 @@ fn find_available_daemon_port(preferred_port: u16) -> u16 {
         };
         if is_loopback_port_available(port) {
             log::warn!(
-                "Preferred NOVA daemon port {} is unavailable; using {} instead",
-                preferred_port,
-                port
+                "Preferred NOVA daemon port {preferred_port} is unavailable; using {port} instead"
             );
             return port;
         }
     }
 
     log::warn!(
-        "No free daemon port found near {}; continuing scan across full ephemeral range",
-        preferred_port
+        "No free daemon port found near {preferred_port}; continuing scan across full ephemeral range"
     );
     // Scan the full ephemeral range (49152-65535) as last resort.
     let mut port = 49152u16;
+    let mut failures = 0u16;
     while port > 0 {
-        if TcpListener::bind((std::net::Ipv4Addr::new(127, 0, 0, 1), port)).is_ok() {
-            log::info!("Found free daemon port at {}", port);
+        if TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).is_ok() {
+            log::info!("Found free daemon port at {port}");
             return port;
+        }
+        failures += 1;
+        if failures >= DAEMON_PORT_SCAN_LIMIT {
+            break;
         }
         port = port.saturating_add(1);
     }
@@ -124,13 +134,13 @@ fn find_available_daemon_port(preferred_port: u16) -> u16 {
 }
 
 fn daemon_url_for_port(port: u16) -> String {
-    format!("http://127.0.0.1:{}", port)
+    format!("http://127.0.0.1:{port}")
 }
 
 fn set_daemon_url(state: &tauri::State<DaemonUrl>, port: u16) {
     match state.0.lock() {
         Ok(mut url) => *url = daemon_url_for_port(port),
-        Err(error) => log::error!("Could not update daemon URL state: {}", error),
+        Err(error) => log::error!("Could not update daemon URL state: {error}"),
     }
 }
 
@@ -139,7 +149,7 @@ fn get_downloads_dir(app: tauri::AppHandle) -> Result<String, String> {
     app.path()
         .download_dir()
         .map(|p| p.display().to_string())
-        .map_err(|e| format!("Could not resolve downloads directory: {}", e))
+        .map_err(|e| format!("Could not resolve downloads directory: {e}"))
 }
 
 #[tauri::command]
@@ -154,8 +164,8 @@ fn get_browser_extension_paths(app: tauri::AppHandle) -> BrowserExtensionPaths {
         .resource_dir()
         .unwrap_or_else(|_| {
             let pf =
-                std::env::var("PROGRAMFILES").unwrap_or_else(|_| r"C:\Program Files".to_string());
-            PathBuf::from(format!(r"{}\Nova Download Manager\resources", pf))
+                std::env::var("PROGRAMFILES").unwrap_or_else(|_| r"C:\Program Files".to_owned());
+            PathBuf::from(format!(r"{pf}\Nova Download Manager\resources"))
         })
         .join("browser-extension");
 
@@ -169,7 +179,7 @@ fn get_browser_extension_paths(app: tauri::AppHandle) -> BrowserExtensionPaths {
 fn open_extension_folder(path: String) -> Result<(), String> {
     let target = validate_file_path(&path)?;
     if !target.exists() {
-        return Err("Extension folder was not found.".to_string());
+        return Err("Extension folder was not found.".to_owned());
     }
     open_with_explorer(&target)
 }
@@ -212,7 +222,7 @@ fn reveal_file(path: String) -> Result<(), String> {
     } else if let Some(parent) = target.parent().filter(|parent| parent.exists()) {
         open_with_explorer(parent)
     } else {
-        Err("Downloaded file location was not found.".to_string())
+        Err("Downloaded file location was not found.".to_owned())
     }
 }
 
@@ -223,11 +233,11 @@ fn delete_downloaded_file(path: String) -> Result<bool, String> {
         return Ok(false);
     }
     if !target.is_file() {
-        return Err("Refusing to delete a folder from the single-file delete action.".to_string());
+        return Err("Refusing to delete a folder from the single-file delete action.".to_owned());
     }
 
     std::fs::remove_file(&target)
-        .map(|_| true)
+        .map(|()| true)
         .map_err(|error| format!("Could not delete downloaded file: {error}"))
 }
 
@@ -235,10 +245,10 @@ fn delete_downloaded_file(path: String) -> Result<bool, String> {
 fn scan_downloaded_file(path: String) -> Result<(), String> {
     let target = validate_file_path(&path)?;
     if !target.exists() {
-        return Err("Downloaded file was not found.".to_string());
+        return Err("Downloaded file was not found.".to_owned());
     }
     if !target.is_file() {
-        return Err("The selected download path is not a file.".to_string());
+        return Err("The selected download path is not a file.".to_owned());
     }
 
     let mut scanner = Command::new("powershell");
@@ -267,7 +277,7 @@ fn open_browser_extensions(browser: String) -> Result<(), String> {
         "chrome" => ("chrome.exe", "chrome://extensions"),
         "edge" => ("msedge.exe", "edge://extensions"),
         "firefox" => ("firefox.exe", "about:debugging#/runtime/this-firefox"),
-        _ => return Err("Unsupported browser.".to_string()),
+        _ => return Err("Unsupported browser.".to_owned()),
     };
 
     let mut launcher = Command::new("cmd");
@@ -285,7 +295,7 @@ fn open_browser_extensions(browser: String) -> Result<(), String> {
 #[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
     if !url.starts_with("https://") && !url.starts_with("http://") {
-        return Err("Only web links can be opened.".to_string());
+        return Err("Only web links can be opened.".to_owned());
     }
     // Parse the URL properly to handle IPv6 brackets, decimal IPs, etc.
     let parsed = reqwest::Url::parse(&url).map_err(|e| format!("Invalid URL: {e}"))?;
@@ -322,17 +332,17 @@ fn open_external_url(url: String) -> Result<(), String> {
                     }
                 }
             {
-                return Err("Internal URLs cannot be opened in the browser.".to_string());
+                return Err("Internal URLs cannot be opened in the browser.".to_owned());
             }
         }
     }
     if is_internal {
-        return Err("Internal URLs cannot be opened in the browser.".to_string());
+        return Err("Internal URLs cannot be opened in the browser.".to_owned());
     }
-    let mut launcher = Command::new("explorer.exe");
+    let mut launcher = Command::new("rundll32.exe");
     hide_command_window(&mut launcher);
     launcher
-        .arg(&url)
+        .args(["url.dll,FileProtocolHandler", &url])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -344,17 +354,17 @@ fn open_external_url(url: String) -> Result<(), String> {
 #[tauri::command]
 fn check_tcp_endpoint(host: String, port: u16) -> Result<bool, String> {
     if host.trim().is_empty() {
-        return Err("Host is required.".to_string());
+        return Err("Host is required.".to_owned());
     }
     let address = format!("{}:{}", host.trim(), port);
     let (tx, rx) = std::sync::mpsc::channel();
-    let dns_host = address.clone();
+    let dns_host = address;
     std::thread::spawn(move || {
         let result = (|| -> Result<(std::net::SocketAddr, std::net::IpAddr), String> {
             let mut resolved = dns_host.to_socket_addrs().map_err(|e| e.to_string())?;
             let socket_addr = resolved
                 .next()
-                .ok_or_else(|| "No addresses resolved".to_string())?;
+                .ok_or_else(|| "No addresses resolved".to_owned())?;
             let ip = socket_addr.ip();
             Ok((socket_addr, ip))
         })();
@@ -363,10 +373,10 @@ fn check_tcp_endpoint(host: String, port: u16) -> Result<bool, String> {
     let (socket_addr, ip) = match rx.recv_timeout(Duration::from_secs(5)) {
         Ok(Ok((addr, ip))) => (addr, ip),
         Ok(Err(e)) => return Err(format!("Could not resolve endpoint: {e}")),
-        Err(_) => return Err("Could not resolve endpoint: timeout".to_string()),
+        Err(_) => return Err("Could not resolve endpoint: timeout".to_owned()),
     };
     if crate::daemon::utils::is_internal_ip(ip) {
-        return Err("Connections to internal/local addresses are not allowed".to_string());
+        return Err("Connections to internal/local addresses are not allowed".to_owned());
     }
     Ok(TcpStream::connect_timeout(&socket_addr, Duration::from_millis(1200)).is_ok())
 }
@@ -376,7 +386,7 @@ fn validate_source_address(address: String) -> Result<bool, String> {
     let parsed: IpAddr = address
         .trim()
         .parse()
-        .map_err(|_| "Enter a valid IP address for the VPN adapter.".to_string())?;
+        .map_err(|_| "Enter a valid IP address for the VPN adapter.".to_owned())?;
 
     #[cfg(windows)]
     {
@@ -404,13 +414,13 @@ fn validate_source_address(address: String) -> Result<bool, String> {
 fn detect_vpn_interface() -> Result<bool, String> {
     #[cfg(windows)]
     {
-        let script = r#"
+        let script = r"
 $pattern = 'VPN|WireGuard|Wintun|TAP|TUN|OpenVPN|Nord|Proton|Mullvad|Surfshark|Cisco|AnyConnect|Fortinet|GlobalProtect|ZeroTier|Tailscale|WAN Miniport|IKEv2|L2TP|PPTP'
 $adapter = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object {
   $_.Status -eq 'Up' -and ($_.Name -match $pattern -or $_.InterfaceDescription -match $pattern)
 } | Select-Object -First 1
 if ($adapter) { 'yes' } else { 'no' }
-"#;
+";
         let mut command = Command::new("powershell");
         hide_command_window(&mut command);
         let output = command
@@ -451,15 +461,15 @@ fn save_config(app: tauri::AppHandle, settings: String) -> Result<(), String> {
         ));
     }
     serde_json::from_str::<serde_json::Value>(&settings)
-        .map_err(|e| format!("Invalid JSON config: {}", e))?;
+        .map_err(|e| format!("Invalid JSON config: {e}"))?;
     let data_dir = app
         .path()
         .app_data_dir()
-        .map_err(|e| format!("Failed to resolve app data dir: {}", e))?;
+        .map_err(|e| format!("Failed to resolve app data dir: {e}"))?;
     std::fs::create_dir_all(&data_dir)
-        .map_err(|e| format!("Failed to create app data dir: {}", e))?;
+        .map_err(|e| format!("Failed to create app data dir: {e}"))?;
     let config_path = data_dir.join("config.json");
-    std::fs::write(&config_path, &settings).map_err(|e| format!("Failed to save config: {}", e))
+    std::fs::write(&config_path, &settings).map_err(|e| format!("Failed to save config: {e}"))
 }
 
 #[tauri::command]
@@ -493,21 +503,39 @@ fn restart_daemon(
     Ok(())
 }
 
-/// Kill any orphaned process listening on any daemon port (skips our own PID).
-/// Non-blocking: spawns a background thread.
+/// Kill any orphaned daemon process by reading the stored PID from the port file,
+/// or fall back to scanning the port range. Non-blocking: spawns a background thread.
 fn kill_old_daemon() {
     let our_pid = std::process::id();
     let preferred = requested_daemon_port();
     std::thread::spawn(move || {
         if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            kill_old_daemon_range(our_pid, preferred)
+            // Try to read the old PID from the port file first.
+            let data_dir = std::env::var("APPDATA")
+                .or_else(|_| std::env::var("USERPROFILE"))
+                .unwrap_or_else(|_| ".".to_owned());
+            let data_dir = std::path::Path::new(&data_dir).join("nova-download-manager");
+            let port_file = data_dir.join("nova-daemon.port");
+            if let Ok(content) = std::fs::read_to_string(&port_file) {
+                let lines: Vec<&str> = content.lines().collect();
+                if lines.len() >= 2 {
+                    if let Ok(old_pid) = lines[1].trim().parse::<u32>() {
+                        if old_pid != 0 && old_pid != our_pid {
+                            crate::daemon::utils::kill_process(old_pid);
+                            return;
+                        }
+                    }
+                }
+            }
+            // Fallback: scan the port range
+            kill_old_daemon_range(our_pid, preferred);
         })) {
             let msg = if let Some(s) = e.downcast_ref::<&str>() {
-                s.to_string()
+                (*s).to_owned()
             } else if let Some(s) = e.downcast_ref::<String>() {
                 s.clone()
             } else {
-                "unknown".to_string()
+                "unknown".to_owned()
             };
             log::error!("kill_old_daemon thread panicked: {msg}");
         }
@@ -538,6 +566,7 @@ fn kill_old_daemon_range(our_pid: u32, preferred: u16) {
     }
 }
 
+#[must_use] 
 pub fn is_integration_mode() -> bool {
     std::env::args().any(|arg| arg == "--integration" || arg == "--background")
 }
@@ -562,7 +591,7 @@ pub fn run_integration_mode() {
 
     let resource_dir = std::env::current_exe()
         .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
         .unwrap_or_else(|| PathBuf::from("."))
         .display()
         .to_string();
@@ -571,13 +600,12 @@ pub fn run_integration_mode() {
         let home = std::env::var("APPDATA")
             .or_else(|_| std::env::var("USERPROFILE"))
             .or_else(|_| std::env::var("HOME"))
-            .unwrap_or_else(|_| ".".to_string());
-        format!("{}/nova-download-manager", home)
+            .unwrap_or_else(|_| ".".to_owned());
+        format!("{home}/nova-download-manager")
     };
 
     log::info!(
-        "Integration mode: starting daemon on port {} (no GUI)",
-        port
+        "Integration mode: starting daemon on port {port} (no GUI)"
     );
     daemon::start_daemon(resource_dir, data_dir, port);
 
@@ -609,15 +637,14 @@ pub fn run() {
         .setup(|app| {
             kill_old_daemon();
             let default_port = requested_daemon_port();
-            let deadline = std::time::Instant::now() + Duration::from_millis(2000);
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
             loop {
                 if is_loopback_port_available(default_port) {
                     break;
                 }
                 if std::time::Instant::now() > deadline {
                     log::warn!(
-                        "Daemon port {} still not available after 2s; starting anyway",
-                        default_port
+                        "Daemon port {default_port} still not available after 2s; starting anyway"
                     );
                     break;
                 }

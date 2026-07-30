@@ -27,10 +27,10 @@ tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 tokio = { version = "1", features = ["rt", "macros", "time", "net", "sync", "io-util", "signal"] }
-axum = "0.8"
+axum = { version = "0.8", features = ["macros"] }
 tower-http = { version = "0.6", features = ["cors", "fs", "compression-gzip", "limit"] }
 reqwest = { version = ">=0.12.0, <0.13", features = ["json", "blocking", "multipart", "stream"] }
-tokio-util = { version = "0.7", features = ["codec"] }
+tokio-util = { version = "0.7", features = ["codec", "rt"] }
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 async-stream = "0.3"
@@ -42,6 +42,7 @@ sha2 = "0.10"
 sha1 = "0.10"
 md-5 = "0.10"
 zip = "2"
+unicode-normalization = "0.1"
 
 [profile.release]
 lto = "fat"

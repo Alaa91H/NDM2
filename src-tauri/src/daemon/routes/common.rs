@@ -34,7 +34,7 @@ pub(super) fn hidden_output(command: &str, args: &[&str]) -> std::io::Result<Out
 /// Unlike `tokio::time::timeout(spawn_blocking(hidden_output))`, this variant
 /// spawns the child process with a handle and actively kills it when the
 /// deadline elapses — preventing orphaned yt-dlp/ffmpeg processes from
-/// accumulating when a probe hangs (the spawn_blocking task itself cannot be
+/// accumulating when a probe hangs (the `spawn_blocking` task itself cannot be
 /// cancelled, so the child would otherwise keep running).
 pub(super) fn hidden_output_timed(
     command: &str,
@@ -46,28 +46,24 @@ pub(super) fn hidden_output_timed(
     let mut child = cmd.spawn()?;
     let deadline = std::time::Instant::now() + timeout;
     loop {
-        match child.try_wait()? {
-            Some(_status) => {
-                // Process exited; collect stdout/stderr via wait_with_output on
-                // the already-exited child (non-blocking).
-                return child.wait_with_output();
-            }
-            None => {
-                if std::time::Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        format!(
-                            "Process '{}' exceeded {}s timeout",
-                            command,
-                            timeout.as_secs()
-                        ),
-                    ));
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
+        if let Some(_status) = child.try_wait()? {
+            // Process exited; collect stdout/stderr via wait_with_output on
+            // the already-exited child (non-blocking).
+            return child.wait_with_output();
         }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!(
+                    "Process '{}' exceeded {}s timeout",
+                    command,
+                    timeout.as_secs()
+                ),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -75,8 +71,7 @@ pub(super) fn header_string(headers: &reqwest::header::HeaderMap, key: &str) -> 
     headers
         .get(key)
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string()
+        .unwrap_or("").to_owned()
 }
 
 pub(super) fn header_u64(headers: &reqwest::header::HeaderMap, key: &str) -> u64 {
@@ -124,7 +119,7 @@ impl ContentRangeParsed {
             return None;
         }
         let (unit, rest) = header.split_once(char::is_whitespace)?;
-        let unit = unit.to_string();
+        let unit = unit.to_owned();
         let rest = rest.trim();
         if rest.starts_with('*') {
             let total = rest.strip_prefix("*/")?.trim().parse::<u64>().ok();
@@ -171,9 +166,8 @@ impl ContentRangeParsed {
 
 pub(super) fn content_range_total(content_range: &str) -> u64 {
     ContentRangeParsed::parse(content_range)
-        .filter(|p| p.is_bytes_unit())
-        .map(|p| p.total_bytes())
-        .unwrap_or(0)
+        .filter(ContentRangeParsed::is_bytes_unit)
+        .map_or(0, |p| p.total_bytes())
 }
 
 pub(super) fn split_cd_params(value: &str) -> Vec<&str> {
@@ -278,7 +272,7 @@ pub(super) fn content_disposition_filename(value: &str) -> Option<String> {
             } else {
                 let raw = name.trim_matches('"').trim();
                 if !raw.is_empty() {
-                    return Some(raw.to_string());
+                    return Some(raw.to_owned());
                 }
             }
         }
@@ -294,11 +288,11 @@ pub(super) fn content_disposition_filename(value: &str) -> Option<String> {
                 let inner = unescape_quoted_string(name);
                 resolve_quote_escapes(inner)
             } else {
-                name.to_string()
+                name.to_owned()
             };
             let name = name.trim();
             if !name.is_empty() {
-                return Some(name.to_string());
+                return Some(name.to_owned());
             }
         }
     }
@@ -317,14 +311,14 @@ pub(super) fn percent_decode_str(input: &str) -> String {
                 continue;
             }
         }
-        if let Some(ch) = std::char::from_u32(bytes[i] as u32) {
+        if let Some(ch) = std::char::from_u32(u32::from(bytes[i])) {
             for b in ch.to_string().as_bytes() {
                 result.push(*b);
             }
         }
         i += 1;
     }
-    String::from_utf8(result).unwrap_or_else(|_| input.to_string())
+    String::from_utf8_lossy(&result).into_owned()
 }
 
 pub(super) fn percent_decode_str_iso8859(input: &str) -> String {
@@ -346,7 +340,7 @@ pub(super) fn percent_decode_str_iso8859(input: &str) -> String {
 }
 
 fn hex_pair_to_byte(high: u8, low: u8) -> Option<u8> {
-    fn hex_digit(c: u8) -> Option<u8> {
+    const fn hex_digit(c: u8) -> Option<u8> {
         match c {
             b'0'..=b'9' => Some(c - b'0'),
             b'a'..=b'f' => Some(c - b'a' + 10),
@@ -361,9 +355,9 @@ pub(super) fn fallback_file_name(url: &str) -> String {
     let clean = url.split('?').next().unwrap_or(url).trim_end_matches('/');
     let name = clean.rsplit('/').next().unwrap_or("download").trim();
     if name.is_empty() {
-        "download".to_string()
+        "download".to_owned()
     } else {
-        name.to_string()
+        name.to_owned()
     }
 }
 

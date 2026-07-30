@@ -459,7 +459,7 @@ impl PolicyEngine {
         self.decision_history.push(PolicyRecord {
             decision: decision.clone(),
             timestamp: Instant::now(),
-            context_snapshot: context.to_string(),
+            context_snapshot: context.to_owned(),
         });
         if self.decision_history.len() > self.max_history {
             self.decision_history
@@ -469,14 +469,14 @@ impl PolicyEngine {
 
     pub fn should_rollback(&mut self, host: &str, performance_delta: f64) -> bool {
         if performance_delta < -self.rollback_threshold {
-            let count = self.consecutive_worse.entry(host.to_string()).or_insert(0);
+            let count = self.consecutive_worse.entry(host.to_owned()).or_insert(0);
             *count += 1;
             if *count >= 3 {
-                self.consecutive_worse.insert(host.to_string(), 0);
+                self.consecutive_worse.insert(host.to_owned(), 0);
                 return true;
             }
         } else {
-            self.consecutive_worse.insert(host.to_string(), 0);
+            self.consecutive_worse.insert(host.to_owned(), 0);
         }
         false
     }

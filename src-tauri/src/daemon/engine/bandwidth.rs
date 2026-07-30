@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 const SPEED_WINDOW_SIZE: usize = 30;
-/// Maximum unique task IDs to track in speed_history. Evicts oldest entries
+/// Maximum unique task IDs to track in `speed_history`. Evicts oldest entries
 /// (by last update) to cap memory. At ~240 bytes/entry, 5000 = ~1.2 MB.
 const MAX_SPEED_HISTORY_TASKS: usize = 5_000;
 
@@ -60,10 +60,8 @@ impl BandwidthManager {
                     if now_hour >= sched.start_hour && now_hour < sched.end_hour {
                         return sched.limit_kbps;
                     }
-                } else {
-                    if now_hour >= sched.start_hour || now_hour < sched.end_hour {
-                        return sched.limit_kbps;
-                    }
+                } else if now_hour >= sched.start_hour || now_hour < sched.end_hour {
+                    return sched.limit_kbps;
                 }
             }
         }
@@ -127,17 +125,14 @@ impl BandwidthManager {
 
     pub fn report_speed(&self, task_id: &str, bytes_per_sec: u64) {
         if let Ok(mut history) = self.speed_history.lock() {
-            // Evict oldest entries if over capacity.
+            // Evict entries older than 60 seconds when over capacity.
             if history.len() >= MAX_SPEED_HISTORY_TASKS && !history.contains_key(task_id) {
-                if let Some(oldest_key) = history
-                    .iter()
-                    .min_by_key(|(_, v)| v.front().map(|s| s.0).unwrap_or(Instant::now()))
-                    .map(|(k, _)| k.clone())
-                {
-                    history.remove(&oldest_key);
-                }
+                let cutoff = Instant::now().checked_sub(std::time::Duration::from_secs(60)).unwrap_or(Instant::now());
+                history.retain(|_, samples| {
+                    samples.back().is_some_and(|s| s.0 >= cutoff)
+                });
             }
-            let entry = history.entry(task_id.to_string()).or_default();
+            let entry = history.entry(task_id.to_owned()).or_default();
             entry.push_back((Instant::now(), bytes_per_sec));
             if entry.len() > SPEED_WINDOW_SIZE {
                 entry.pop_front();

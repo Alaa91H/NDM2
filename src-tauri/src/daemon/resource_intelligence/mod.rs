@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use types::*;
+use types::{ResolutionReport, ResolutionPhase, ResourceType, RequestDiagnostics, CapabilityState, RetryDecision, ResourceIdentity, ErrorCategory, DownloadStrategy, StrategyRationale};
 
 use crate::daemon::state::SharedState;
 use crate::daemon::types::CreateDownloadBody;
@@ -168,8 +168,8 @@ impl ResourceIntelligenceEngine {
             resolution_phase: ResolutionPhase::Initial,
             recommended_strategy: DownloadStrategy::SingleConnection,
             strategy_rationale: StrategyRationale {
-                primary_reason: "Minimal resolution — network probe not yet complete".to_string(),
-                factors: vec!["Initial URL analysis only".to_string()],
+                primary_reason: "Minimal resolution — network probe not yet complete".to_owned(),
+                factors: vec!["Initial URL analysis only".to_owned()],
                 confidence: 0.3,
             },
             started_at: Instant::now(),
@@ -187,7 +187,7 @@ fn build_probe_client(state: &SharedState, body: Option<&CreateDownloadBody>) ->
                     builder = builder.proxy(proxy);
                 }
             } else {
-                log::warn!("Rejected potentially unsafe proxy URL: {}", proxy);
+                log::warn!("Rejected potentially unsafe proxy URL: {proxy}");
             }
         }
         if let Some(source) = opts
@@ -210,22 +210,22 @@ fn extract_custom_headers(body: Option<&CreateDownloadBody>) -> HashMap<String, 
     let mut headers = HashMap::new();
     if let Some(opts) = body.and_then(|b| b.direct_options.as_ref()) {
         if let Some(ua) = opts.get("userAgent").and_then(|v| v.as_str()) {
-            headers.insert("user-agent".to_string(), ua.to_string());
+            headers.insert("user-agent".to_owned(), ua.to_owned());
         }
         if let Some(referer) = opts
             .get("referer")
             .and_then(|v| v.as_str())
             .or_else(|| body.and_then(|b| b.referer.as_deref()))
         {
-            headers.insert("referer".to_string(), referer.to_string());
+            headers.insert("referer".to_owned(), referer.to_owned());
         }
         if let Some(cookies) = opts.get("cookies").and_then(|v| v.as_str()) {
-            headers.insert("cookie".to_string(), cookies.to_string());
+            headers.insert("cookie".to_owned(), cookies.to_owned());
         }
         if let Some(raw) = opts.get("headers").and_then(|v| v.as_str()) {
             for line in raw.lines().map(str::trim).filter(|l| !l.is_empty()) {
                 if let Some((k, v)) = line.split_once(':') {
-                    headers.insert(k.trim().to_lowercase(), v.trim().to_string());
+                    headers.insert(k.trim().to_lowercase(), v.trim().to_owned());
                 }
             }
         }

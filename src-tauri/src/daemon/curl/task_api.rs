@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 use uuid::Uuid;
 
-use super::*;
+use super::{destination_from_body, args, task_from_body, start_curl_process, Arc, remove_stale_parts_for};
 use crate::daemon::direct::DirectUrl;
 use crate::daemon::engine::extractor::{EngineStatus, Extractor, ValidateError};
 use crate::daemon::state::SharedState;
@@ -12,7 +12,7 @@ use crate::lock_or_err;
 
 const MAX_TASKS: usize = 10_000;
 
-pub(crate) async fn create_curl_task(
+pub async fn create_curl_task(
     state: &SharedState,
     body: &CreateDownloadBody,
 ) -> Result<Task, String> {
@@ -21,10 +21,11 @@ pub(crate) async fn create_curl_task(
         || url.to_lowercase().ends_with(".torrent")
         || url.contains(".torrent?")
     {
-        return Err("Torrent/magnet support requires a dedicated torrent engine; libcurl multi is for direct URL downloads.".to_string());
+        return Err("Torrent/magnet support requires a dedicated torrent engine; libcurl multi is for direct URL downloads.".to_owned());
     }
     let direct_url = DirectUrl::parse(url)?;
-    crate::daemon::utils::is_safe_target_url(&direct_url.normalized)?;
+    let (_pinned_ip, resolve_entry) =
+        crate::daemon::utils::is_safe_target_url_pinned(&direct_url.normalized)?;
     let url = direct_url.normalized.as_str();
 
     if let Err(integrity_error) =
@@ -35,7 +36,7 @@ pub(crate) async fn create_curl_task(
         );
     }
 
-    let direct_options = body.direct_options.clone().unwrap_or_default();
+    let mut direct_options = body.direct_options.clone().unwrap_or_default();
     crate::daemon::engine_capabilities::validate_curl_direct_options(
         &direct_options,
         body.resumable.unwrap_or(true),
@@ -45,10 +46,20 @@ pub(crate) async fn create_curl_task(
     crate::daemon::direct::FileWriter::ensure_parent(&output_path)?;
     let fail_with_body_supported =
         crate::daemon::engine_capabilities::curl_supports_flag("--fail-with-body");
-    let args =
+    // Validate curl args (input validation) and pin DNS against rebinding.
+    let mut curl_args =
         args::build_curl_args_with_capabilities(body, &output_path, fail_with_body_supported)?;
+    curl_args.push("--resolve".to_owned());
+    curl_args.push(resolve_entry.clone());
+    let mut existing_resolve: Vec<serde_json::Value> = direct_options
+        .remove("resolve")
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+    existing_resolve.push(resolve_entry.into());
+    direct_options.insert("resolve".to_owned(), existing_resolve.into());
+    drop(curl_args); // args are persisted via direct_options, not executed
     let id = Uuid::new_v4().to_string();
-    let job = task_from_body(body, &id, name, &output_path, args, direct_options);
+    let job = task_from_body(body, &id, name, &output_path, direct_options);
     let task = job.task.clone();
     // Hold curl_jobs + task_snapshot locks together so the capacity check
     // and insertions are atomic w.r.t. concurrent create calls.
@@ -56,7 +67,7 @@ pub(crate) async fn create_curl_task(
         let mut jobs = lock_or_err!(state.curl_jobs);
         let mut tasks = lock_or_err!(state.task_snapshot);
         if tasks.len() >= MAX_TASKS {
-            return Err("Maximum number of tasks reached. Complete or delete some tasks before creating new ones.".to_string());
+            return Err("Maximum number of tasks reached. Complete or delete some tasks before creating new ones.".to_owned());
         }
         jobs.insert(id.clone(), job);
         tasks.insert(id.clone(), task.clone());
@@ -69,7 +80,7 @@ pub(crate) async fn create_curl_task(
     Ok(task)
 }
 
-pub(crate) async fn list_all_tasks(state: &SharedState) -> Vec<Task> {
+pub async fn list_all_tasks(state: &SharedState) -> Vec<Task> {
     let current_gen = state
         .task_generation
         .load(std::sync::atomic::Ordering::Acquire);
@@ -127,7 +138,17 @@ pub(crate) async fn list_all_tasks(state: &SharedState) -> Vec<Task> {
     (*result).clone()
 }
 
-pub(crate) async fn pause_task(state: &SharedState, id: &str) -> Result<Task, String> {
+pub fn get_task(state: &SharedState, id: &str) -> Option<Task> {
+    if let Some(job) = lock_or_err!(state.media_jobs).get(id) {
+        return Some(job.task.clone());
+    }
+    if let Some(job) = lock_or_err!(state.curl_jobs).get(id) {
+        return Some(job.task.clone());
+    }
+    lock_or_err!(state.task_snapshot).get(id).cloned()
+}
+
+pub async fn pause_task(state: &SharedState, id: &str) -> Result<Task, String> {
     {
         let mut jobs = lock_or_err!(state.media_jobs);
         if let Some(job) = jobs.get_mut(id) {
@@ -135,12 +156,12 @@ pub(crate) async fn pause_task(state: &SharedState, id: &str) -> Result<Task, St
                 kill_process(pid);
                 job.child = None;
             }
-            job.task.status = "paused".to_string();
+            job.task.status = "paused".to_owned();
             job.task.speed_bytes_per_sec = 0;
-            job.task.engine_status = Some("paused".to_string());
+            job.task.engine_status = Some("paused".to_owned());
             let task = job.task.clone();
             drop(jobs);
-            lock_or_err!(state.task_snapshot).insert(id.to_string(), task.clone());
+            lock_or_err!(state.task_snapshot).insert(id.to_owned(), task.clone());
             state.mark_dirty();
             return Ok(task);
         }
@@ -151,16 +172,16 @@ pub(crate) async fn pause_task(state: &SharedState, id: &str) -> Result<Task, St
         if let Some(job) = jobs.get_mut(id) {
             job.cancel_token.store(true, Ordering::Release);
             if job.task.status == "downloading" {
-                job.task.status = "pausing".to_string();
-                job.task.engine_status = Some("pausing".to_string());
+                job.task.status = "pausing".to_owned();
+                job.task.engine_status = Some("pausing".to_owned());
             } else {
-                job.task.status = "paused".to_string();
-                job.task.engine_status = Some("paused".to_string());
+                job.task.status = "paused".to_owned();
+                job.task.engine_status = Some("paused".to_owned());
             }
             job.task.speed_bytes_per_sec = 0;
             let task = job.task.clone();
             drop(jobs);
-            lock_or_err!(state.task_snapshot).insert(id.to_string(), task.clone());
+            lock_or_err!(state.task_snapshot).insert(id.to_owned(), task.clone());
             state.mark_dirty();
             return Ok(task);
         }
@@ -170,17 +191,17 @@ pub(crate) async fn pause_task(state: &SharedState, id: &str) -> Result<Task, St
     snapshot
         .get(id)
         .cloned()
-        .ok_or_else(|| "Task not found".to_string())
+        .ok_or_else(|| "Task not found".to_owned())
 }
 
-pub(crate) async fn resume_task(state: &SharedState, id: &str) -> Result<Task, String> {
+pub async fn resume_task(state: &SharedState, id: &str) -> Result<Task, String> {
     {
         let mut jobs = lock_or_err!(state.media_jobs);
         if let Some(job) = jobs.get_mut(id) {
             let needs_start = job.task.status != "completed";
             if needs_start {
-                job.task.status = "downloading".to_string();
-                job.task.engine_status = Some("resuming".to_string());
+                job.task.status = "downloading".to_owned();
+                job.task.engine_status = Some("resuming".to_owned());
             }
             drop(jobs);
             if needs_start {
@@ -191,7 +212,7 @@ pub(crate) async fn resume_task(state: &SharedState, id: &str) -> Result<Task, S
             return jobs
                 .get(id)
                 .map(|j| j.task.clone())
-                .ok_or_else(|| "Task not found after resume".to_string());
+                .ok_or_else(|| "Task not found after resume".to_owned());
         }
     }
 
@@ -210,8 +231,8 @@ pub(crate) async fn resume_task(state: &SharedState, id: &str) -> Result<Task, S
             ) {
                 return Err(format!("Cannot resume '{}': current state is {}. Wait until the previous libcurl worker has stopped.", job.task.name, job.task.status));
             }
-            job.task.status = "queued".to_string();
-            job.task.engine_status = Some("resume-requested".to_string());
+            job.task.status = "queued".to_owned();
+            job.task.engine_status = Some("resume-requested".to_owned());
             job.task.error_message = None;
             let task = job.task.clone();
             drop(jobs);
@@ -221,7 +242,7 @@ pub(crate) async fn resume_task(state: &SharedState, id: &str) -> Result<Task, S
         }
     }
 
-    Err("Task not found".to_string())
+    Err("Task not found".to_owned())
 }
 
 /// Characters that may not appear in a file name on any supported platform
@@ -229,20 +250,35 @@ pub(crate) async fn resume_task(state: &SharedState, id: &str) -> Result<Task, S
 fn sanitize_new_name(raw: &str) -> Result<String, String> {
     let name = raw.trim();
     if name.is_empty() {
-        return Err("Name cannot be empty".to_string());
+        return Err("Name cannot be empty".to_owned());
     }
     if name.len() > 240 {
-        return Err("Name is too long (max 240 characters)".to_string());
+        return Err("Name is too long (max 240 characters)".to_owned());
     }
     if name.chars().any(|c| {
         matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control()
     }) {
-        return Err(format!("Name contains forbidden characters: {}", name));
+        return Err(format!("Name contains forbidden characters: {name}"));
     }
     if name == "." || name == ".." {
-        return Err("Invalid name".to_string());
+        return Err("Invalid name".to_owned());
     }
-    Ok(name.to_string())
+    // Reject names whose NFC-normalized form introduces path separators
+    // or contains ".." components (Unicode normalization attack vector).
+    use unicode_normalization::UnicodeNormalization;
+    for ch in name.chars() {
+        let nfc: String = ch.nfc().collect();
+        if nfc.contains('/') || nfc.contains('\\') {
+            return Err(format!("Name contains forbidden characters: {name}"));
+        }
+    }
+    let normalized: String = name.nfc().collect();
+    for component in std::path::Path::new(&normalized).components() {
+        if matches!(component, std::path::Component::ParentDir) {
+            return Err("Name contains path traversal components".to_owned());
+        }
+    }
+    Ok(name.to_owned())
 }
 
 /// Rename the on-disk destination (completed or partial) to match a new task
@@ -283,7 +319,7 @@ fn clear_stale_validators(
     }
 }
 
-pub(crate) async fn update_task_metadata(
+pub async fn update_task_metadata(
     state: &SharedState,
     id: &str,
     name: Option<String>,
@@ -297,14 +333,14 @@ pub(crate) async fn update_task_metadata(
         Some(raw) => {
             let trimmed = raw.trim();
             if trimmed.is_empty() {
-                return Err("URL cannot be empty".to_string());
+                return Err("URL cannot be empty".to_owned());
             }
-            Some(trimmed.to_string())
+            Some(trimmed.to_owned())
         }
         None => None,
     };
     if new_name.is_none() && new_url.is_none() {
-        return Err("Nothing to update".to_string());
+        return Err("Nothing to update".to_owned());
     }
 
     // Media (yt-dlp) tasks.
@@ -315,11 +351,11 @@ pub(crate) async fn update_task_metadata(
                 job.task.status.as_str(),
                 "downloading" | "pausing" | "stopping"
             ) {
-                return Err("Stop the download before editing it".to_string());
+                return Err("Stop the download before editing it".to_owned());
             }
             if let Some(ref u) = new_url {
                 if !(u.starts_with("http://") || u.starts_with("https://")) {
-                    return Err("Only http(s) URLs are supported for media tasks".to_string());
+                    return Err("Only http(s) URLs are supported for media tasks".to_owned());
                 }
                 job.task.url = u.clone();
             }
@@ -333,7 +369,7 @@ pub(crate) async fn update_task_metadata(
             }
             let task = job.task.clone();
             drop(jobs);
-            lock_or_err!(state.task_snapshot).insert(id.to_string(), task.clone());
+            lock_or_err!(state.task_snapshot).insert(id.to_owned(), task.clone());
             state.mark_dirty();
             return Ok(task);
         }
@@ -347,7 +383,7 @@ pub(crate) async fn update_task_metadata(
                 job.task.status.as_str(),
                 "downloading" | "pausing" | "stopping"
             ) {
-                return Err("Stop the download before editing it".to_string());
+                return Err("Stop the download before editing it".to_owned());
             }
             if let Some(ref u) = new_url {
                 let parsed = DirectUrl::parse(u)?;
@@ -370,37 +406,48 @@ pub(crate) async fn update_task_metadata(
             }
             let task = job.task.clone();
             drop(jobs);
-            lock_or_err!(state.task_snapshot).insert(id.to_string(), task.clone());
+            lock_or_err!(state.task_snapshot).insert(id.to_owned(), task.clone());
             state.mark_dirty();
             return Ok(task);
         }
     }
 
-    Err("Task not found".to_string())
+    Err("Task not found".to_owned())
 }
 
 /// Re-download a task from scratch: removes the existing output (and any
 /// segment parts), resets progress, clears stale validators, and restarts.
-pub(crate) async fn redownload_task(state: &SharedState, id: &str) -> Result<Task, String> {
+pub async fn redownload_task(state: &SharedState, id: &str) -> Result<Task, String> {
     {
-        let mut jobs = lock_or_err!(state.media_jobs);
-        if let Some(job) = jobs.get_mut(id) {
-            if let Some(pid) = job.child.take() {
-                kill_process(pid);
+        let out = {
+            let mut jobs = lock_or_err!(state.media_jobs);
+            if let Some(job) = jobs.get_mut(id) {
+                if let Some(pid) = job.child.take() {
+                    kill_process(pid);
+                }
+                let path = std::path::PathBuf::from(&job.task.save_path);
+                let save_path_empty = job.task.save_path.is_empty();
+                job.task.status = "downloading".to_owned();
+                job.task.downloaded_bytes = 0;
+                job.task.speed_bytes_per_sec = 0;
+                job.task.time_left_seconds = 0;
+                job.task.error_message = None;
+                job.task.engine_status = Some("redownload-requested".to_owned());
+                Some((job.task.clone(), path, save_path_empty))
+            } else {
+                None
             }
-            let path = std::path::PathBuf::from(&job.task.save_path);
-            if !job.task.save_path.is_empty() {
-                let _ = std::fs::remove_file(&path);
+        };
+        if let Some((task, path, save_path_empty)) = out {
+            if !save_path_empty {
+                for attempt in 0..10 {
+                    if std::fs::remove_file(&path).is_ok() {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(200 * (1 << attempt))).await;
+                }
             }
-            job.task.status = "downloading".to_string();
-            job.task.downloaded_bytes = 0;
-            job.task.speed_bytes_per_sec = 0;
-            job.task.time_left_seconds = 0;
-            job.task.error_message = None;
-            job.task.engine_status = Some("redownload-requested".to_string());
-            let task = job.task.clone();
-            drop(jobs);
-            lock_or_err!(state.task_snapshot).insert(id.to_string(), task.clone());
+            lock_or_err!(state.task_snapshot).insert(id.to_owned(), task.clone());
             state.mark_dirty();
             crate::daemon::ytdlp::start_ytdlp_process(state, id);
             return Ok(task);
@@ -408,111 +455,142 @@ pub(crate) async fn redownload_task(state: &SharedState, id: &str) -> Result<Tas
     }
 
     {
-        let mut jobs = lock_or_err!(state.curl_jobs);
-        if let Some(job) = jobs.get_mut(id) {
-            // Cancel any running worker and invalidate its generation so a
-            // late finish cannot overwrite the fresh state.
-            job.cancel_token.store(true, Ordering::Release);
-            job.run_generation.fetch_add(1, Ordering::Release);
-            let path = std::path::PathBuf::from(&job.task.save_path);
-            if let Err(e) = std::fs::remove_file(&path) {
-                log::warn!("Task {id}: remove_file failed on redownload: {e}");
+        let out = {
+            let mut jobs = lock_or_err!(state.curl_jobs);
+            if let Some(job) = jobs.get_mut(id) {
+                job.cancel_token.store(true, Ordering::Release);
+                job.run_generation.fetch_add(1, Ordering::Release);
+                let path = std::path::PathBuf::from(&job.task.save_path);
+                clear_stale_validators(&mut job.direct_options);
+                job.task.status = "queued".to_owned();
+                job.task.downloaded_bytes = 0;
+                job.task.speed_bytes_per_sec = 0;
+                job.task.time_left_seconds = 0;
+                job.task.error_message = None;
+                job.task.engine_status = Some("redownload-requested".to_owned());
+                job.task.segments = crate::daemon::utils::build_segments(
+                    job.task.connections,
+                    job.task.size_bytes,
+                    0,
+                    0,
+                );
+                Some((job.task.clone(), path))
+            } else {
+                None
+            }
+        };
+        if let Some((task, path)) = out {
+            let mut removed = false;
+            for attempt in 0..10 {
+                if std::fs::remove_file(&path).is_ok() {
+                    removed = true;
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(200 * (1 << attempt))).await;
+            }
+            if !removed {
+                log::warn!("Task {id}: remove_file failed on redownload after 10 retries");
             }
             remove_stale_parts_for(&path);
-            clear_stale_validators(&mut job.direct_options);
-            job.task.status = "queued".to_string();
-            job.task.downloaded_bytes = 0;
-            job.task.speed_bytes_per_sec = 0;
-            job.task.time_left_seconds = 0;
-            job.task.error_message = None;
-            job.task.engine_status = Some("redownload-requested".to_string());
-            job.task.segments = crate::daemon::utils::build_segments(
-                job.task.connections,
-                job.task.size_bytes,
-                0,
-                0,
-            );
-            let task = job.task.clone();
-            drop(jobs);
-            lock_or_err!(state.task_snapshot).insert(id.to_string(), task.clone());
+            lock_or_err!(state.task_snapshot).insert(id.to_owned(), task.clone());
             state.mark_dirty();
             start_curl_process(state, id);
             return Ok(task);
         }
     }
 
-    Err("Task not found".to_string())
+    Err("Task not found".to_owned())
 }
 
-pub(crate) async fn delete_task(
+pub async fn delete_task(
     state: &SharedState,
     id: &str,
     delete_files: bool,
 ) -> Result<(), String> {
     {
-        let mut jobs = lock_or_err!(state.media_jobs);
-        if let Some(job) = jobs.remove(id) {
-            if let Some(pid) = job.child {
-                kill_process(pid);
+        let entry = {
+            let mut jobs = lock_or_err!(state.media_jobs);
+            if let Some(job) = jobs.remove(id) {
+                if let Some(pid) = job.child {
+                    kill_process(pid);
+                }
+                Some((
+                    std::path::PathBuf::from(&job.task.save_path),
+                    job.task.url,
+                ))
+            } else {
+                None
             }
-            let path = std::path::PathBuf::from(&job.task.save_path);
-            let url = job.task.url.clone();
-            drop(jobs);
+        };
+        if let Some((path, url)) = entry {
             state.priority_queue.remove(id);
             state.bandwidth_manager.remove_task_limit(id);
             if !url.is_empty() {
                 state.metadata_cache.remove(&url);
             }
             if delete_files {
-                if let Err(e) = std::fs::remove_file(&path) {
-                    log::warn!("delete_task: remove_file failed for media task {id}: {e}");
+                for attempt in 0..10 {
+                    if std::fs::remove_file(&path).is_ok() {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(200 * (1 << attempt))).await;
                 }
             }
+            if let Ok(mut trackers) = state.engine_trackers.write() {
+                trackers.remove(id);
+            }
             lock_or_err!(state.task_snapshot).remove(id);
-            lock_or_err!(state.engine_trackers).remove(id);
             state.mark_dirty();
             return Ok(());
         }
     }
 
     {
-        let mut jobs = lock_or_err!(state.curl_jobs);
-        if let Some(job) = jobs.get_mut(id) {
-            job.cancel_token.store(true, Ordering::Release);
-            job.run_generation.fetch_add(1, Ordering::Release);
-        }
-        let job = jobs.remove(id);
-        if let Some(job) = job {
-            let path = std::path::PathBuf::from(&job.task.save_path);
-            let url = job.task.url.clone();
+        let entry = {
+            let mut jobs = lock_or_err!(state.curl_jobs);
+            if let Some(job) = jobs.get_mut(id) {
+                job.cancel_token.store(true, Ordering::Release);
+                job.run_generation.fetch_add(1, Ordering::Release);
+            }
+            if let Ok(mut trackers) = state.engine_trackers.write() {
+                trackers.remove(id);
+            }
             // Remove from snapshot before curl_jobs to prevent ghost task.
             lock_or_err!(state.task_snapshot).remove(id);
-            drop(jobs);
+            let job = jobs.remove(id);
+            job.map(|job| {
+                (
+                    std::path::PathBuf::from(&job.task.save_path),
+                    job.task.url,
+                )
+            })
+        };
+        if let Some((path, url)) = entry {
             state.priority_queue.remove(id);
             state.bandwidth_manager.remove_task_limit(id);
             if !url.is_empty() {
                 state.metadata_cache.remove(&url);
             }
             if delete_files {
-                if let Err(e) = std::fs::remove_file(&path) {
-                    log::warn!("delete_task: remove_file failed for curl task {id}: {e}");
+                for attempt in 0..10 {
+                    if std::fs::remove_file(&path).is_ok() {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(200 * (1 << attempt))).await;
                 }
                 remove_stale_parts_for(&path);
             }
-            lock_or_err!(state.engine_trackers).remove(id);
             state.mark_dirty();
             return Ok(());
         }
     }
     if lock_or_err!(state.task_snapshot).remove(id).is_some() {
         state.mark_dirty();
-        Ok(())
-    } else {
-        Err("Task not found".to_string())
     }
+    Ok(())
 }
 
-pub(crate) fn curl_version() -> String {
+pub fn curl_version() -> String {
     let v = ::curl::Version::get();
     format!("libcurl {}", v.version())
 }
@@ -520,7 +598,7 @@ pub(crate) fn curl_version() -> String {
 pub struct CurlExtractor;
 
 impl Extractor for CurlExtractor {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "libcurl-multi"
     }
 
@@ -558,14 +636,14 @@ impl Extractor for CurlExtractor {
     fn engine_status(&self, _state: &SharedState) -> EngineStatus {
         let v = ::curl::Version::get();
         EngineStatus {
-            id: "libcurl-multi".to_string(),
-            name: "libcurl-multi".to_string(),
+            id: "libcurl-multi".to_owned(),
+            name: "libcurl-multi".to_owned(),
             available: true,
-            version: Some(v.version().to_string()),
+            version: Some(v.version().to_owned()),
             features: vec![
-                "direct-http".to_string(),
-                "segmented".to_string(),
-                "range-requests".to_string(),
+                "direct-http".to_owned(),
+                "segmented".to_owned(),
+                "range-requests".to_owned(),
             ],
         }
     }
@@ -712,7 +790,7 @@ mod tests {
         let cancel = AtomicBool::new(false);
 
         drive_multi_socket(
-            guard.multi(),
+            guard.multi().unwrap(),
             &mut runtime,
             &handles,
             &cancel,

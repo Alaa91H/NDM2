@@ -72,7 +72,7 @@ async fn handle_discover(
     Ok(Json(serde_json::json!({
         "ok": true,
         "status": installation.status.display_text(),
-        "version": installation.version.as_ref().map(|v| v.to_string()),
+        "version": installation.version.as_ref().map(std::string::ToString::to_string),
         "path": installation.path.as_ref().map(|p| p.display().to_string()),
         "capabilities": installation.capabilities.iter().map(|c| &c.id).collect::<Vec<_>>(),
     })))
@@ -177,7 +177,7 @@ async fn handle_set_path(
             Ok(Json(serde_json::json!({
                 "ok": true,
                 "status": installation.status.display_text(),
-                "version": installation.version.as_ref().map(|v| v.to_string()),
+                "version": installation.version.as_ref().map(std::string::ToString::to_string),
                 "path": installation.path.as_ref().map(|p| p.display().to_string()),
             })))
         }
@@ -242,7 +242,7 @@ async fn handle_health_all(State(state): State<SharedState>) -> Json<serde_json:
                 "toolId": inst.tool_id.as_str(),
                 "status": inst.status.display_text(),
                 "healthy": inst.health_ok,
-                "version": inst.version.as_ref().map(|v| v.to_string()),
+                "version": inst.version.as_ref().map(std::string::ToString::to_string),
             })
         })
         .collect();

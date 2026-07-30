@@ -18,8 +18,9 @@ use axum::routing::get;
 use axum::Router;
 use reqwest::Client as HttpClient;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::{Arc, Mutex, RwLock};
+use tokio::sync::oneshot;
 use std::time::Instant;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -34,12 +35,16 @@ use crate::lock_or_err;
 use crate::daemon::engine::extractor::{ExtractorRegistry, SharedExtractorRegistry};
 
 /// External shutdown signal, set by the host process (Tauri) to trigger
-/// graceful daemon shutdown via the graceful_shutdown future.
-pub static EXTERNAL_SHUTDOWN: AtomicBool = AtomicBool::new(false);
+/// graceful daemon shutdown via the `graceful_shutdown` future.
+static SHUTDOWN_TX: std::sync::Mutex<Option<oneshot::Sender<()>>> = std::sync::Mutex::new(None);
 
 /// Request the running daemon to shut down gracefully. Safe from any thread.
 pub fn signal_shutdown() {
-    EXTERNAL_SHUTDOWN.store(true, Ordering::Release);
+    if let Ok(mut guard) = SHUTDOWN_TX.lock() {
+        if let Some(tx) = guard.take() {
+            let _ = tx.send(());
+        }
+    }
 }
 
 /// Generate a random 32-char hex token for API authentication.
@@ -115,7 +120,7 @@ fn resolve_engine_binary(resource_dir: &str, binary_name: &str) -> String {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let exe_dir = std::env::current_exe()
         .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
         .unwrap_or_default();
     let candidates = [
         resource_path.join("bin").join(binary_name),
@@ -127,16 +132,13 @@ fn resolve_engine_binary(resource_dir: &str, binary_name: &str) -> String {
 
     candidates
         .into_iter()
-        .find(|candidate| candidate.exists())
-        .map(|candidate| candidate.display().to_string())
-        .unwrap_or_else(|| {
+        .find(|candidate| candidate.exists()).map_or_else(|| {
             log::error!(
-                "{} not found in bundled locations; falling back to PATH lookup. \
-                 This may be a security risk if PATH has been tampered with.",
-                binary_name
+                "{binary_name} not found in bundled locations; falling back to PATH lookup. \
+                 This may be a security risk if PATH has been tampered with."
             );
-            binary_name.to_string()
-        })
+            binary_name.to_owned()
+        }, |candidate| candidate.display().to_string())
 }
 
 pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
@@ -146,13 +148,13 @@ pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
         let rt = match tokio::runtime::Runtime::new() {
             Ok(rt) => rt,
             Err(e) => {
-                log::error!("Failed to create tokio runtime: {}", e);
+                log::error!("Failed to create tokio runtime: {e}");
                 return;
             }
         };
         rt.block_on(async {
             if let Err(e) = std::fs::create_dir_all(&data_dir) {
-                log::warn!("Failed to create data directory: {}", e);
+                log::warn!("Failed to create data directory: {e}");
             }
             let restored = persist::load(&data_dir);
             let ytdlp_binary = if cfg!(windows) {
@@ -211,7 +213,7 @@ pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
                     crate::daemon::engine::config::global_config().retry_policy(),
                 ),
                 plugin_api: crate::daemon::engine::plugin_api::PluginApi::new(),
-                engine_trackers: Mutex::new(HashMap::new()),
+                engine_trackers: RwLock::new(HashMap::new()),
                 mirror_managers: Mutex::new(HashMap::new()),
                 extractor_registry,
                 api_token: shared_api_token(),
@@ -274,8 +276,13 @@ pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
 
             // Discover external tools on startup.
             {
-                let et = lock_or_err!(state.external_tools);
-                et.discover_and_initialize();
+                let et = state.external_tools.clone();
+                tokio::task::spawn_blocking(move || {
+                    let et = lock_or_err!(et);
+                    et.discover_and_initialize();
+                })
+                .await
+                .unwrap_or_else(|e| log::error!("External tool discovery panicked: {e}"));
             }
 
             if log::log_enabled!(log::Level::Debug) {
@@ -301,11 +308,11 @@ pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
                             }))
                         {
                             let msg = if let Some(s) = e.downcast_ref::<&str>() {
-                                s.to_string()
+                                (*s).to_owned()
                             } else if let Some(s) = e.downcast_ref::<String>() {
                                 s.clone()
                             } else {
-                                "unknown".to_string()
+                                "unknown".to_owned()
                             };
                             log::error!("Scheduler tick panicked: {msg}");
                         }
@@ -377,8 +384,8 @@ pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
                 .layer(CompressionLayer::new())
                 .layer(RequestBodyLimitLayer::new(32 * 1024 * 1024));
 
-            let addr = format!("127.0.0.1:{}", port);
-            log::info!("NOVA daemon starting on {}", addr);
+            let addr = format!("127.0.0.1:{port}");
+            log::info!("NOVA daemon starting on {addr}");
 
             // Retry TCP bind a few times — ports may still be in TIME_WAIT after
             // the old daemon was killed.
@@ -400,36 +407,27 @@ pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
                     }
                 }
             }
-            let listener = match listener {
-                Some(l) => l,
-                None => {
-                    log::error!("Failed to bind daemon to {} after 5 retries", addr);
-                    return;
-                }
+            let listener = if let Some(l) = listener { l } else {
+                log::error!("Failed to bind daemon to {addr} after 5 retries");
+                return;
             };
 
-            // Write the bound port to a file so the native messaging host and
-            // browser extension can discover it when the default port is occupied.
+            // Write the bound port + PID to a file so the native messaging host
+            // and browser extension can discover it, and so we can kill only the
+            // correct process on restart (not other services on the port range).
             let port_file = std::path::Path::new(&data_dir).join("nova-daemon.port");
-            if let Err(e) = std::fs::write(&port_file, port.to_string()) {
-                log::warn!("Failed to write daemon port file: {}", e);
+            if let Err(e) = std::fs::write(&port_file, format!("{}\n{}", port, std::process::id())) {
+                log::warn!("Failed to write daemon port file: {e}");
             }
+            let (shutdown_tx, shutdown_rx) = oneshot::channel();
+            *SHUTDOWN_TX.lock().unwrap() = Some(shutdown_tx);
             let shutdown_state = state.clone();
             let shutdown_signal = async move {
                 let ctrl_c = tokio::signal::ctrl_c();
-                let external = async {
-                    loop {
-                        if EXTERNAL_SHUTDOWN.load(Ordering::Acquire) {
-                            break;
-                        }
-                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                    }
-                };
                 tokio::select! {
                     _ = ctrl_c => {},
-                    _ = external => {},
+                    _ = shutdown_rx => {},
                 }
-                EXTERNAL_SHUTDOWN.store(false, Ordering::Release);
                 log::info!("Shutdown signal received; pausing active downloads...");
                 // Lock in documented order: media_jobs, curl_jobs, task_snapshot
                 {
@@ -438,8 +436,8 @@ pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
                         if let Some(pid) = job.child {
                             crate::daemon::utils::kill_process(pid);
                         }
-                        job.task.status = "paused".to_string();
-                        job.task.engine_status = Some("shutdown".to_string());
+                        job.task.status = "paused".to_owned();
+                        job.task.engine_status = Some("shutdown".to_owned());
                     }
                 }
                 {
@@ -447,8 +445,8 @@ pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
                     for job in curl.values_mut() {
                         job.cancel_token
                             .store(true, std::sync::atomic::Ordering::Release);
-                        job.task.status = "paused".to_string();
-                        job.task.engine_status = Some("shutdown".to_string());
+                        job.task.status = "paused".to_owned();
+                        job.task.engine_status = Some("shutdown".to_owned());
                     }
                 }
                 // Signal watchdog threads to exit.
@@ -457,7 +455,10 @@ pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
                     .store(true, std::sync::atomic::Ordering::Release);
                 // Join watchdog handles (they will exit on next check loop after
                 // shutdown_requested is set).
-                for h in std::mem::take(&mut *lock_or_err!(shutdown_state.watchdog_handles)) {
+                // Take the Vec out of the Mutex first so the lock is not held
+                // during the potentially-blocking join() calls.
+                let handles = std::mem::take(&mut *lock_or_err!(shutdown_state.watchdog_handles));
+                for h in handles {
                     let _ = h.join();
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -469,7 +470,7 @@ pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
                 .with_graceful_shutdown(shutdown_signal)
                 .await
             {
-                log::error!("Daemon server error: {}", e);
+                log::error!("Daemon server error: {e}");
             }
             // Remove the port file on clean shutdown.
             let _ = std::fs::remove_file(std::path::Path::new(&data_dir).join("nova-daemon.port"));
@@ -492,40 +493,14 @@ fn restore_persisted_tasks(
         restored.tasks.len()
     );
 
-    // Lock order must be media_jobs, curl_jobs, task_snapshot to match
-    // the rest of the daemon and prevent deadlock.
-    // download_stats: must NOT be held simultaneously with curl_jobs
-    // (acquire in separate block scope) — see persist.rs build_snapshot.
-    let mut media_jobs = match state.media_jobs.lock() {
-        Ok(g) => g,
-        Err(e) => {
-            log::error!("Media jobs lock poisoned during restore: {}", e);
-            return;
-        }
-    };
-    let mut curl_jobs = match state.curl_jobs.lock() {
-        Ok(g) => g,
-        Err(e) => {
-            log::error!("curl jobs lock poisoned during restore: {}", e);
-            return;
-        }
-    };
-    let mut snapshot = match state.task_snapshot.lock() {
-        Ok(g) => g,
-        Err(e) => {
-            log::error!("Snapshot lock poisoned during restore: {}", e);
-            return;
-        }
-    };
-
     for mut task in restored.tasks {
         let was_running = matches!(
             task.status.as_str(),
             "downloading" | "queued" | "waiting" | "starting"
         );
         if was_running {
-            task.status = "paused".to_string();
-            task.engine_status = Some("interrupted".to_string());
+            task.status = "paused".to_owned();
+            task.engine_status = Some("interrupted".to_owned());
             task.speed_bytes_per_sec = 0;
         }
 
@@ -536,30 +511,32 @@ fn restore_persisted_tasks(
                 .cloned()
                 .unwrap_or_default();
             if task.status != "completed" && !args.is_empty() {
-                media_jobs.insert(
-                    task.id.clone(),
-                    MediaJob {
-                        task: task.clone(),
-                        child: None,
-                        args,
-                        start_time: Instant::now(),
-                    },
-                );
+                if let Ok(mut jobs) = state.media_jobs.lock() {
+                    jobs.insert(
+                        task.id.clone(),
+                        MediaJob {
+                            task: task.clone(),
+                            child: None,
+                            args,
+                            start_time: Instant::now(),
+                        },
+                    );
+                }
             }
         } else if task.engine == "curl"
             || task.engine == "libcurl-multi"
             || (task.engine != "yt-dlp"
                 && (task.url.starts_with("http://") || task.url.starts_with("https://")))
         {
-            task.engine = "libcurl-multi".to_string();
+            task.engine = "libcurl-multi".to_owned();
             task.engine_id = task.id.clone();
             task.description =
                 if task.description.trim().is_empty() || task.description == "Direct download" {
-                    "Direct download via libcurl multi".to_string()
+                    "Direct download via libcurl multi".to_owned()
                 } else {
                     task.description.clone()
                 };
-            let args = restored
+            let _args = restored
                 .curl_args
                 .get(&task.id)
                 .cloned()
@@ -590,30 +567,32 @@ fn restore_persisted_tasks(
                     )
                     .unwrap_or_default()
                 });
-            if task.status != "completed" && !args.is_empty() {
-                curl_jobs.insert(
-                    task.id.clone(),
-                    CurlJob {
-                        task: task.clone(),
-                        args,
-                        direct_options: HashMap::new(),
-                        cancel_token: Arc::new(AtomicBool::new(false)),
-                        run_generation: Arc::new(AtomicU64::new(0)),
-                        start_time: Instant::now(),
-                        segment_prev_bytes: Vec::new(),
-                    },
-                );
+            if task.status != "completed" {
+                if let Ok(mut jobs) = state.curl_jobs.lock() {
+                    jobs.insert(
+                        task.id.clone(),
+                        CurlJob {
+                            task: task.clone(),
+                            direct_options: HashMap::new(),
+                            cancel_token: Arc::new(AtomicBool::new(false)),
+                            run_generation: Arc::new(AtomicU64::new(0)),
+                            start_time: Instant::now(),
+                            segment_prev_bytes: Vec::new(),
+                        },
+                    );
+                }
             }
         } else {
-            task.status = "error".to_string();
-            task.engine_status = Some("unsupported-engine".to_string());
+            task.status = "error".to_owned();
+            task.engine_status = Some("unsupported-engine".to_owned());
             task.error_message = Some(
-                "This download used a removed engine. Re-add it with the libcurl engine."
-                    .to_string(),
+                "This download used a removed engine. Re-add it with the libcurl engine.".to_owned(),
             );
             task.speed_bytes_per_sec = 0;
         }
 
-        snapshot.insert(task.id.clone(), task);
+        if let Ok(mut snapshot) = state.task_snapshot.lock() {
+            snapshot.insert(task.id.clone(), task);
+        }
     }
 }

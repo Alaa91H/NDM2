@@ -7,7 +7,7 @@ use std::path::Path;
 
 const BUFFER_SIZE: usize = 64 * 1024;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChecksumAlgorithm {
     Sha256,
     Sha1,
@@ -15,28 +15,28 @@ pub enum ChecksumAlgorithm {
 }
 
 impl ChecksumAlgorithm {
-    pub fn name(&self) -> &str {
+    pub const fn name(&self) -> &str {
         match self {
-            ChecksumAlgorithm::Sha256 => "sha256",
-            ChecksumAlgorithm::Sha1 => "sha1",
-            ChecksumAlgorithm::Md5 => "md5",
+            Self::Sha256 => "sha256",
+            Self::Sha1 => "sha1",
+            Self::Md5 => "md5",
         }
     }
 
     pub fn from_name(name: &str) -> Option<Self> {
         match name.to_lowercase().as_str() {
-            "sha256" | "sha-256" => Some(ChecksumAlgorithm::Sha256),
-            "sha1" | "sha-1" => Some(ChecksumAlgorithm::Sha1),
-            "md5" => Some(ChecksumAlgorithm::Md5),
+            "sha256" | "sha-256" => Some(Self::Sha256),
+            "sha1" | "sha-1" => Some(Self::Sha1),
+            "md5" => Some(Self::Md5),
             _ => None,
         }
     }
 
-    pub fn hex_length(&self) -> usize {
+    pub const fn hex_length(&self) -> usize {
         match self {
-            ChecksumAlgorithm::Sha256 => 64,
-            ChecksumAlgorithm::Sha1 => 40,
-            ChecksumAlgorithm::Md5 => 32,
+            Self::Sha256 => 64,
+            Self::Sha1 => 40,
+            Self::Md5 => 32,
         }
     }
 }
@@ -51,7 +51,7 @@ pub struct ChecksumResult {
 
 pub fn compute_checksum(path: &Path, algorithm: &ChecksumAlgorithm) -> Result<String, String> {
     let mut file =
-        File::open(path).map_err(|e| format!("Failed to open file for checksum: {}", e))?;
+        File::open(path).map_err(|e| format!("Failed to open file for checksum: {e}"))?;
     match algorithm {
         ChecksumAlgorithm::Sha256 => {
             let mut hasher = Sha256::new();
@@ -59,7 +59,7 @@ pub fn compute_checksum(path: &Path, algorithm: &ChecksumAlgorithm) -> Result<St
             loop {
                 let bytes_read = file
                     .read(&mut buffer)
-                    .map_err(|e| format!("Read error during SHA-256: {}", e))?;
+                    .map_err(|e| format!("Read error during SHA-256: {e}"))?;
                 if bytes_read == 0 {
                     break;
                 }
@@ -73,7 +73,7 @@ pub fn compute_checksum(path: &Path, algorithm: &ChecksumAlgorithm) -> Result<St
             loop {
                 let bytes_read = file
                     .read(&mut buffer)
-                    .map_err(|e| format!("Read error during SHA-1: {}", e))?;
+                    .map_err(|e| format!("Read error during SHA-1: {e}"))?;
                 if bytes_read == 0 {
                     break;
                 }
@@ -87,7 +87,7 @@ pub fn compute_checksum(path: &Path, algorithm: &ChecksumAlgorithm) -> Result<St
             loop {
                 let bytes_read = file
                     .read(&mut buffer)
-                    .map_err(|e| format!("Read error during MD5: {}", e))?;
+                    .map_err(|e| format!("Read error during MD5: {e}"))?;
                 if bytes_read == 0 {
                     break;
                 }
@@ -108,8 +108,8 @@ pub fn verify_checksum(
         Err(_) => {
             return ChecksumResult {
                 algorithm: *algorithm,
-                expected: expected_hex.to_string(),
-                actual: "error".to_string(),
+                expected: expected_hex.to_owned(),
+                actual: "error".to_owned(),
                 passed: false,
             }
         }

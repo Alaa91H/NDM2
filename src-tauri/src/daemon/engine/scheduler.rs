@@ -120,9 +120,9 @@ impl SmartScheduler {
                     end_hour,
                     end_minute,
                 } => {
-                    let start = *start_hour as u32 * 60 + *start_minute as u32;
-                    let end = *end_hour as u32 * 60 + *end_minute as u32;
-                    let current = current_hour as u32 * 60 + current_minute as u32;
+                    let start = u32::from(*start_hour) * 60 + u32::from(*start_minute);
+                    let end = u32::from(*end_hour) * 60 + u32::from(*end_minute);
+                    let current = u32::from(current_hour) * 60 + u32::from(current_minute);
                     if start <= end {
                         current >= start && current < end
                     } else {

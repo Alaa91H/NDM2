@@ -115,24 +115,24 @@ pub struct TimestampedEvent {
 impl EngineEvent {
     fn task_id(&self) -> Option<&str> {
         match self {
-            EngineEvent::DownloadStarted { task_id, .. }
-            | EngineEvent::DownloadProgress { task_id, .. }
-            | EngineEvent::DownloadComplete { task_id, .. }
-            | EngineEvent::DownloadFailed { task_id, .. }
-            | EngineEvent::DownloadPaused { task_id, .. }
-            | EngineEvent::DownloadResumed { task_id, .. }
-            | EngineEvent::DownloadCancelled { task_id, .. }
-            | EngineEvent::SegmentStolen { task_id, .. }
-            | EngineEvent::ConnectionsAdjusted { task_id, .. }
-            | EngineEvent::RetryScheduled { task_id, .. }
-            | EngineEvent::ChecksumVerified { task_id, .. }
-            | EngineEvent::MirrorFound { task_id, .. }
-            | EngineEvent::SpeedChanged { task_id, .. }
-            | EngineEvent::QueueChanged { task_id, .. }
-            | EngineEvent::BandwidthAllocated { task_id, .. }
-            | EngineEvent::SchedulerTriggered { task_id, .. }
-            | EngineEvent::RuleApplied { task_id, .. }
-            | EngineEvent::ProfileSwitched { task_id, .. } => Some(task_id),
+            Self::DownloadStarted { task_id, .. }
+            | Self::DownloadProgress { task_id, .. }
+            | Self::DownloadComplete { task_id, .. }
+            | Self::DownloadFailed { task_id, .. }
+            | Self::DownloadPaused { task_id, .. }
+            | Self::DownloadResumed { task_id, .. }
+            | Self::DownloadCancelled { task_id, .. }
+            | Self::SegmentStolen { task_id, .. }
+            | Self::ConnectionsAdjusted { task_id, .. }
+            | Self::RetryScheduled { task_id, .. }
+            | Self::ChecksumVerified { task_id, .. }
+            | Self::MirrorFound { task_id, .. }
+            | Self::SpeedChanged { task_id, .. }
+            | Self::QueueChanged { task_id, .. }
+            | Self::BandwidthAllocated { task_id, .. }
+            | Self::SchedulerTriggered { task_id, .. }
+            | Self::RuleApplied { task_id, .. }
+            | Self::ProfileSwitched { task_id, .. } => Some(task_id),
         }
     }
 }
@@ -192,12 +192,9 @@ impl EventBus {
     pub fn publish(&self, event: EngineEvent) {
         // Phase 1: lock + decide whether to store or queue
         let (ts_event, subscriber_clone) = {
-            let mut inner = match self.inner.lock() {
-                Ok(g) => g,
-                Err(_) => {
-                    log::error!("EventBus: mutex poisoned, dropping event");
-                    return;
-                }
+            let mut inner = if let Ok(g) = self.inner.lock() { g } else {
+                log::error!("EventBus: mutex poisoned, dropping event");
+                return;
             };
 
             if inner.publish_depth > 0 {
@@ -209,7 +206,7 @@ impl EventBus {
             inner.publish_depth = 1;
 
             let id = inner.next_id.fetch_add(1, Ordering::Relaxed);
-            let task_id_opt = event.task_id().map(|s| s.to_string());
+            let task_id_opt = event.task_id().map(std::borrow::ToOwned::to_owned);
             let ts_event = TimestampedEvent {
                 id,
                 event,
@@ -219,13 +216,13 @@ impl EventBus {
 
             // Rotate log if at capacity.
             if inner.event_log.len() >= inner.max_log_size {
-                let drain_count = inner.max_log_size / 4;
+                let drain_count = (inner.max_log_size / 4).max(1);
                 inner.event_log.drain(..drain_count);
                 let to_index: Vec<(String, usize)> = inner
                     .event_log
                     .iter()
                     .enumerate()
-                    .filter_map(|(i, evt)| evt.event.task_id().map(|tid| (tid.to_string(), i)))
+                    .filter_map(|(i, evt)| evt.event.task_id().map(|tid| (tid.to_owned(), i)))
                     .collect();
                 inner.task_index.clear();
                 for (tid, idx) in to_index {
@@ -249,11 +246,11 @@ impl EventBus {
         for sub in &subscriber_clone {
             let _ = catch_unwind(AssertUnwindSafe(|| sub(&ts_event))).map_err(|e| {
                 let msg = if let Some(s) = e.downcast_ref::<&str>() {
-                    s.to_string()
+                    (*s).to_owned()
                 } else if let Some(s) = e.downcast_ref::<String>() {
                     s.clone()
                 } else {
-                    "unknown panic".to_string()
+                    "unknown panic".to_owned()
                 };
                 log::error!("EventBus: subscriber panicked: {msg}");
             });
@@ -339,8 +336,7 @@ impl EventBus {
     pub fn subscriber_count(&self) -> usize {
         self.inner
             .lock()
-            .map(|inner| inner.subscribers.len())
-            .unwrap_or(0)
+            .map_or(0, |inner| inner.subscribers.len())
     }
 }
 

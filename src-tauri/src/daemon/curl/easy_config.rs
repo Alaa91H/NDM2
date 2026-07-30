@@ -11,7 +11,9 @@ use ::curl::easy::{
     TimeCondition, WriteError,
 };
 
-use super::*;
+use super::{
+    proxy_resolves_to_internal, safe_value, CurlTransferConfig, DirectDownloadPlan, SegmentProgress,
+};
 use crate::daemon::direct::FileWriter;
 use crate::daemon::utils::DEFAULT_USER_AGENT;
 use sha2::Digest;
@@ -33,11 +35,17 @@ unsafe fn raw_setopt_str(
 ) -> Result<(), String> {
     let c_val = std::ffi::CString::new(value)
         .map_err(|e| format!("Could not convert option to CString: {e}"))?;
-    let code = unsafe { curl_sys::curl_easy_setopt(easy_ptr, option, c_val.as_ptr()) };
+    // Leak the CString intentionally: libcurl either strdup's the string
+    // (7.52+) or stores the raw pointer. Leaking ensures the pointer
+    // remains valid for the lifetime of the easy handle regardless of
+    // libcurl version. On failure, free it since curl didn't take it.
+    let ptr = c_val.into_raw();
+    let code = unsafe { curl_sys::curl_easy_setopt(easy_ptr, option, ptr) };
     if code == curl_sys::CURLE_OK {
         Ok(())
     } else {
-        Err(format!("libcurl rejected option (code {})", code))
+        unsafe { drop(std::ffi::CString::from_raw(ptr)) }
+        Err(format!("libcurl rejected option (code {code})"))
     }
 }
 
@@ -50,7 +58,7 @@ unsafe fn raw_setopt_long(
     if code == curl_sys::CURLE_OK {
         Ok(())
     } else {
-        Err(format!("libcurl rejected option (code {})", code))
+        Err(format!("libcurl rejected option (code {code})"))
     }
 }
 
@@ -74,7 +82,7 @@ fn parse_rate_to_bytes(rate_str: &str) -> Option<u64> {
     Some((num * multiplier as f64) as u64)
 }
 
-pub(crate) struct SegmentWriter {
+pub struct SegmentWriter {
     pub(super) file: File,
     pub(super) progress: SegmentProgress,
     pub(super) streaming_hasher: Option<sha2::Sha256>,
@@ -92,11 +100,11 @@ impl Handler for SegmentWriter {
             Ok(()) => {
                 self.progress
                     .downloaded
-                    .fetch_add(data.len() as u64, Ordering::Relaxed);
+                    .fetch_add(data.len() as u64, Ordering::Release);
                 Ok(data.len())
             }
             Err(e) => {
-                log::warn!("SegmentWriter write error: {}", e);
+                log::warn!("SegmentWriter write error: {e}");
                 self.progress.abort.store(true, Ordering::Relaxed);
                 Err(WriteError::Pause)
             }
@@ -117,7 +125,7 @@ impl Handler for SegmentWriter {
             // The first token is the HTTP version (e.g., "1.1", "2").
             if let Some(ver) = parts.next() {
                 if let Ok(mut cap) = self.progress.capture.lock() {
-                    cap.http_version = Some(ver.to_string());
+                    cap.http_version = Some(ver.to_owned());
                 }
             }
             // The second token is the status code.
@@ -147,7 +155,7 @@ impl Handler for SegmentWriter {
             }
             "etag" if crate::daemon::utils::is_strong_etag(value) => {
                 if let Ok(mut cap) = self.progress.capture.lock() {
-                    cap.validator = Some(value.to_string());
+                    cap.validator = Some(value.to_owned());
                 }
             }
             "content-encoding" if !value.eq_ignore_ascii_case("identity") => {
@@ -158,7 +166,7 @@ impl Handler for SegmentWriter {
             "last-modified" => {
                 if let Ok(mut cap) = self.progress.capture.lock() {
                     if cap.validator.is_none() {
-                        cap.validator = Some(value.to_string());
+                        cap.validator = Some(value.to_owned());
                     }
                 }
             }
@@ -189,8 +197,9 @@ impl Drop for SegmentWriter {
     fn drop(&mut self) {
         if let Some(hasher) = self.streaming_hasher.take() {
             let hex = format!("{:x}", hasher.finalize());
-            if let Ok(mut slot) = self.progress.streaming_digest_out.lock() {
-                *slot = Some(hex);
+            match self.progress.streaming_digest_out.lock() {
+                Ok(mut slot) => *slot = Some(hex),
+                Err(e) => log::warn!("SegmentWriter: streaming_digest_out lock poisoned: {e}"),
             }
         }
     }
@@ -198,7 +207,7 @@ impl Drop for SegmentWriter {
 
 const HTML_HEAD_CAPTURE_LIMIT: usize = 64 * 1024;
 #[derive(Default)]
-pub(crate) struct HtmlHeadCapture {
+pub struct HtmlHeadCapture {
     body: Vec<u8>,
     http_version: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
@@ -219,7 +228,7 @@ impl Handler for HtmlHeadCapture {
         if let Some(rest) = line.strip_prefix("HTTP/") {
             if let Some(ver) = rest.split_whitespace().next() {
                 if let Ok(mut v) = self.http_version.lock() {
-                    *v = Some(ver.to_string());
+                    *v = Some(ver.to_owned());
                 }
             }
         }
@@ -258,11 +267,11 @@ fn installed_ca_bundle_path() -> &'static str {
 
 /// Returns true when the URL scheme requires TLS certificate verification
 /// against a CA bundle AND the linked TLS backend has no operating-system
-/// trust store to fall back on. Schannel (Windows) and SecureTransport
+/// trust store to fall back on. Schannel (Windows) and `SecureTransport`
 /// (macOS) verify against the OS store; OpenSSL and most other backends on
 /// Windows have no default trust path, so a missing cacert.pem means every
 /// HTTPS handshake fails (historically surfacing as the silent
-/// response_code=0 "completed with 0 bytes" bug).
+/// `response_code=0` "completed with 0 bytes" bug).
 fn tls_backend_needs_explicit_ca() -> bool {
     let version = ::curl::Version::get();
     let ssl = version.ssl_version().unwrap_or("");
@@ -284,7 +293,7 @@ pub fn init_download_ssl() {
     SSL_INIT.get_or_init(|| {
         let ca_path = installed_ca_bundle_path();
         if !ca_path.is_empty() {
-            log::info!("curl SSL using bundled CA: {}", ca_path);
+            log::info!("curl SSL using bundled CA: {ca_path}");
         } else if tls_backend_needs_explicit_ca() {
             log::error!(
                 "No bundled CA certificate found and the TLS backend ({}) has no OS trust store; \
@@ -303,11 +312,9 @@ pub fn init_download_ssl() {
         let build_prefix = option_env!("NOVA_BUILD_LIBCURL_PREFIX").unwrap_or("unknown");
         if build_link_mode.contains("fallback") || build_prefix == "unmanaged" {
             log::warn!(
-                "NOVA libcurl runtime: using fallback/system libcurl (link_mode={}, prefix={}). \
+                "NOVA libcurl runtime: using fallback/system libcurl (link_mode={build_link_mode}, prefix={build_prefix}). \
                  Native statically-built libcurl is not linked. TLS backend and protocol support \
-                 may differ from production builds.",
-                build_link_mode,
-                build_prefix
+                 may differ from production builds."
             );
         }
     });
@@ -329,12 +336,12 @@ fn if_range_header(plan: &DirectDownloadPlan) -> Option<String> {
     let validator = plan.validator.as_ref()?;
     if plan.validator_is_etag {
         if crate::daemon::utils::is_strong_etag(validator) {
-            Some(format!("If-Range: {}", validator))
+            Some(format!("If-Range: {validator}"))
         } else {
             None
         }
     } else {
-        Some(format!("If-Range: {}", validator))
+        Some(format!("If-Range: {validator}"))
     }
 }
 
@@ -349,7 +356,7 @@ fn direct_headers(config: &CurlTransferConfig) -> Result<Option<List>, String> {
         {
             if line.contains(':') {
                 if !safe_value(line) {
-                    return Err("Rejected unsafe header value".to_string());
+                    return Err("Rejected unsafe header value".to_owned());
                 }
                 list.append(line)
                     .map_err(|e| format!("Could not apply header: {e}"))?;
@@ -360,7 +367,7 @@ fn direct_headers(config: &CurlTransferConfig) -> Result<Option<List>, String> {
     Ok(if has_any { Some(list) } else { None })
 }
 
-pub(crate) fn apply_easy_options<H: Handler>(
+pub fn apply_easy_options<H: Handler>(
     easy: &mut Easy2<H>,
     plan: &DirectDownloadPlan,
     range: Option<(u64, u64)>,
@@ -387,7 +394,7 @@ pub(crate) fn apply_easy_options<H: Handler>(
     let mut conditional_headers: Vec<String> = Vec::new();
 
     if let Some((start, end)) = range {
-        easy.range(&format!("{}-{}", start, end))
+        easy.range(&format!("{start}-{end}"))
             .map_err(|e| format!("Could not configure range: {e}"))?;
     } else if plan.resumable {
         let existing = FileWriter::current_size(&plan.output_path);
@@ -401,10 +408,16 @@ pub(crate) fn apply_easy_options<H: Handler>(
     }
 
     if let Some(proxy) = plan.config.str_("proxy") {
+        if proxy_resolves_to_internal(proxy) {
+            return Err("Rejected proxy pointing to internal address".into());
+        }
         easy.proxy(proxy)
             .map_err(|e| format!("Could not configure proxy: {e}"))?;
     }
     if let Some(pre_proxy) = plan.config.str_("preProxy") {
+        if proxy_resolves_to_internal(pre_proxy) {
+            return Err("Rejected pre-proxy pointing to internal address".into());
+        }
         unsafe {
             raw_setopt_str(easy.raw(), CURLOPT_PRE_PROXY, pre_proxy)
                 .map_err(|e| format!("Could not configure pre-proxy: {e}"))?;
@@ -462,7 +475,7 @@ pub(crate) fn apply_easy_options<H: Handler>(
                      HTTPS downloads cannot be verified. Reinstall NOVA or provide a valid caCert option."
                 ));
             }
-            log::warn!("Could not set bundled CA file: {}", e);
+            log::warn!("Could not set bundled CA file: {e}");
         }
     }
     // Hard fail (instead of the historical silent response_code=0 "success")
@@ -515,7 +528,7 @@ pub(crate) fn apply_easy_options<H: Handler>(
     if let Some(jar) = plan.config.str_("cookieJar") {
         if jar.contains("..") || jar.starts_with('/') || jar.starts_with('\\') {
             return Err(
-                "cookieJar path must be a relative path within the working directory".to_string(),
+                "cookieJar path must be a relative path within the working directory".to_owned(),
             );
         }
         easy.cookie_jar(jar)
@@ -548,7 +561,7 @@ pub(crate) fn apply_easy_options<H: Handler>(
         }
     }
     if let Some(limit) = plan.config.u64_("lowSpeedLimitBytes").filter(|v| *v > 0) {
-        easy.low_speed_limit(limit.min(u32::MAX as u64) as u32)
+        easy.low_speed_limit(limit.min(u64::from(u32::MAX)) as u32)
             .map_err(|e| format!("Could not configure low-speed limit: {e}"))?;
     }
     if let Some(sec) = plan.config.u64_("speedTimeSec").filter(|v| *v > 0) {
@@ -577,7 +590,7 @@ pub(crate) fn apply_easy_options<H: Handler>(
             .map_err(|e| format!("Could not configure connect timeout: {e}"))?;
     }
     if let Some(max) = plan.config.u64_("maxRedirs") {
-        easy.max_redirections(max.min(u32::MAX as u64) as u32)
+        easy.max_redirections(max.min(u64::from(u32::MAX)) as u32)
             .map_err(|e| format!("Could not configure redirect limit: {e}"))?;
     }
     if plan.config.u64_("connectTimeoutSec").is_none() {
@@ -649,7 +662,7 @@ pub(crate) fn apply_easy_options<H: Handler>(
         if netrc_file.contains("..") || netrc_file.starts_with('/') || netrc_file.starts_with('\\')
         {
             return Err(
-                "netrcFile path must be a relative path within the working directory".to_string(),
+                "netrcFile path must be a relative path within the working directory".to_owned(),
             );
         }
         unsafe {
@@ -660,7 +673,7 @@ pub(crate) fn apply_easy_options<H: Handler>(
     if let Some(cert) = plan.config.str_("cert") {
         if cert.contains("..") || cert.starts_with('/') || cert.starts_with('\\') {
             return Err(
-                "cert path must be a relative path within the working directory".to_string(),
+                "cert path must be a relative path within the working directory".to_owned(),
             );
         }
         easy.ssl_cert(cert)
@@ -673,7 +686,7 @@ pub(crate) fn apply_easy_options<H: Handler>(
     if let Some(key) = plan.config.str_("key") {
         if key.contains("..") || key.starts_with('/') || key.starts_with('\\') {
             return Err(
-                "key path must be a relative path within the working directory".to_string(),
+                "key path must be a relative path within the working directory".to_owned(),
             );
         }
         easy.ssl_key(key)
@@ -776,12 +789,12 @@ pub(crate) fn apply_easy_options<H: Handler>(
                     let mut part = form.part(name);
                     part.file_content(file_path);
                     part.add()
-                        .map_err(|e| format!("Could not add form file part '{}': {}", name, e))?;
+                        .map_err(|e| format!("Could not add form file part '{name}': {e}"))?;
                 } else {
                     let mut part = form.part(name);
                     part.contents(value.as_bytes());
                     part.add()
-                        .map_err(|e| format!("Could not add form field '{}': {}", name, e))?;
+                        .map_err(|e| format!("Could not add form field '{name}': {e}"))?;
                 }
             }
         }
@@ -832,7 +845,7 @@ pub(crate) fn apply_easy_options<H: Handler>(
             // Validate the target address to prevent SSRF bypass: a "safe" URL
             // hostname could be redirected to an internal IP via a resolve entry.
             crate::daemon::utils::is_safe_resolve_entry(entry.as_str())
-                .map_err(|e| format!("Rejected resolve entry '{}': {}", entry, e))?;
+                .map_err(|e| format!("Rejected resolve entry '{entry}': {e}"))?;
             list.append(entry.as_str())
                 .map_err(|e| format!("Could not add DNS resolve entry: {e}"))?;
         }
@@ -844,7 +857,7 @@ pub(crate) fn apply_easy_options<H: Handler>(
         let mut list = List::new();
         for entry in &connect_to_entries {
             crate::daemon::utils::is_safe_resolve_entry(entry.as_str())
-                .map_err(|e| format!("Rejected connect-to entry '{}': {}", entry, e))?;
+                .map_err(|e| format!("Rejected connect-to entry '{entry}': {e}"))?;
             list.append(entry.as_str())
                 .map_err(|e| format!("Could not add connect-to entry: {e}"))?;
         }
@@ -852,7 +865,7 @@ pub(crate) fn apply_easy_options<H: Handler>(
             .map_err(|e| format!("Could not configure connect-to overrides: {e}"))?;
     }
     if let Some(max_connects) = plan.config.u64_("maxConnects").filter(|v| *v > 0) {
-        easy.max_connects(max_connects.min(u32::MAX as u64) as u32)
+        easy.max_connects(max_connects.min(u64::from(u32::MAX)) as u32)
             .map_err(|e| format!("Could not configure max connects: {e}"))?;
     }
     match plan
@@ -943,7 +956,7 @@ pub(crate) fn apply_easy_options<H: Handler>(
     if let Some(crl) = plan.config.str_("crlFile") {
         if crl.contains("..") || crl.starts_with('/') || crl.starts_with('\\') {
             return Err(
-                "crlFile path must be a relative path within the working directory".to_string(),
+                "crlFile path must be a relative path within the working directory".to_owned(),
             );
         }
         easy.crlfile(crl)
@@ -1119,7 +1132,7 @@ pub(crate) fn apply_easy_options<H: Handler>(
                 .map_err(|e| format!("Could not add Want-Content-Digest header: {e}"))?;
         }
         if let Some(bearer) = plan.config.str_("oauth2Bearer") {
-            list.append(&format!("Authorization: Bearer {}", bearer))
+            list.append(&format!("Authorization: Bearer {bearer}"))
                 .map_err(|e| format!("Could not add OAuth2 bearer header: {e}"))?;
         }
         list
@@ -1131,10 +1144,10 @@ pub(crate) fn apply_easy_options<H: Handler>(
     }
     if let Some(etag_file) = plan.config.str_("etagCompare") {
         if let Ok(etag_value) = std::fs::read_to_string(etag_file) {
-            let etag_value = etag_value.trim().to_string();
+            let etag_value = etag_value.trim().to_owned();
             if !etag_value.is_empty() {
                 header_list
-                    .append(&format!("If-None-Match: {}", etag_value))
+                    .append(&format!("If-None-Match: {etag_value}"))
                     .map_err(|e| format!("Could not add If-None-Match header: {e}"))?;
             }
         }
@@ -1144,7 +1157,7 @@ pub(crate) fn apply_easy_options<H: Handler>(
     Ok(())
 }
 
-pub(crate) fn create_easy_for_range_ext(
+pub fn create_easy_for_range_ext(
     plan: &DirectDownloadPlan,
     path: &Path,
     progress: SegmentProgress,
@@ -1164,7 +1177,7 @@ pub(crate) fn create_easy_for_range_ext(
         .open(path)
         .map_err(|e| format!("Could not open segment output file: {e}"))?;
     if let Some(size) = preallocate_bytes {
-        let current = file.metadata().map(|m| m.len()).unwrap_or(0);
+        let current = file.metadata().map_or(0, |m| m.len());
         if current == 0 && size > 0 {
             file.set_len(size).map_err(|e| {
                 format!("Could not preallocate segment file (disk may be full): {e}")
@@ -1189,6 +1202,7 @@ pub(crate) fn create_easy_for_range_ext(
 fn reject_unsafe_protocols(value: &str, field: &str) -> Result<(), String> {
     const FORBIDDEN: &[&str] = &[
         "file", "gopher", "scp", "smb", "smbs", "telnet", "dict", "ldap",
+        "tftp", "gophers", "imap", "imaps", "smtp", "smtps",
     ];
     let lower = value.to_lowercase();
     for &bad in FORBIDDEN {
@@ -1196,8 +1210,7 @@ fn reject_unsafe_protocols(value: &str, field: &str) -> Result<(), String> {
         for token in lower.split(|c: char| c == ',' || c.is_whitespace()) {
             if token == bad {
                 return Err(format!(
-                    "Protocol '{}' is not allowed in curl '{}' option (would bypass local-file protections)",
-                    bad, field
+                    "Protocol '{bad}' is not allowed in curl '{field}' option (would bypass local-file protections)"
                 ));
             }
         }

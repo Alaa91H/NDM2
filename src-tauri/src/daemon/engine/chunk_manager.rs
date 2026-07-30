@@ -104,7 +104,7 @@ impl ChunkManager {
         let adjusted = ideal_chunk * disk_ratio;
 
         // Reduce chunk size under memory pressure
-        let memory_factor = 1.0 - self.memory_pressure * 0.5;
+        let memory_factor = self.memory_pressure.mul_add(-0.5, 1.0);
         let adjusted = adjusted * memory_factor;
 
         // Reduce chunk if remaining data is small
@@ -119,7 +119,7 @@ impl ChunkManager {
         let adjusted = adjusted * remaining_factor;
 
         // Smooth the transition (EMA with alpha=0.3)
-        let new_chunk = (self.current_chunk_bytes as f64 * 0.7 + adjusted * 0.3) as u64;
+        let new_chunk = (self.current_chunk_bytes as f64).mul_add(0.7, adjusted * 0.3) as u64;
 
         self.current_chunk_bytes = new_chunk.clamp(self.min_chunk, self.max_chunk);
         self.current_chunk_bytes
@@ -152,7 +152,7 @@ impl ChunkManager {
     }
 
     /// Current recommended chunk size.
-    pub fn current_chunk(&self) -> u64 {
+    pub const fn current_chunk(&self) -> u64 {
         self.current_chunk_bytes
     }
 

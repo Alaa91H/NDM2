@@ -10,11 +10,11 @@ fn opt_str(map: &HashMap<String, Value>, key: &str) -> Option<String> {
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|v| !v.is_empty())
-        .map(str::to_string)
+        .map(str::to_owned)
 }
 
 fn opt_bool(map: &HashMap<String, Value>, key: &str) -> Option<bool> {
-    map.get(key).and_then(|v| v.as_bool())
+    map.get(key).and_then(serde_json::Value::as_bool)
 }
 
 fn opt_u64(map: &HashMap<String, Value>, key: &str) -> Option<u64> {
@@ -25,7 +25,7 @@ fn opt_u64(map: &HashMap<String, Value>, key: &str) -> Option<u64> {
 }
 
 fn opt_f64(map: &HashMap<String, Value>, key: &str) -> Option<f64> {
-    map.get(key).and_then(|v| v.as_f64())
+    map.get(key).and_then(serde_json::Value::as_f64)
 }
 
 fn opt_str_vec(map: &HashMap<String, Value>, key: &str) -> Vec<String> {
@@ -36,7 +36,7 @@ fn opt_str_vec(map: &HashMap<String, Value>, key: &str) -> Vec<String> {
                 .filter_map(|v| v.as_str())
                 .map(str::trim)
                 .filter(|v| !v.is_empty())
-                .map(str::to_string)
+                .map(str::to_owned)
                 .collect()
         })
         .unwrap_or_default()
@@ -372,7 +372,18 @@ impl CurlTransferConfig {
 
     pub fn retry_policy(&self) -> RetryPolicy {
         RetryPolicy {
-            attempts: self.retry_count.unwrap_or(0).saturating_add(1).min(50),
+            attempts: self
+                .retry_count
+                .or_else(|| {
+                    if self.retry_all_errors.unwrap_or(false) {
+                        Some(2)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0)
+                .saturating_add(1)
+                .min(50),
             delay: std::time::Duration::from_secs(self.retry_delay_sec.unwrap_or(2).min(3600)),
             max_total_time: self
                 .retry_max_time_sec
@@ -453,6 +464,7 @@ impl CurlTransferConfig {
         insert_str!("preProxy", self.pre_proxy.as_ref());
         insert_str!("noproxy", self.noproxy.as_ref());
         insert_str!("sourceAddress", self.source_address.as_ref());
+        insert_str!("interface", self.source_address.as_ref());
         insert_str!("userAgent", self.user_agent.as_ref());
         insert_str!("referer", self.referer.as_ref());
         insert_str!("headers", self.headers.as_ref());
@@ -722,7 +734,7 @@ impl From<&HashMap<String, Value>> for CurlTransferConfig {
             rie_strategy: opt_str(map, "rieStrategy"),
             rie_connections: map
                 .get("rieConnections")
-                .and_then(|v| v.as_u64())
+                .and_then(serde_json::Value::as_u64)
                 .map(|n| n as u32),
         }
     }

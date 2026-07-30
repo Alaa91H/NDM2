@@ -142,12 +142,12 @@ fn is_safe_extra_arg(arg: &str) -> bool {
     // For flags, only allow known-safe ones (whitelist approach)
     if let Some(allowed) = ALLOWED_YTDLP_ARGS
         .iter()
-        .find(|allowed| arg == **allowed || arg.starts_with(&format!("{}=", allowed)))
+        .find(|allowed| arg == **allowed || arg.starts_with(&format!("{allowed}=")))
     {
         // Reject path traversal in flags that accept file paths
-        if let Some(value) = arg.strip_prefix(&format!("{}=", allowed)) {
+        if let Some(value) = arg.strip_prefix(&format!("{allowed}=")) {
             if PATH_VALUE_FLAGS.contains(allowed) && value.contains("..") {
-                log::warn!("Rejected path traversal in extra_arg: {}", arg);
+                log::warn!("Rejected path traversal in extra_arg: {arg}");
                 return false;
             }
         }
@@ -164,7 +164,7 @@ pub fn start_ytdlp_process(state: &SharedState, id: &str) {
     drop(jobs);
 
     if let Some(job) = record {
-        log::info!("Starting yt-dlp process for task {}", id);
+        log::info!("Starting yt-dlp process for task {id}");
         let mut cmd = Command::new(&state.ytdlp_bin);
         hide_command_window(&mut cmd);
         match cmd
@@ -176,7 +176,7 @@ pub fn start_ytdlp_process(state: &SharedState, id: &str) {
             Ok(mut child) => {
                 let child_pid = child.id();
                 let state2 = state.clone();
-                let id2 = id.to_string();
+                let id2 = id.to_owned();
 
                 // Read stdout and stderr concurrently to prevent deadlock
                 // when the pipe buffer fills (CRITICAL #18).
@@ -201,7 +201,7 @@ pub fn start_ytdlp_process(state: &SharedState, id: &str) {
                             let reader = BufReader::new(r);
                             for line in reader.lines().map_while(Result::ok) {
                                 if !line.is_empty() {
-                                    log::debug!("yt-dlp [{}]: {}", id2, line);
+                                    log::debug!("yt-dlp [{id2}]: {line}");
                                 }
                             }
                         }
@@ -230,12 +230,12 @@ pub fn start_ytdlp_process(state: &SharedState, id: &str) {
                                 let output_verified = status.is_some_and(|s| s.success())
                                     && media_output_produced(&current.task);
                                 if status.is_some_and(|s| s.success()) && output_verified {
-                                    current.task.status = "completed".to_string();
+                                    current.task.status = "completed".to_owned();
                                     current.task.downloaded_bytes = current.task.size_bytes;
                                     current.task.speed_bytes_per_sec = 0;
                                     current.task.time_left_seconds = 0;
-                                    current.task.engine_status = Some("complete".to_string());
-                                    notif = format!("Download completed: {}", task_name);
+                                    current.task.engine_status = Some("complete".to_owned());
+                                    notif = format!("Download completed: {task_name}");
                                     if let Ok(mut stats) = state2.download_stats.lock() {
                                         stats.total_completed += 1;
                                         stats.total_downloaded_bytes += current.task.size_bytes;
@@ -245,25 +245,24 @@ pub fn start_ytdlp_process(state: &SharedState, id: &str) {
                                         "yt-dlp exited 0 but produced no output file for task {} (save_path: {})",
                                         id2, current.task.save_path
                                     );
-                                    current.task.status = "error".to_string();
+                                    current.task.status = "error".to_owned();
                                     current.task.speed_bytes_per_sec = 0;
-                                    current.task.engine_status = Some("no-output".to_string());
+                                    current.task.engine_status = Some("no-output".to_owned());
                                     current.task.error_message = Some(
-                                        "The media engine reported success but no output file was produced"
-                                            .to_string(),
+                                        "The media engine reported success but no output file was produced".to_owned(),
                                     );
-                                    notif = format!("Download failed: {}", task_name);
+                                    notif = format!("Download failed: {task_name}");
                                     if let Ok(mut stats) = state2.download_stats.lock() {
                                         stats.total_failed += 1;
                                     }
                                 } else if current.task.status != "paused" {
-                                    current.task.status = "error".to_string();
+                                    current.task.status = "error".to_owned();
                                     current.task.speed_bytes_per_sec = 0;
                                     current.task.engine_status = Some(format!(
                                         "exit-{}",
                                         status.map_or(-1, |s| s.code().unwrap_or(-1))
                                     ));
-                                    notif = format!("Download failed: {}", task_name);
+                                    notif = format!("Download failed: {task_name}");
                                     if let Ok(mut stats) = state2.download_stats.lock() {
                                         stats.total_failed += 1;
                                     }
@@ -290,17 +289,17 @@ pub fn start_ytdlp_process(state: &SharedState, id: &str) {
                     }));
                     if let Err(panic_info) = result {
                         let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
-                            format!("yt-dlp worker panicked: {}", s)
+                            format!("yt-dlp worker panicked: {s}")
                         } else if let Some(s) = panic_info.downcast_ref::<String>() {
-                            format!("yt-dlp worker panicked: {}", s)
+                            format!("yt-dlp worker panicked: {s}")
                         } else {
-                            "yt-dlp worker panicked with unknown payload".to_string()
+                            "yt-dlp worker panicked with unknown payload".to_owned()
                         };
-                        log::error!("{} (task: {})", msg, id2);
+                        log::error!("{msg} (task: {id2})");
                         let mut jobs = lock_or_err!(state2.media_jobs);
                         if let Some(current) = jobs.get_mut(&id2) {
-                            current.task.status = "error".to_string();
-                            current.task.engine_status = Some("worker-panicked".to_string());
+                            current.task.status = "error".to_owned();
+                            current.task.engine_status = Some("worker-panicked".to_owned());
                             current.task.error_message = Some(msg);
                         }
                         state2.mark_dirty();
@@ -311,24 +310,24 @@ pub fn start_ytdlp_process(state: &SharedState, id: &str) {
                     let mut jobs = lock_or_err!(state.media_jobs);
                     if let Some(j) = jobs.get_mut(id) {
                         j.child = Some(child_pid);
-                        j.task.status = "downloading".to_string();
-                        j.task.engine_status = Some("running".to_string());
+                        j.task.status = "downloading".to_owned();
+                        j.task.engine_status = Some("running".to_owned());
                     }
                     task_data = jobs.get(id).map(|j| j.task.clone());
                 }
                 state.mark_dirty();
                 if let Some(task_data) = task_data {
                     if let Ok(mut snapshot) = state.task_snapshot.lock() {
-                        snapshot.insert(id.to_string(), task_data);
+                        snapshot.insert(id.to_owned(), task_data);
                     }
                 }
             }
             Err(e) => {
-                log::error!("Failed to start yt-dlp: {}", e);
+                log::error!("Failed to start yt-dlp: {e}");
                 let mut jobs = lock_or_err!(state.media_jobs);
                 if let Some(j) = jobs.get_mut(id) {
-                    j.task.status = "error".to_string();
-                    j.task.error_message = Some(format!("Failed to start: {}", e));
+                    j.task.status = "error".to_owned();
+                    j.task.error_message = Some(format!("Failed to start: {e}"));
                 }
                 state.mark_dirty();
             }
@@ -337,7 +336,7 @@ pub fn start_ytdlp_process(state: &SharedState, id: &str) {
 }
 
 fn progress_value<'a>(payload: &'a str, key: &str) -> Option<&'a str> {
-    let prefix = format!("{}=", key);
+    let prefix = format!("{key}=");
     payload
         .split_whitespace()
         .find_map(|part| part.strip_prefix(&prefix))
@@ -356,10 +355,10 @@ fn parse_progress_u64(value: &str) -> Option<u64> {
 }
 
 /// Verify that a finished yt-dlp task actually produced a non-empty file.
-/// Checks the recorded save_path first, then sibling files sharing the same
+/// Checks the recorded `save_path` first, then sibling files sharing the same
 /// stem (format merges change the extension, e.g. `.mkv`; audio extraction
 /// produces `.mp3`/`.opus`, and thumbnails/subtitles are skipped because
-/// they never become the recorded save_path).
+/// they never become the recorded `save_path`).
 fn media_output_produced(task: &crate::daemon::types::Task) -> bool {
     if task.save_path.is_empty() {
         // No destination was ever reported; nothing to verify against, so
@@ -369,8 +368,7 @@ fn media_output_produced(task: &crate::daemon::types::Task) -> bool {
     let path = std::path::Path::new(&task.save_path);
     let non_empty = |p: &std::path::Path| {
         std::fs::metadata(p)
-            .map(|m| m.is_file() && m.len() > 0)
-            .unwrap_or(false)
+            .is_ok_and(|m| m.is_file() && m.len() > 0)
     };
     if non_empty(path) {
         return true;
@@ -417,7 +415,7 @@ pub fn update_ytdlp_progress(state: &SharedState, id: &str, text: &str) {
     let mut jobs = match state.media_jobs.lock() {
         Ok(guard) => guard,
         Err(poisoned) => {
-            log::error!("Mutex poisoned in update_ytdlp_progress: {}", poisoned);
+            log::error!("Mutex poisoned in update_ytdlp_progress: {poisoned}");
             return;
         }
     };
@@ -428,12 +426,12 @@ pub fn update_ytdlp_progress(state: &SharedState, id: &str, text: &str) {
 
     for line in text.lines() {
         if let Some(dest) = line.strip_prefix("Destination: ") {
-            record.task.save_path = dest.trim().to_string();
+            record.task.save_path = dest.trim().to_owned();
             if let Some(name) = std::path::Path::new(dest.trim())
                 .file_name()
                 .and_then(|n| n.to_str())
             {
-                record.task.name = name.to_string();
+                record.task.name = name.to_owned();
             }
         }
 
@@ -473,7 +471,7 @@ pub fn update_ytdlp_progress(state: &SharedState, id: &str, text: &str) {
     state.mark_dirty();
     if let Some(task_data) = task_data {
         if let Ok(mut snapshot) = state.task_snapshot.lock() {
-            snapshot.insert(id.to_string(), task_data);
+            snapshot.insert(id.to_owned(), task_data);
         }
     }
 }
@@ -483,31 +481,33 @@ pub fn parse_size(s: &str) -> Option<u64> {
     if s.is_empty() {
         return None;
     }
-    // Try to split between numeric part and unit suffix.
-    // Units are either 2 chars (KB, MB, GB, TB, KiB, MiB, GiB, TiB) or 1 char (B).
-    let unit_start = s.len().saturating_sub(2);
-    let (num_str, unit) = s.split_at(unit_start);
-    let trimmed_unit = unit.trim();
-    if trimmed_unit.len() == 2 && !trimmed_unit.contains(|c: char| c.is_ascii_digit()) {
-        let num: f64 = num_str.trim().parse().ok()?;
-        match trimmed_unit {
-            "KB" | "KiB" => Some((num * 1024.0) as u64),
-            "MB" | "MiB" => Some((num * 1024.0 * 1024.0) as u64),
-            "GB" | "GiB" => Some((num * 1024.0 * 1024.0 * 1024.0) as u64),
-            "TB" | "TiB" => Some((num * 1024.0 * 1024.0 * 1024.0 * 1024.0) as u64),
-            _ => s.parse::<f64>().ok().map(|n| n as u64),
-        }
-    } else {
-        // Single-letter unit (B) or no unit
-        let unit_start = s.len().saturating_sub(1);
-        let (num_str, unit) = s.split_at(unit_start);
-        if unit.trim() == "B" {
-            let num: f64 = num_str.trim().parse().ok()?;
-            Some(num as u64)
-        } else {
-            s.parse::<f64>().ok().map(|n| n as u64)
+    let known_suffixes: &[(&str, u64)] = &[
+        ("TiB", 1024 * 1024 * 1024 * 1024),
+        ("GiB", 1024 * 1024 * 1024),
+        ("MiB", 1024 * 1024),
+        ("KiB", 1024),
+        ("TB", 1024 * 1024 * 1024 * 1024),
+        ("GB", 1024 * 1024 * 1024),
+        ("MB", 1024 * 1024),
+        ("KB", 1024),
+    ];
+    let upper = s.to_ascii_uppercase();
+    for (suffix, multiplier) in known_suffixes {
+        if let Some(rest) = upper.strip_suffix(suffix) {
+            let trimmed = rest.trim();
+            if !trimmed.is_empty() && !trimmed.contains(|c: char| c.is_ascii_alphabetic()) {
+                let num: f64 = trimmed.parse().ok()?;
+                return Some((num * *multiplier as f64) as u64);
+            }
         }
     }
+    if let Some(rest) = s.strip_suffix('B').or(s.strip_suffix('b')).map(str::trim) {
+        if !rest.is_empty() && !rest.contains(|c: char| c.is_ascii_alphabetic()) {
+            let num: f64 = rest.parse().ok()?;
+            return Some(num as u64);
+        }
+    }
+    s.parse::<f64>().ok().map(|n| n as u64)
 }
 
 pub fn parse_speed(s: &str) -> Option<u64> {
@@ -550,7 +550,7 @@ fn safe_cli_value(value: &str) -> bool {
 fn push_string_arg(args: &mut Vec<String>, flag: &str, value: Option<&str>) -> Result<(), String> {
     if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
         if !safe_cli_value(value) {
-            return Err(format!("Rejected unsafe value for {}", flag));
+            return Err(format!("Rejected unsafe value for {flag}"));
         }
         push_arg(args, flag, value);
     }
@@ -564,10 +564,10 @@ fn push_bool_flag(
     when_false: Option<&str>,
 ) {
     match enabled {
-        Some(true) => args.push(when_true.to_string()),
+        Some(true) => args.push(when_true.to_owned()),
         Some(false) => {
             if let Some(flag) = when_false {
-                args.push(flag.to_string());
+                args.push(flag.to_owned());
             }
         }
         None => {}
@@ -590,41 +590,41 @@ fn push_cookie_args(args: &mut Vec<String>, cookies: &str) {
     let looks_like_cookie_header =
         cookies.contains('=') && !cookies.ends_with(".txt") && !cookies.contains('\\');
     if looks_like_cookie_header {
-        push_arg(args, "--add-header", &format!("Cookie: {}", cookies));
+        push_arg(args, "--add-header", &format!("Cookie: {cookies}"));
     } else {
         push_arg(args, "--cookies", cookies);
     }
 }
 
-pub(crate) fn build_ytdlp_args_with_engines(
+pub fn build_ytdlp_args_with_engines(
     body: &CreateDownloadBody,
     ffmpeg_bin: Option<&str>,
 ) -> Result<Vec<String>, String> {
     let url = body.url.as_deref().unwrap_or("").trim();
     if url.is_empty() {
-        return Err("Missing url".to_string());
+        return Err("Missing url".to_owned());
     }
     if url.starts_with('-') {
-        return Err("Invalid url: must not start with '-'".to_string());
+        return Err("Invalid url: must not start with '-'".to_owned());
     }
 
     let media = body
         .media_options
         .as_ref()
-        .ok_or_else(|| "Missing media_options for yt-dlp task".to_string())?;
+        .ok_or_else(|| "Missing media_options for yt-dlp task".to_owned())?;
     let output_template = media
         .output_template
         .clone()
-        .unwrap_or_else(|| "%(title)s.%(ext)s".to_string());
+        .unwrap_or_else(|| "%(title)s.%(ext)s".to_owned());
     let mut args = vec![
-        "--no-colors".to_string(),
-        "--newline".to_string(),
-        "--progress-template".to_string(),
-        "stdout:NOVA_PROGRESS downloaded=%(progress.downloaded_bytes)s total=%(progress.total_bytes)s speed=%(progress.speed)s eta=%(progress.eta)s".to_string(),
-        "-o".to_string(),
+        "--no-colors".to_owned(),
+        "--newline".to_owned(),
+        "--progress-template".to_owned(),
+        "stdout:NOVA_PROGRESS downloaded=%(progress.downloaded_bytes)s total=%(progress.total_bytes)s speed=%(progress.speed)s eta=%(progress.eta)s".to_owned(),
+        "-o".to_owned(),
         output_template,
-        "--print".to_string(),
-        "after_move:Destination: %(filepath)s".to_string(),
+        "--print".to_owned(),
+        "after_move:Destination: %(filepath)s".to_owned(),
     ];
 
     if let Some(sp) = &body.save_path {
@@ -645,41 +645,38 @@ pub(crate) fn build_ytdlp_args_with_engines(
         }
     }
 
-    match media.mode.as_deref() {
-        Some("audio") => {
-            args.push("-x".to_string());
-            push_arg(
-                &mut args,
-                "--audio-format",
-                media.audio_format.as_deref().unwrap_or("mp3"),
-            );
-            if let Some(bitrate) = trimmed(&media.bitrate) {
-                push_arg(&mut args, "--audio-quality", bitrate);
-            }
+    if media.mode.as_deref() == Some("audio") {
+        args.push("-x".to_owned());
+        push_arg(
+            &mut args,
+            "--audio-format",
+            media.audio_format.as_deref().unwrap_or("mp3"),
+        );
+        if let Some(bitrate) = trimmed(&media.bitrate) {
+            push_arg(&mut args, "--audio-quality", bitrate);
         }
-        _ => {
-            let format_selector = if let Some(format_selector) = trimmed(&media.format_selector) {
-                format_selector.to_string()
-            } else if let Some(q) = trimmed(&media.quality).filter(|quality| *quality != "best") {
-                let height = q.strip_suffix('p').unwrap_or(q);
-                format!("bv*[height<={}]+ba/b[height<={}]", height, height)
-            } else {
-                "bv*+ba/b".to_string()
-            };
-            push_arg(&mut args, "-f", &format_selector);
-            if let Some(format_sort) = trimmed(&media.format_sort) {
-                push_arg(&mut args, "--format-sort", format_sort);
-            }
+    } else {
+        let format_selector = if let Some(format_selector) = trimmed(&media.format_selector) {
+            format_selector.to_owned()
+        } else if let Some(q) = trimmed(&media.quality).filter(|quality| *quality != "best") {
+            let height = q.strip_suffix('p').unwrap_or(q);
+            format!("bv*[height<={height}]+ba/b[height<={height}]")
+        } else {
+            "bv*+ba/b".to_owned()
+        };
+        push_arg(&mut args, "-f", &format_selector);
+        if let Some(format_sort) = trimmed(&media.format_sort) {
+            push_arg(&mut args, "--format-sort", format_sort);
         }
     }
 
     let write_subs = media.subtitles.unwrap_or(false);
     let write_auto_subs = media.auto_subtitles.unwrap_or(false);
     if write_subs {
-        args.push("--write-subs".to_string());
+        args.push("--write-subs".to_owned());
     }
     if write_auto_subs {
-        args.push("--write-auto-subs".to_string());
+        args.push("--write-auto-subs".to_owned());
     }
     if write_subs || write_auto_subs {
         push_arg(
@@ -688,24 +685,24 @@ pub(crate) fn build_ytdlp_args_with_engines(
             trimmed(&media.subtitle_languages).unwrap_or("en"),
         );
         if ffmpeg_enabled && media.embed_subtitles.unwrap_or(false) {
-            args.push("--embed-subs".to_string());
+            args.push("--embed-subs".to_owned());
         }
     }
 
     if media.write_thumbnail.unwrap_or(false) {
-        args.push("--write-thumbnail".to_string());
+        args.push("--write-thumbnail".to_owned());
     }
     if ffmpeg_enabled && media.embed_thumbnail.unwrap_or(false) {
-        args.push("--embed-thumbnail".to_string());
+        args.push("--embed-thumbnail".to_owned());
     }
     if media.write_info_json.unwrap_or(false) {
-        args.push("--write-info-json".to_string());
+        args.push("--write-info-json".to_owned());
     }
     if media.write_description.unwrap_or(false) {
-        args.push("--write-description".to_string());
+        args.push("--write-description".to_owned());
     }
     if media.split_chapters.unwrap_or(false) {
-        args.push("--split-chapters".to_string());
+        args.push("--split-chapters".to_owned());
     }
     if let Some(sponsor_block) = trimmed(&media.sponsor_block) {
         push_arg(&mut args, "--sponsorblock-remove", sponsor_block);
@@ -716,7 +713,7 @@ pub(crate) fn build_ytdlp_args_with_engines(
             push_arg(&mut args, "--playlist-items", items);
         }
     } else {
-        args.push("--no-playlist".to_string());
+        args.push("--no-playlist".to_owned());
     }
 
     if let Some(proxy) = trimmed(&media.proxy) {
@@ -751,7 +748,7 @@ pub(crate) fn build_ytdlp_args_with_engines(
     }
 
     if let Some(rl) = media.rate_limit_kbs.filter(|rl| *rl > 0) {
-        push_arg(&mut args, "--limit-rate", &format!("{}K", rl));
+        push_arg(&mut args, "--limit-rate", &format!("{rl}K"));
     }
     push_number_arg(&mut args, "--retries", media.retries);
     push_number_arg(&mut args, "--fragment-retries", media.fragment_retries);
@@ -784,10 +781,10 @@ pub(crate) fn build_ytdlp_args_with_engines(
     );
     push_string_arg(&mut args, "--retry-sleep", trimmed(&media.retry_sleep))?;
     if let Some(rate) = media.throttled_rate_kbs.filter(|rate| *rate > 0) {
-        push_arg(&mut args, "--throttled-rate", &format!("{}K", rate));
+        push_arg(&mut args, "--throttled-rate", &format!("{rate}K"));
     }
     if let Some(size) = media.buffer_size_kbs.filter(|size| *size > 0) {
-        push_arg(&mut args, "--buffer-size", &format!("{}K", size));
+        push_arg(&mut args, "--buffer-size", &format!("{size}K"));
     }
     push_string_arg(
         &mut args,
@@ -798,13 +795,12 @@ pub(crate) fn build_ytdlp_args_with_engines(
         if external_downloader != "auto" && external_downloader != "native" {
             let value = match external_downloader {
                 "curl" => {
-                    return Err("The curl external downloader binary is no longer bundled. Use 'native' for yt-dlp's built-in HTTP client, or 'ffmpeg' for media processing.".to_string());
+                    return Err("The curl external downloader binary is no longer bundled. Use 'native' for yt-dlp's built-in HTTP client, or 'ffmpeg' for media processing.".to_owned());
                 }
-                "ffmpeg" | "httpie" | "wget" | "axel" => external_downloader.to_string(),
+                "ffmpeg" | "httpie" | "wget" | "axel" => external_downloader.to_owned(),
                 other => {
                     return Err(format!(
-                        "Unsupported external downloader '{}'. Allowed values: native, curl, ffmpeg, httpie, wget, axel.",
-                        other
+                        "Unsupported external downloader '{other}'. Allowed values: native, curl, ffmpeg, httpie, wget, axel."
                     ));
                 }
             };
@@ -818,7 +814,7 @@ pub(crate) fn build_ytdlp_args_with_engines(
             .chars()
             .any(|c| matches!(c, ';' | '|' | '&' | '$' | '`' | '\n' | '\r'));
         if has_danger {
-            return Err("downloader-args contain unsafe characters".to_string());
+            return Err("downloader-args contain unsafe characters".to_owned());
         }
         push_string_arg(&mut args, "--downloader-args", Some(dl_args))?;
     }
@@ -930,8 +926,8 @@ pub(crate) fn build_ytdlp_args_with_engines(
         }
     }
 
-    args.push("--".to_string());
-    args.push(url.to_string());
+    args.push("--".to_owned());
+    args.push(url.to_owned());
     Ok(args)
 }
 
@@ -940,7 +936,7 @@ pub async fn create_ytdlp_task(
     body: &CreateDownloadBody,
 ) -> Result<Task, String> {
     let url = body.url.as_deref().unwrap_or("");
-    let name = body.name.clone().unwrap_or_else(|| "media".to_string());
+    let name = body.name.clone().unwrap_or_else(|| "media".to_owned());
     let id = Uuid::new_v4().to_string();
 
     // Block internal/loopback targets to prevent SSRF (matches curl engine path).
@@ -950,7 +946,7 @@ pub async fn create_ytdlp_task(
 
     // Enforce maximum task limit to prevent memory exhaustion
     if lock_or_err!(state.task_snapshot).len() >= 10_000 {
-        return Err("Maximum number of tasks reached. Complete or delete some tasks before creating new ones.".to_string());
+        return Err("Maximum number of tasks reached. Complete or delete some tasks before creating new ones.".to_owned());
     }
 
     if let Some(sp) = &body.save_path {
@@ -975,22 +971,21 @@ pub async fn create_ytdlp_task(
     let task = Task {
         id: id.clone(),
         name,
-        url: url.to_string(),
-        file_type: "video".to_string(),
+        url: url.to_owned(),
+        file_type: "video".to_owned(),
         status: if should_start {
             "downloading"
         } else {
             "queued"
-        }
-        .to_string(),
+        }.to_owned(),
         size_bytes: 0,
         downloaded_bytes: 0,
         speed_bytes_per_sec: 0,
         time_left_seconds: 0,
         elapsed_seconds: 0,
         date_added: now_str(),
-        category: body.category.clone().unwrap_or_else(|| "video".to_string()),
-        queue_id: body.queue_id.clone().unwrap_or_else(|| "main".to_string()),
+        category: body.category.clone().unwrap_or_else(|| "video".to_owned()),
+        queue_id: body.queue_id.clone().unwrap_or_else(|| "main".to_owned()),
         connections: 1,
         resumable: true,
         save_path: body.save_path.clone().unwrap_or_default(),
@@ -1004,9 +999,9 @@ pub async fn create_ytdlp_task(
             speed: 0,
         }],
         referer: None,
-        engine: "yt-dlp".to_string(),
+        engine: "yt-dlp".to_owned(),
         engine_id: id.clone(),
-        engine_status: Some(if should_start { "starting" } else { "queued" }.to_string()),
+        engine_status: Some(if should_start { "starting" } else { "queued" }.to_owned()),
         error_message: None,
     };
 
@@ -1039,7 +1034,7 @@ pub struct YtDlpExtractor {
 }
 
 impl YtDlpExtractor {
-    pub fn new(ytdlp_bin: String, ffmpeg_bin: String) -> Self {
+    pub const fn new(ytdlp_bin: String, ffmpeg_bin: String) -> Self {
         Self {
             ytdlp_bin,
             ffmpeg_bin,
@@ -1048,7 +1043,7 @@ impl YtDlpExtractor {
 }
 
 impl Extractor for YtDlpExtractor {
-    fn id(&self) -> &str {
+    fn id(&self) -> &'static str {
         "yt-dlp"
     }
 
@@ -1086,19 +1081,19 @@ impl Extractor for YtDlpExtractor {
         let output = cmd.arg("--version").output();
         let (available, version) = match output {
             Ok(o) if o.status.success() => {
-                let v = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                let v = String::from_utf8_lossy(&o.stdout).trim().to_owned();
                 (true, Some(v))
             }
             _ => (false, None),
         };
         EngineStatus {
-            id: "yt-dlp".to_string(),
-            name: "yt-dlp".to_string(),
+            id: "yt-dlp".to_owned(),
+            name: "yt-dlp".to_owned(),
             available,
             version,
             features: vec![
-                "media-extraction".to_string(),
-                "format-selection".to_string(),
+                "media-extraction".to_owned(),
+                "format-selection".to_owned(),
             ],
         }
     }

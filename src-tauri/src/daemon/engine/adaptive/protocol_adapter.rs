@@ -8,7 +8,7 @@ pub struct ProtocolAdapter {
 }
 
 impl ProtocolAdapter {
-    pub fn new(protocol: ProtocolVersion) -> Self {
+    pub const fn new(protocol: ProtocolVersion) -> Self {
         let multiplexing = matches!(protocol, ProtocolVersion::Http2 | ProtocolVersion::Http3);
         Self {
             negotiated: protocol,
@@ -27,11 +27,11 @@ impl ProtocolAdapter {
         }
     }
 
-    pub fn prefer_multiplexing(&self) -> bool {
+    pub const fn prefer_multiplexing(&self) -> bool {
         self.multiplexing
     }
 
-    pub fn connection_timeout(&self) -> Duration {
+    pub const fn connection_timeout(&self) -> Duration {
         match self.negotiated {
             ProtocolVersion::Http2 | ProtocolVersion::Http3 => Duration::from_secs(30),
             ProtocolVersion::Http11 => Duration::from_secs(15),
@@ -41,7 +41,7 @@ impl ProtocolAdapter {
         }
     }
 
-    pub fn keepalive_interval(&self) -> Duration {
+    pub const fn keepalive_interval(&self) -> Duration {
         match self.negotiated {
             ProtocolVersion::Http2 | ProtocolVersion::Http3 => Duration::from_secs(30),
             ProtocolVersion::Http11 => Duration::from_secs(15),
@@ -49,14 +49,14 @@ impl ProtocolAdapter {
         }
     }
 
-    pub fn is_single_stream(&self) -> bool {
+    pub const fn is_single_stream(&self) -> bool {
         matches!(
             self.negotiated,
             ProtocolVersion::Ftp | ProtocolVersion::Sftp | ProtocolVersion::Scp
         )
     }
 
-    pub fn protocol(&self) -> &ProtocolVersion {
+    pub const fn protocol(&self) -> &ProtocolVersion {
         &self.negotiated
     }
 }

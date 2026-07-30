@@ -39,7 +39,7 @@ pub async fn handle_engine_capabilities(
         .collect();
     if let Some(obj) = status.as_object_mut() {
         obj.insert(
-            "extractors".to_string(),
+            "extractors".to_owned(),
             serde_json::Value::Array(extractors),
         );
     }
@@ -49,7 +49,7 @@ pub async fn handle_engine_capabilities(
 pub(super) fn bool_from_status(status: &serde_json::Value, pointer: &str) -> bool {
     status
         .pointer(pointer)
-        .and_then(|v| v.as_bool())
+        .and_then(serde_json::Value::as_bool)
         .unwrap_or(false)
 }
 
@@ -92,7 +92,7 @@ pub(super) fn extension_capabilities_from_status(status: &serde_json::Value) -> 
     items.push("events.sse");
     items.push("settings.snapshot");
     items.push("media.analyze");
-    items.sort();
+    items.sort_unstable();
     items.dedup();
     let direct_protocols = status
         .pointer("/engines/libcurlMulti/protocols")
@@ -343,7 +343,7 @@ pub async fn handle_profiles_set_active(
         }
         state.event_bus.publish(
             crate::daemon::engine::event_bus::EngineEvent::ProfileSwitched {
-                task_id: "global".to_string(),
+                task_id: "global".to_owned(),
                 profile: profile.name,
             },
         );
@@ -580,18 +580,18 @@ pub async fn run_scheduler_tick(state: &SharedState) {
         match action {
             SchedulerAction::StartDownload { task_ids } => {
                 for tid in &task_ids {
-                    log::info!("Scheduler: resuming task {}", tid);
+                    log::info!("Scheduler: resuming task {tid}");
                     let _ = crate::daemon::curl::resume_task(state, tid).await;
                 }
             }
             SchedulerAction::PauseDownload { task_ids } => {
                 for tid in &task_ids {
-                    log::info!("Scheduler: pausing task {}", tid);
+                    log::info!("Scheduler: pausing task {tid}");
                     let _ = crate::daemon::curl::pause_task(state, tid).await;
                 }
             }
             SchedulerAction::SetBandwidthLimit { kbps } => {
-                log::info!("Scheduler: setting global bandwidth limit to {} kbps", kbps);
+                log::info!("Scheduler: setting global bandwidth limit to {kbps} kbps");
                 state.bandwidth_manager.set_global_limit(kbps);
             }
             SchedulerAction::SetPriority { task_ids, priority } => {
@@ -621,7 +621,7 @@ pub async fn run_scheduler_tick(state: &SharedState) {
                 }
             }
             SchedulerAction::Notify { message } => {
-                log::info!("Scheduler notification: {}", message);
+                log::info!("Scheduler notification: {message}");
                 crate::daemon::telegram::telegram_notify(state, &message).await;
             }
             SchedulerAction::Shutdown => {
@@ -900,7 +900,10 @@ pub async fn handle_adaptive_get(
     State(state): State<SharedState>,
     Path(task_id): Path<String>,
 ) -> Json<serde_json::Value> {
-    let trackers = lock_or_err!(state.engine_trackers);
+    let trackers = match state.engine_trackers.read() {
+        Ok(g) => g,
+        Err(_) => return Json(serde_json::json!({"ok": false, "error": "engine_trackers lock poisoned"})),
+    };
     match trackers.get(&task_id) {
         Some(tracker) => {
             let adaptive = &tracker.adaptive;
@@ -928,7 +931,10 @@ pub async fn handle_segments_get(
     State(state): State<SharedState>,
     Path(task_id): Path<String>,
 ) -> Json<serde_json::Value> {
-    let trackers = lock_or_err!(state.engine_trackers);
+    let trackers = match state.engine_trackers.read() {
+        Ok(g) => g,
+        Err(_) => return Json(serde_json::json!({"ok": false, "error": "engine_trackers lock poisoned"})),
+    };
     match trackers.get(&task_id) {
         Some(tracker) => match &tracker.segments {
             Some(segments) => {
@@ -1082,7 +1088,7 @@ async fn handle_engine_download(
                 "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp"
             };
             (
-                url.to_string(),
+                url.to_owned(),
                 bin_dir.join(if cfg!(windows) {
                     "yt-dlp.exe"
                 } else {
@@ -1099,7 +1105,7 @@ async fn handle_engine_download(
                 "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
             };
             (
-                url.to_string(),
+                url.to_owned(),
                 bin_dir.join(if cfg!(windows) {
                     "ffmpeg.exe"
                 } else {
@@ -1152,7 +1158,7 @@ async fn handle_engine_download(
                         let mut found = false;
                         for i in 0..archive.len() {
                             if let Ok(mut file) = archive.by_index(i) {
-                                let name = file.name().to_string();
+                                let name = file.name().to_owned();
                                 let is_ffmpeg = if cfg!(windows) {
                                     name.ends_with("ffmpeg.exe")
                                 } else {
@@ -1197,21 +1203,11 @@ async fn handle_engine_download(
                         }));
                     }
                 }
-            } else {
-                if let Err(e) = std::fs::write(&dest, &bytes) {
-                    return Json(serde_json::json!({
-                        "ok": false,
-                        "error": format!("Failed to write binary: {e}")
-                    }));
-                }
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    if let Ok(mut perms) = std::fs::metadata(&dest).map(|m| m.permissions()) {
-                        perms.set_mode(0o755);
-                        let _ = std::fs::set_permissions(&dest, perms);
-                    }
-                }
+            } else if let Err(e) = std::fs::write(&dest, &bytes) {
+                return Json(serde_json::json!({
+                    "ok": false,
+                    "error": format!("Failed to write binary: {e}")
+                }));
             }
             let mut version_cmd = std::process::Command::new(&dest);
             hide_command_window(&mut version_cmd);
@@ -1220,7 +1216,7 @@ async fn handle_engine_download(
                 .output()
                 .ok()
                 .and_then(|o| String::from_utf8(o.stdout).ok())
-                .map(|s| s.trim().to_string())
+                .map(|s| s.trim().to_owned())
                 .unwrap_or_default();
 
             if let Ok(mut cache) = state.engine_capabilities_cache.write() {
@@ -1278,7 +1274,7 @@ async fn handle_engine_verify(
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
+        .map(|s| s.trim().to_owned())
         .unwrap_or_default();
 
     Json(serde_json::json!({
@@ -1328,8 +1324,7 @@ async fn handle_engine_latest_version(
             let latest = json
                 .get("tag_name")
                 .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
+                .unwrap_or("unknown").to_owned();
             let mut current_cmd = std::process::Command::new(&state.ytdlp_bin);
             hide_command_window(&mut current_cmd);
             let current = current_cmd
@@ -1337,7 +1332,7 @@ async fn handle_engine_latest_version(
                 .output()
                 .ok()
                 .and_then(|o| String::from_utf8(o.stdout).ok())
-                .map(|s| s.trim().to_string())
+                .map(|s| s.trim().to_owned())
                 .unwrap_or_default();
 
             Json(serde_json::json!({
@@ -1359,7 +1354,7 @@ async fn handle_engine_latest_version(
     }
 }
 
-pub(crate) fn register_routes(router: Router<SharedState>) -> Router<SharedState> {
+pub fn register_routes(router: Router<SharedState>) -> Router<SharedState> {
     router
         .route("/api/engines/capabilities", get(handle_engine_capabilities))
         .route("/api/engines/download", post(handle_engine_download))

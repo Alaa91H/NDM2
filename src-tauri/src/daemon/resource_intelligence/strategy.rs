@@ -1,4 +1,4 @@
-use super::types::*;
+use super::types::{ResourceIdentity, ServerCapabilities, StabilityAnalysis, ServerProfile, DownloadStrategy, StrategyRationale, CapabilityState};
 
 pub fn select_strategy(
     _resource: &ResourceIdentity,
@@ -12,11 +12,11 @@ pub fn select_strategy(
 
     // Auth gate.
     if auth_required {
-        factors.push("Authentication required — using external resolver".to_string());
+        factors.push("Authentication required — using external resolver".to_owned());
         return (
             DownloadStrategy::Authenticated,
             StrategyRationale {
-                primary_reason: "Authentication required to access resource".to_string(),
+                primary_reason: "Authentication required to access resource".to_owned(),
                 factors,
                 confidence: 0.9,
             },
@@ -40,7 +40,7 @@ pub fn select_strategy(
         return (
             DownloadStrategy::SingleConnection,
             StrategyRationale {
-                primary_reason: "Small file, no range confirmation".to_string(),
+                primary_reason: "Small file, no range confirmation".to_owned(),
                 factors,
                 confidence: 0.8,
             },
@@ -51,7 +51,7 @@ pub fn select_strategy(
     if large_file && range_confirmed && stable {
         let connections = recommended_connections(profile, stability);
         factors.push(format!("Large file ({})", human_size(file_size)));
-        factors.push("Range confirmed by server".to_string());
+        factors.push("Range confirmed by server".to_owned());
         factors.push(format!(
             "Server stability: {:.0}%",
             stability.overall_stability * 100.0
@@ -60,7 +60,7 @@ pub fn select_strategy(
         return (
             DownloadStrategy::AdaptiveSegmented,
             StrategyRationale {
-                primary_reason: "Large file with confirmed range and stable server".to_string(),
+                primary_reason: "Large file with confirmed range and stable server".to_owned(),
                 factors,
                 confidence: 0.9,
             },
@@ -70,11 +70,11 @@ pub fn select_strategy(
     // Large file + range confirmed + unstable: segmented with fewer connections.
     if large_file && range_confirmed && !stable {
         factors.push(format!("Large file ({})", human_size(file_size)));
-        factors.push("Range confirmed but server is unstable".to_string());
+        factors.push("Range confirmed but server is unstable".to_owned());
         return (
             DownloadStrategy::Segmented,
             StrategyRationale {
-                primary_reason: "Range available but server stability is low".to_string(),
+                primary_reason: "Range available but server stability is low".to_owned(),
                 factors,
                 confidence: 0.7,
             },
@@ -90,8 +90,7 @@ pub fn select_strategy(
         return (
             DownloadStrategy::Segmented,
             StrategyRationale {
-                primary_reason: "Large file, attempting segmented despite unknown range"
-                    .to_string(),
+                primary_reason: "Large file, attempting segmented despite unknown range".to_owned(),
                 factors,
                 confidence: 0.5,
             },
@@ -99,11 +98,11 @@ pub fn select_strategy(
     }
 
     // Default: single connection.
-    factors.push("Default strategy for unclassified conditions".to_string());
+    factors.push("Default strategy for unclassified conditions".to_owned());
     (
         DownloadStrategy::SingleConnection,
         StrategyRationale {
-            primary_reason: "Standard single-connection download".to_string(),
+            primary_reason: "Standard single-connection download".to_owned(),
             factors,
             confidence: 0.6,
         },

@@ -25,7 +25,7 @@ impl Default for RetryPolicy {
 }
 
 impl RetryPolicy {
-    pub fn aggressive() -> Self {
+    pub const fn aggressive() -> Self {
         Self {
             max_retries: 10,
             base_delay: Duration::from_millis(500),
@@ -35,7 +35,7 @@ impl RetryPolicy {
         }
     }
 
-    pub fn conservative() -> Self {
+    pub const fn conservative() -> Self {
         Self {
             max_retries: 3,
             base_delay: Duration::from_secs(5),
@@ -45,7 +45,7 @@ impl RetryPolicy {
         }
     }
 
-    pub fn no_retry() -> Self {
+    pub const fn no_retry() -> Self {
         Self {
             max_retries: 0,
             base_delay: Duration::ZERO,
@@ -59,7 +59,7 @@ impl RetryPolicy {
         if attempt == 0 {
             return Duration::ZERO;
         }
-        let exp = (attempt - 1) as f64;
+        let exp = f64::from(attempt - 1);
         let base = self.base_delay.as_secs_f64() * self.backoff_multiplier.powf(exp);
         let capped = base.min(self.max_delay.as_secs_f64());
         if self.jitter {
@@ -70,7 +70,7 @@ impl RetryPolicy {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .subsec_nanos();
-            let jitter = nanos as f64 % jitter_range;
+            let jitter = f64::from(nanos) % jitter_range;
             Duration::from_secs_f64((capped + jitter).max(0.1))
         } else {
             Duration::from_secs_f64(capped)
@@ -78,33 +78,33 @@ impl RetryPolicy {
     }
 
     #[allow(dead_code)]
-    pub fn should_retry(&self, attempt: u32) -> bool {
+    pub const fn should_retry(&self, attempt: u32) -> bool {
         attempt < self.max_retries
     }
 
-    pub fn adapt_for_error(&self, error: &str) -> RetryPolicy {
+    pub fn adapt_for_error(&self, error: &str) -> Self {
         let lower = error.to_ascii_lowercase();
         if lower.contains("timeout") || lower.contains("timed out") {
-            RetryPolicy {
+            Self {
                 base_delay: self.base_delay * 2,
                 max_delay: self.max_delay * 3 / 2,
                 ..self.clone()
             }
         } else if lower.contains("connection refused") || lower.contains("connection reset") {
-            RetryPolicy {
+            Self {
                 base_delay: self.base_delay,
                 max_delay: self.max_delay,
                 backoff_multiplier: (self.backoff_multiplier * 1.5).min(5.0),
                 ..self.clone()
             }
         } else if lower.contains("429") || lower.contains("too many requests") {
-            RetryPolicy {
+            Self {
                 base_delay: self.base_delay * 3,
                 max_delay: self.max_delay * 2,
                 ..self.clone()
             }
         } else if lower.contains("503") || lower.contains("service unavailable") {
-            RetryPolicy {
+            Self {
                 base_delay: self.base_delay * 2,
                 max_delay: self.max_delay * 2,
                 max_retries: self.max_retries + 5,

@@ -7,42 +7,58 @@ use std::process::Command;
 pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
 
 /// Lock a Mutex and return the guard, or log error and recover on poison.
-/// Recovery is safe here because our mutexes protect simple data (HashMaps)
+///
+/// Recovery is safe here because our mutexes protect simple data (`HashMaps`)
 /// and we always prefer availability over correctness after poison.
 #[macro_export]
 macro_rules! lock_or_err {
-    ($mutex:expr) => {
+    ($mutex:expr) => {{
+        static POISON_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         match $mutex.lock() {
             Ok(guard) => guard,
             Err(poisoned) => {
+                let count = POISON_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                 log::error!(
-                    "Mutex poisoned at {}:{} ({}), recovering — data may be inconsistent",
+                    "Mutex poisoned at {}:{} ({}), recovering — data may be inconsistent \
+                     (poison event #{}) — if you see data corruption, restart the application",
                     file!(),
                     line!(),
-                    poisoned
+                    poisoned,
+                    count
                 );
                 poisoned.into_inner()
             }
         }
-    };
+    }};
 }
 
 /// Validate that a URL targets an external (non-private) host to prevent SSRF.
 /// Rejects empty URLs, non-http(s) schemes, and private/loopback/link-local/multicast IPs.
 pub fn is_safe_target_url(raw: &str) -> Result<(), String> {
+    let _ = resolve_and_check_url(raw)?;
+    Ok(())
+}
+
+pub fn is_safe_target_url_pinned(raw: &str) -> Result<(IpAddr, String), String> {
+    let (ip, host, port) = resolve_and_check_url(raw)?;
+    Ok((ip, format!("{host}:{port}:{ip}")))
+}
+
+fn resolve_and_check_url(raw: &str) -> Result<(IpAddr, String, u16), String> {
     if raw.is_empty() {
-        return Err("URL is empty".to_string());
+        return Err("URL is empty".to_owned());
     }
     let url = raw.trim();
     if !url.starts_with("http://") && !url.starts_with("https://") {
-        return Err("Only http(s) URLs are allowed for network requests".to_string());
+        return Err("Only http(s) URLs are allowed for network requests".to_owned());
     }
+    let is_tls = url.starts_with("https://");
     let without_scheme = url
         .trim_start_matches("https://")
         .trim_start_matches("http://");
     let authority = without_scheme.split('/').next().unwrap_or("");
     if authority.contains('@') {
-        return Err("SSRF blocked: URL contains userinfo (e.g. user@host)".to_string());
+        return Err("SSRF blocked: URL contains userinfo (e.g. user@host)".to_owned());
     }
     let host = authority
         .split(':')
@@ -51,42 +67,57 @@ pub fn is_safe_target_url(raw: &str) -> Result<(), String> {
         .trim_start_matches('[')
         .trim_end_matches(']');
     if host.is_empty() || host == "localhost" {
-        return Err("Host is empty or localhost".to_string());
+        return Err("Host is empty or localhost".to_owned());
     }
+    let port: u16 = authority
+        .split(':')
+        .nth(1)
+        .and_then(|p| p.split('/').next().unwrap_or(p).parse().ok())
+        .unwrap_or(if is_tls { 443 } else { 80 });
     // Try to parse as IP first
     if let Ok(ip) = host.parse::<IpAddr>() {
         if is_internal_ip(ip) {
-            return Err(format!("SSRF blocked: URL targets internal IP {}", ip));
+            return Err(format!("SSRF blocked: URL targets internal IP {ip}"));
         }
-        return Ok(());
+        return Ok((ip, host.to_owned(), port));
     }
     // Resolve hostname and check all resolved addresses
-    let addr_str = format!("{}:443", host);
+    let addr_str = format!("{host}:{port}");
     let addrs = addr_str
         .to_socket_addrs()
-        .map_err(|e| format!("Could not resolve host '{}': {}", host, e))?;
+        .map_err(|e| format!("Could not resolve host '{host}': {e}"))?;
+    let mut resolved: Option<IpAddr> = None;
     for addr in addrs {
         let ip = addr.ip();
         if is_internal_ip(ip) {
             return Err(format!(
-                "SSRF blocked: host '{}' resolves to internal IP {}",
-                host, ip
+                "SSRF blocked: host '{host}' resolves to internal IP {ip}"
             ));
         }
+        if resolved.is_none() {
+            resolved = Some(ip);
+        }
     }
-    Ok(())
+    let ip = resolved.ok_or_else(|| format!("Could not resolve host '{host}'"))?;
+    Ok((ip, host.to_owned(), port))
 }
 
 /// Returns true if the IP is internal/private (loopback, private, link-local,
 /// multicast, unspecified, or IPv6 ULA). Shared by URL and resolve-entry checks.
-pub fn is_internal_ip(ip: IpAddr) -> bool {
+pub const fn is_internal_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
+            let o = v4.octets();
             v4.is_loopback()
                 || v4.is_private()
                 || v4.is_link_local()
                 || v4.is_multicast()
                 || v4.is_unspecified()
+                // Bogon / TEST-NET ranges
+                || (o[0] == 192 && o[1] == 0 && o[2] == 2)
+                || (o[0] == 198 && o[1] == 51 && o[2] == 100)
+                || (o[0] == 203 && o[1] == 0 && o[2] == 113)
+                || o[0] >= 240
         }
         IpAddr::V6(v6) => {
             v6.is_loopback()
@@ -99,8 +130,8 @@ pub fn is_internal_ip(ip: IpAddr) -> bool {
     }
 }
 
-/// Detect IPv4-mapped IPv6 addresses (::ffff:a.b.c.d) that point at internal IPv4.
-fn is_ipv4_mapped_internal(v6: &Ipv6Addr) -> bool {
+/// Detect IPv4-mapped IPv6 addresses (`::ffff:a.b.c.d`) that point at internal IPv4.
+const fn is_ipv4_mapped_internal(v6: &Ipv6Addr) -> bool {
     let segs = v6.segments();
     // ::ffff:a.b.c.d => segments [0,0,0,0,0,ffff,a,b]
     if segs[0] == 0
@@ -125,20 +156,19 @@ fn is_ipv4_mapped_internal(v6: &Ipv6Addr) -> bool {
 ///
 /// curl resolve syntax: `HOST:PORT:ADDRESS` (ADDRESS may be `+` to keep DNS).
 /// curl connect-to syntax: `HOST:PORT:CONNECT_HOST:CONNECT_PORT`.
-/// We reject any entry whose target ADDRESS/CONNECT_HOST resolves to an
+/// We reject any entry whose target `ADDRESS/CONNECT_HOST` resolves to an
 /// internal IP, mirroring `is_safe_target_url`'s policy.
 pub fn is_safe_resolve_entry(entry: &str) -> Result<(), String> {
     let parts: Vec<&str> = entry.splitn(4, ':').collect();
     if parts.len() < 3 {
-        return Err(format!("Invalid resolve/connect-to entry: '{}'", entry));
+        return Err(format!("Invalid resolve/connect-to entry: '{entry}'"));
     }
     // The target address is the 3rd segment. For connect-to it is a hostname;
     // for resolve it is an IP literal. A `+` means "use normal DNS" (safe).
     let target = parts[2].trim();
     if target.is_empty() {
         return Err(format!(
-            "Empty address in resolve/connect-to entry: '{}'",
-            entry
+            "Empty address in resolve/connect-to entry: '{entry}'"
         ));
     }
     if target == "+" {
@@ -147,17 +177,16 @@ pub fn is_safe_resolve_entry(entry: &str) -> Result<(), String> {
     if let Ok(ip) = target.parse::<IpAddr>() {
         if is_internal_ip(ip) {
             return Err(format!(
-                "SSRF blocked: resolve/connect-to entry '{}' targets internal IP {}",
-                entry, ip
+                "SSRF blocked: resolve/connect-to entry '{entry}' targets internal IP {ip}"
             ));
         }
         return Ok(());
     }
     // Hostname target — resolve and check all addresses.
-    let addr_str = format!("{}:443", target);
+    let addr_str = format!("{target}:443");
     let addrs = addr_str
         .to_socket_addrs()
-        .map_err(|e| format!("Could not resolve connect-to host '{}': {}", target, e))?;
+        .map_err(|e| format!("Could not resolve connect-to host '{target}': {e}"))?;
     for addr in addrs {
         if is_internal_ip(addr.ip()) {
             return Err(format!(
@@ -177,7 +206,7 @@ pub fn is_safe_resolve_entry(entry: &str) -> Result<(), String> {
 /// daemon. Previously, `infer_file_type` (utils.rs) and
 /// `map_candidate_file_type` (extension.rs) maintained diverging maps that
 /// classified the same file differently depending on the code path — e.g.
-/// `.iso` was "compressed" via infer_file_type but "app" via the browser
+/// `.iso` was "compressed" via `infer_file_type` but "app" via the browser
 /// extension, and `.xz`/`.opus`/`.appimage` were only in one map.
 pub fn infer_file_type(name: &str) -> &'static str {
     let lower = name.to_lowercase();
@@ -221,10 +250,10 @@ pub fn build_segments(connections: u32, total: u64, downloaded: u64, speed: u64)
             speed,
         }];
     }
-    let per_seg = total / connections.max(1) as u64;
+    let per_seg = total / u64::from(connections.max(1));
     let mut segs = Vec::new();
     for i in 0..connections {
-        let seg_start = i as u64 * per_seg;
+        let seg_start = u64::from(i) * per_seg;
         let seg_end = if i == connections - 1 {
             total
         } else {
@@ -243,7 +272,7 @@ pub fn build_segments(connections: u32, total: u64, downloaded: u64, speed: u64)
             downloaded_bytes: seg_done,
             total_bytes: seg_end - seg_start,
             active: true,
-            speed: speed / connections.max(1) as u64,
+            speed: speed / u64::from(connections.max(1)),
         });
     }
     segs
@@ -306,8 +335,8 @@ pub fn shell_split(input: &str) -> Vec<String> {
 /// Push a flag-value pair onto a CLI argument vector.
 #[inline]
 pub fn push_arg(args: &mut Vec<String>, flag: &str, value: &str) {
-    args.push(flag.to_string());
-    args.push(value.to_string());
+    args.push(flag.to_owned());
+    args.push(value.to_owned());
 }
 
 #[inline]
@@ -324,21 +353,60 @@ pub fn hide_command_window(command: &mut Command) {
 
 #[cfg(windows)]
 pub fn kill_process(pid: u32) {
-    let mut cmd = std::process::Command::new("taskkill");
-    hide_command_window(&mut cmd);
-    let _ = cmd
-        .args(["/F", "/PID", &pid.to_string()])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
+    // Send graceful shutdown (CTRL_BREAK_EVENT) first — taskkill without /F
+    // sends CTRL_BREAK_EVENT to the process group, giving yt-dlp/ffmpeg a
+    // chance to clean up .part files and child processes.
+    {
+        let mut cmd = std::process::Command::new("taskkill");
+        hide_command_window(&mut cmd);
+        if let Err(e) = cmd
+            .args(["/PID", &pid.to_string()])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            log::warn!("kill_process: graceful taskkill failed for PID {pid}: {e}");
+        }
+    }
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    // Then force kill
+    {
+        let mut cmd = std::process::Command::new("taskkill");
+        hide_command_window(&mut cmd);
+        if let Err(e) = cmd
+            .args(["/F", "/PID", &pid.to_string()])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            log::warn!("kill_process: force taskkill failed for PID {pid}: {e}");
+        }
+    }
 }
 
 #[cfg(not(windows))]
 pub fn kill_process(pid: u32) {
-    let _ = std::process::Command::new("kill")
-        .args(["-9", &pid.to_string()])
-        .spawn();
+    // Send SIGTERM first for graceful shutdown
+    {
+        if let Err(e) = std::process::Command::new("kill")
+            .args(["-15", &pid.to_string()])
+            .spawn()
+        {
+            log::warn!("kill_process: SIGTERM failed for PID {}: {}", pid, e);
+        }
+    }
+    std::thread::sleep(std::time::Duration::from_millis(2000));
+    // Then force kill
+    {
+        if let Err(e) = std::process::Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .spawn()
+        {
+            log::warn!("kill_process: SIGKILL failed for PID {}: {}", pid, e);
+        }
+    }
 }
 
 #[inline]
@@ -421,7 +489,7 @@ pub fn parse_sha256_digest(value: &str) -> Option<String> {
             }
             // Structured-field form: `:BASE64:` → decode to hex.
             if let Some(bytes) = base64_decode(raw) {
-                let hex: String = bytes.iter().map(|b| format!("{:02x}", b)).collect();
+                let hex: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
                 if hex.len() == 64 {
                     return Some(hex);
                 }
@@ -503,7 +571,7 @@ pub fn parse_link_mirrors(value: &str) -> Vec<ParsedLinkMirror> {
         }
         if is_duplicate {
             mirrors.push(ParsedLinkMirror {
-                url: url.to_string(),
+                url: url.to_owned(),
                 priority,
             });
         }
@@ -545,8 +613,8 @@ pub fn parse_retry_after_date(value: &str) -> Option<u64> {
     }
 }
 
-/// Check whether an ETag is a strong validator (RFC 7232 §2.3).
-/// Strong ETags do NOT start with the `W/` prefix.
+/// Check whether an `ETag` is a strong validator (RFC 7232 §2.3).
+/// Strong `ETags` do NOT start with the `W/` prefix.
 pub fn is_strong_etag(etag: &str) -> bool {
     !etag.trim().starts_with("W/")
 }
@@ -556,15 +624,15 @@ pub fn is_strong_etag(etag: &str) -> bool {
 /// Parse HTML content for `<meta http-equiv="refresh" content="5;URL='...'">`
 /// patterns commonly used by mirrors that redirect via
 /// HTML rather than HTTP 3xx. Returns the redirected URL if found.
-pub(crate) fn parse_meta_refresh_url(html: &str) -> Option<String> {
+pub fn parse_meta_refresh_url(html: &str) -> Option<String> {
     let lower = html.to_ascii_lowercase();
     for tag_match in lower.match_indices("<meta") {
         let start = tag_match.0;
         let Some(end) = lower[start..].find('>') else {
             continue;
         };
-        let tag_lower = &lower[start..start + end + 1];
-        let tag_orig = &html[start..start + end + 1];
+        let tag_lower = &lower[start..=(start + end)];
+        let tag_orig = &html[start..=(start + end)];
         if !(tag_lower.contains("http-equiv") && tag_lower.contains("refresh")) {
             continue;
         }
@@ -594,7 +662,7 @@ pub(crate) fn parse_meta_refresh_url(html: &str) -> Option<String> {
 }
 
 /// Decode the small set of HTML entities that appear in redirect/link URLs.
-pub(crate) fn decode_html_entities(s: &str) -> String {
+pub fn decode_html_entities(s: &str) -> String {
     s.replace("&amp;", "&")
         .replace("&#38;", "&")
         .replace("&#x26;", "&")
@@ -606,7 +674,7 @@ pub(crate) fn decode_html_entities(s: &str) -> String {
 }
 
 /// Resolve a meta-refresh redirect URL relative to the page URL if needed.
-pub(crate) fn refreshed_url(refresh: String, page_url: &str) -> String {
+pub fn refreshed_url(refresh: String, page_url: &str) -> String {
     if refresh.starts_with("http://") || refresh.starts_with("https://") {
         return refresh;
     }
@@ -615,7 +683,7 @@ pub(crate) fn refreshed_url(refresh: String, page_url: &str) -> String {
         let authority_path = &page_url[scheme_end + 3..];
         // Get the directory portion of the path (everything up to last /)
         let base_dir = if let Some(pos) = authority_path.rfind('/') {
-            &page_url[..scheme_end + 3 + pos + 1]
+            &page_url[..=(scheme_end + 3 + pos)]
         } else {
             page_url
         };
@@ -630,7 +698,7 @@ pub(crate) fn refreshed_url(refresh: String, page_url: &str) -> String {
 pub fn validate_proxy_url(proxy_url: &str) -> Result<(), String> {
     let url = proxy_url.trim();
     if url.is_empty() {
-        return Err("Proxy URL is empty".to_string());
+        return Err("Proxy URL is empty".to_owned());
     }
     let without_scheme = url
         .trim_start_matches("https://")
@@ -641,23 +709,23 @@ pub fn validate_proxy_url(proxy_url: &str) -> Result<(), String> {
         .trim_start_matches("socks5h://");
     let authority = without_scheme.split('/').next().unwrap_or("");
     if authority.contains('@') {
-        return Err("Proxy URL contains userinfo (e.g. user@host)".to_string());
+        return Err("Proxy URL contains userinfo (e.g. user@host)".to_owned());
     }
     let host = authority.split(':').next().unwrap_or("");
     if host.is_empty() || host == "localhost" {
-        return Err("Proxy targets localhost".to_string());
+        return Err("Proxy targets localhost".to_owned());
     }
     if let Ok(ip) = host.parse::<IpAddr>() {
         if is_internal_ip(ip) {
-            return Err(format!("Proxy targets internal IP {}", ip));
+            return Err(format!("Proxy targets internal IP {ip}"));
         }
         return Ok(());
     }
     // Resolve hostname and check all resolved addresses
-    let addr_str = format!("{}:443", host);
+    let addr_str = format!("{host}:443");
     let addrs = addr_str
         .to_socket_addrs()
-        .map_err(|e| format!("Could not resolve proxy host '{}': {}", host, e))?;
+        .map_err(|e| format!("Could not resolve proxy host '{host}': {e}"))?;
     for addr in addrs {
         if is_internal_ip(addr.ip()) {
             return Err(format!(
@@ -840,7 +908,7 @@ mod tests {
         let segs = build_segments(1, 5000, 0, 0);
         assert_eq!(segs.len(), 1);
         assert_eq!(segs[0].total_bytes, 5000);
-        assert_eq!(segs[0].progress, 0.0);
+        assert!((segs[0].progress - 0.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -856,7 +924,7 @@ mod tests {
     fn progress_calculated_correctly() {
         let segs = build_segments(2, 1000, 600, 200);
         assert_eq!(segs.len(), 2);
-        assert_eq!(segs[0].progress, 1.0);
+        assert!((segs[0].progress - 1.0).abs() < f64::EPSILON);
         assert_eq!(segs[0].downloaded_bytes, 500);
         assert!((segs[1].progress - 0.2).abs() < f64::EPSILON);
         assert_eq!(segs[1].downloaded_bytes, 100);

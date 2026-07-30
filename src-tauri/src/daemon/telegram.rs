@@ -26,7 +26,7 @@ pub async fn handle_telegram_config(State(state): State<SharedState>) -> Json<se
     let masked = if cfg.token.is_empty() {
         String::new()
     } else if cfg.token.len() <= 8 {
-        "****".to_string()
+        "****".to_owned()
     } else {
         let prefix = &cfg.token[..4];
         let suffix = &cfg.token[cfg.token.len() - 4..];
@@ -48,25 +48,24 @@ pub async fn handle_telegram_update_config(
 ) -> Json<serde_json::Value> {
     {
         let mut cfg = lock_or_err!(state.telegram_config);
-        if let Some(v) = body.get("enabled").and_then(|v| v.as_bool()) {
+        if let Some(v) = body.get("enabled").and_then(serde_json::Value::as_bool) {
             cfg.enabled = v;
         }
         if let Some(v) = body.get("token").and_then(|v| v.as_str()) {
-            cfg.token = v.to_string();
+            cfg.token = v.to_owned();
         }
-        if let Some(v) = body.get("chatId").and_then(|v| v.as_i64()) {
+        if let Some(v) = body.get("chatId").and_then(serde_json::Value::as_i64) {
             cfg.chat_id = v;
         }
         if let Some(v) = body.get("apiBase").and_then(|v| v.as_str()) {
             cfg.api_base = normalize_api_base(v).unwrap_or_else(|| {
                 log::warn!(
-                    "Rejected Telegram apiBase '{}': not a trusted HTTPS telegram.org host",
-                    v
+                    "Rejected Telegram apiBase '{v}': not a trusted HTTPS telegram.org host"
                 );
-                "https://api.telegram.org".to_string()
+                "https://api.telegram.org".to_owned()
             });
         }
-        if let Some(v) = body.get("fileUploadLimitMb").and_then(|v| v.as_u64()) {
+        if let Some(v) = body.get("fileUploadLimitMb").and_then(serde_json::Value::as_u64) {
             cfg.file_upload_limit_mb = v.clamp(1, 2000);
         }
     }
@@ -93,7 +92,7 @@ pub async fn handle_telegram_test(State(state): State<SharedState>) -> Json<serd
 fn normalize_api_base(api_base: &str) -> Option<String> {
     let trimmed = api_base.trim().trim_end_matches('/');
     if trimmed.is_empty() {
-        return Some("https://api.telegram.org".to_string());
+        return Some("https://api.telegram.org".to_owned());
     }
     // The Telegram bot token is embedded in the API URL, so a malicious
     // apiBase would leak it to an attacker-controlled host. Restrict to the
@@ -104,7 +103,7 @@ fn normalize_api_base(api_base: &str) -> Option<String> {
     }
     let host = parsed.host_str()?;
     if host == "api.telegram.org" || host.ends_with(".telegram.org") {
-        Some(format!("https://{}", host))
+        Some(format!("https://{host}"))
     } else {
         None
     }
@@ -112,8 +111,8 @@ fn normalize_api_base(api_base: &str) -> Option<String> {
 
 fn telegram_api_url(api_base: &str, token: &str, method: &str) -> String {
     let base =
-        normalize_api_base(api_base).unwrap_or_else(|| "https://api.telegram.org".to_string());
-    format!("{}/bot{}/{}", base, token, method)
+        normalize_api_base(api_base).unwrap_or_else(|| "https://api.telegram.org".to_owned());
+    format!("{base}/bot{token}/{method}")
 }
 
 async fn telegram_send_message(
@@ -133,8 +132,7 @@ async fn telegram_send_message(
         }))
         .send()
         .await
-        .map(|r| r.status().is_success())
-        .unwrap_or(false)
+        .is_ok_and(|r| r.status().is_success())
 }
 
 fn blocking_client() -> Option<&'static reqwest::blocking::Client> {
@@ -144,7 +142,7 @@ fn blocking_client() -> Option<&'static reqwest::blocking::Client> {
             reqwest::blocking::Client::builder()
                 .build()
                 .inspect_err(|e| {
-                    log::error!("Failed to create blocking HTTP client for Telegram: {e}")
+                    log::error!("Failed to create blocking HTTP client for Telegram: {e}");
                 })
                 .ok()
         })
@@ -157,12 +155,9 @@ pub fn send_telegram_msg_blocking_with_api(
     chat_id: i64,
     text: &str,
 ) -> bool {
-    let client = match blocking_client() {
-        Some(c) => c,
-        None => {
-            log::error!("Cannot send Telegram message: HTTP client not available");
-            return false;
-        }
+    let client = if let Some(c) = blocking_client() { c } else {
+        log::error!("Cannot send Telegram message: HTTP client not available");
+        return false;
     };
     let url = telegram_api_url(api_base, token, "sendMessage");
     client
@@ -173,8 +168,7 @@ pub fn send_telegram_msg_blocking_with_api(
             "parse_mode": "HTML",
         }))
         .send()
-        .map(|r| r.status().is_success())
-        .unwrap_or(false)
+        .is_ok_and(|r| r.status().is_success())
 }
 
 pub fn start_telegram_bot(state: SharedState) {
@@ -182,7 +176,7 @@ pub fn start_telegram_bot(state: SharedState) {
         let rt = match tokio::runtime::Runtime::new() {
             Ok(rt) => rt,
             Err(e) => {
-                log::error!("Failed to create tokio runtime for telegram bot: {}", e);
+                log::error!("Failed to create tokio runtime for telegram bot: {e}");
                 return;
             }
         };
@@ -212,7 +206,7 @@ pub fn start_telegram_bot(state: SharedState) {
                     if let Ok(body) = resp.json::<serde_json::Value>() {
                         if let Some(updates) = body.get("result").and_then(|r| r.as_array()) {
                             for update in updates {
-                                if let Some(uid) = update.get("update_id").and_then(|u| u.as_i64())
+                                if let Some(uid) = update.get("update_id").and_then(serde_json::Value::as_i64)
                                 {
                                     {
                                         let mut lid = lock_or_err!(state.telegram_last_update_id);
@@ -225,7 +219,7 @@ pub fn start_telegram_bot(state: SharedState) {
                                         let from_chat = msg
                                             .get("chat")
                                             .and_then(|c| c.get("id"))
-                                            .and_then(|i| i.as_i64())
+                                            .and_then(serde_json::Value::as_i64)
                                             .unwrap_or(0);
                                         if from_chat != chat_id {
                                             continue;
@@ -261,7 +255,7 @@ fn handle_telegram_command(
 
         match cmd {
             "/start" | "/help" => {
-                let help = "NOVA Bot Commands:\n".to_string()
+                let help = "NOVA Bot Commands:\n".to_owned()
                     + "/list - List all downloads\n"
                     + "/add <url> - Add download\n"
                     + "/pause <id> - Pause download\n"
@@ -318,12 +312,12 @@ fn handle_telegram_command(
                         api_base,
                         token,
                         chat_id,
-                        &format!("Blocked: {}", e),
+                        &format!("Blocked: {e}"),
                     );
                     return;
                 }
                 let body = CreateDownloadBody {
-                    url: Some(arg.to_string()),
+                    url: Some(arg.to_owned()),
                     name: None,
                     file_type: None,
                     size_bytes: None,
@@ -352,7 +346,7 @@ fn handle_telegram_command(
                             api_base,
                             token,
                             chat_id,
-                            &format!("Failed: {}", e),
+                            &format!("Failed: {e}"),
                         );
                     }
                 }
@@ -363,21 +357,21 @@ fn handle_telegram_command(
                         api_base,
                         token,
                         chat_id,
-                        &format!("Usage: {} <id>", cmd),
+                        &format!("Usage: {cmd} <id>"),
                     );
                     return;
                 }
                 match cmd {
                     "/pause" => {
                         let result = rt.block_on(async {
-                            handle_pause_task(State(state.clone()), AxumPath(arg.to_string())).await
+                            handle_pause_task(State(state.clone()), AxumPath(arg.to_owned())).await
                         });
                         let _ = match result {
                             Ok(_) => send_telegram_msg_blocking_with_api(
                                 api_base,
                                 token,
                                 chat_id,
-                                &format!("Paused: {}", arg),
+                                &format!("Paused: {arg}"),
                             ),
                             Err(e) => send_telegram_msg_blocking_with_api(
                                 api_base,
@@ -392,7 +386,7 @@ fn handle_telegram_command(
                     }
                     "/resume" => {
                         let result = rt.block_on(async {
-                            handle_resume_task(State(state.clone()), AxumPath(arg.to_string()))
+                            handle_resume_task(State(state.clone()), AxumPath(arg.to_owned()))
                                 .await
                         });
                         let _ = match result {
@@ -400,7 +394,7 @@ fn handle_telegram_command(
                                 api_base,
                                 token,
                                 chat_id,
-                                &format!("Resumed: {}", arg),
+                                &format!("Resumed: {arg}"),
                             ),
                             Err(e) => send_telegram_msg_blocking_with_api(
                                 api_base,
@@ -416,11 +410,11 @@ fn handle_telegram_command(
                     "/delete" => {
                         let result = rt.block_on(async { delete_task(state, arg, false).await });
                         let _ = match result {
-                            Ok(_) => send_telegram_msg_blocking_with_api(
+                            Ok(()) => send_telegram_msg_blocking_with_api(
                                 api_base,
                                 token,
                                 chat_id,
-                                &format!("Removed from list: {}", arg),
+                                &format!("Removed from list: {arg}"),
                             ),
                             Err(e) => {
                                 send_telegram_msg_blocking_with_api(api_base, token, chat_id, &e)
@@ -436,8 +430,7 @@ fn handle_telegram_command(
                     token,
                     chat_id,
                     &format!(
-                        "Unknown command: {}\nUse /help for available commands.",
-                        cmd
+                        "Unknown command: {cmd}\nUse /help for available commands."
                     ),
                 );
             }
@@ -449,7 +442,7 @@ pub async fn telegram_notify(state: &SharedState, text: &str) {
     let cfg = match state.telegram_config.lock() {
         Ok(guard) => guard.clone(),
         Err(poisoned) => {
-            log::error!("Mutex poisoned in telegram_notify: {}", poisoned);
+            log::error!("Mutex poisoned in telegram_notify: {poisoned}");
             return;
         }
     };
@@ -548,8 +541,7 @@ pub async fn handle_telegram_send_file(
     let file_name = canonical
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("document")
-        .to_string();
+        .unwrap_or("document").to_owned();
     let stream = FramedRead::new(file, BytesCodec::new());
     let part =
         Part::stream_with_length(Body::wrap_stream(stream), metadata.len()).file_name(file_name);
@@ -557,7 +549,7 @@ pub async fn handle_telegram_send_file(
         .text("chat_id", cfg.chat_id.to_string())
         .part("document", part);
     if !caption.is_empty() {
-        form = form.text("caption", caption.to_string());
+        form = form.text("caption", caption.to_owned());
     }
 
     let url = telegram_api_url(&cfg.api_base, &cfg.token, "sendDocument");
@@ -582,7 +574,7 @@ pub async fn handle_telegram_send_file(
     let body_text = response
         .text()
         .await
-        .unwrap_or_else(|_| "Telegram rejected the file".to_string());
+        .unwrap_or_else(|_| "Telegram rejected the file".to_owned());
     Ok(Json(serde_json::json!({
         "ok": false,
         "error": format!("Telegram API returned {}: {}", status, body_text)

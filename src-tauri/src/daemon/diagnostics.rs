@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 /// Test DNS resolution for a hostname
 fn test_dns(host: &str) -> serde_json::Value {
     let start = Instant::now();
-    match format!("{}:80", host).to_socket_addrs() {
+    match format!("{host}:80").to_socket_addrs() {
         Ok(addrs) => {
             let ips: Vec<String> = addrs.map(|a| a.ip().to_string()).collect();
             serde_json::json!({
@@ -31,7 +31,7 @@ fn test_tcp(host: &str, port: u16, timeout_secs: u64) -> serde_json::Value {
     let start = Instant::now();
     let timeout = Duration::from_secs(timeout_secs);
 
-    let addr = match format!("{}:{}", host, port).to_socket_addrs() {
+    let addr = match format!("{host}:{port}").to_socket_addrs() {
         Ok(mut addrs) => match addrs.next() {
             Some(a) => a,
             None => {
@@ -86,16 +86,16 @@ async fn test_https_connectivity(url: &str) -> serde_json::Value {
     match result {
         Ok(resp) => {
             let status = resp.status().as_u16();
-            let final_url = resp.url().as_str().to_string();
-            let redirect_chain = if final_url != url {
-                vec![url.to_string(), final_url.clone()]
+            let final_url = resp.url().as_str().to_owned();
+            let redirect_chain = if final_url == url {
+                vec![url.to_owned()]
             } else {
-                vec![url.to_string()]
+                vec![url.to_owned(), final_url.clone()]
             };
             let headers: HashMap<String, String> = resp
                 .headers()
                 .iter()
-                .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("?").to_string()))
+                .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("?").to_owned()))
                 .collect();
 
             serde_json::json!({
