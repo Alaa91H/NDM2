@@ -2,7 +2,6 @@ pub mod capabilities;
 pub mod discovery;
 pub mod health;
 pub mod installer;
-pub mod process;
 pub mod registry;
 pub mod tools;
 pub mod types;
