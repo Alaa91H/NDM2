@@ -902,7 +902,9 @@ pub async fn handle_adaptive_get(
 ) -> Json<serde_json::Value> {
     let trackers = match state.engine_trackers.read() {
         Ok(g) => g,
-        Err(_) => return Json(serde_json::json!({"ok": false, "error": "engine_trackers lock poisoned"})),
+        Err(_) => {
+            return Json(serde_json::json!({"ok": false, "error": "engine_trackers lock poisoned"}))
+        }
     };
     match trackers.get(&task_id) {
         Some(tracker) => {
@@ -933,7 +935,9 @@ pub async fn handle_segments_get(
 ) -> Json<serde_json::Value> {
     let trackers = match state.engine_trackers.read() {
         Ok(g) => g,
-        Err(_) => return Json(serde_json::json!({"ok": false, "error": "engine_trackers lock poisoned"})),
+        Err(_) => {
+            return Json(serde_json::json!({"ok": false, "error": "engine_trackers lock poisoned"}))
+        }
     };
     match trackers.get(&task_id) {
         Some(tracker) => match &tracker.segments {
@@ -1324,7 +1328,8 @@ async fn handle_engine_latest_version(
             let latest = json
                 .get("tag_name")
                 .and_then(|v| v.as_str())
-                .unwrap_or("unknown").to_owned();
+                .unwrap_or("unknown")
+                .to_owned();
             let mut current_cmd = std::process::Command::new(&state.ytdlp_bin);
             hide_command_window(&mut current_cmd);
             let current = current_cmd

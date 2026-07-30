@@ -108,14 +108,11 @@ impl DynamicSegmentScheduler {
         if total == 0 {
             return 1.0;
         }
-        let downloaded: u64 = self
-            .segments
-            .lock()
-            .map_or(0, |segs| {
-                segs.iter()
-                    .map(|s| s.downloaded.load(Ordering::Relaxed))
-                    .sum()
-            });
+        let downloaded: u64 = self.segments.lock().map_or(0, |segs| {
+            segs.iter()
+                .map(|s| s.downloaded.load(Ordering::Relaxed))
+                .sum()
+        });
         downloaded as f64 / total as f64
     }
 }

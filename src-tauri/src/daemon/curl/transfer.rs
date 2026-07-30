@@ -6,7 +6,11 @@ use std::time::{Duration, Instant};
 
 use ::curl::easy::Easy2;
 
-use super::{DirectDownloadPlan, requested_connections, CurlTransferConfig, HtmlHeadCapture, apply_easy_options, ResponseCapture, SegmentProgress, create_easy_for_range_ext, CurlMultiGuard, drive_multi_socket, drive_multi_wait_perform};
+use super::{
+    apply_easy_options, create_easy_for_range_ext, drive_multi_socket, drive_multi_wait_perform,
+    requested_connections, CurlMultiGuard, CurlTransferConfig, DirectDownloadPlan, HtmlHeadCapture,
+    ResponseCapture, SegmentProgress,
+};
 use crate::daemon::direct::{
     EventLoopMode, FileWriter, IntegrityMetadata, IntegrityValidator, RetryPolicy, SegmentPlanner,
     SegmentRange as ByteRange,
@@ -39,7 +43,8 @@ fn build_decision_context(
         } else {
             ""
         }
-    }.to_owned();
+    }
+    .to_owned();
 
     // Acquire locks in documented order: curl_jobs (2), engine_trackers (4),
     // then die_orchestrator/resource_manager (10).
@@ -164,7 +169,8 @@ pub fn task_from_body(
             "downloading"
         } else {
             "queued"
-        }.to_owned(),
+        }
+        .to_owned(),
         size_bytes: initial_size,
         downloaded_bytes: downloaded,
         speed_bytes_per_sec: 0,
@@ -194,7 +200,8 @@ pub fn task_from_body(
                 "starting"
             } else {
                 "queued"
-            }.to_owned(),
+            }
+            .to_owned(),
         ),
         error_message: None,
     };
@@ -264,11 +271,7 @@ pub fn plan_from_job(job: &CurlJob) -> DirectDownloadPlan {
     }
 }
 
-pub fn split_ranges(
-    total_size: u64,
-    connections: u32,
-    output_path: &Path,
-) -> Vec<ByteRange> {
+pub fn split_ranges(total_size: u64, connections: u32, output_path: &Path) -> Vec<ByteRange> {
     SegmentPlanner::new(global_config().max_connections_per_download).plan(
         total_size,
         connections,
@@ -384,7 +387,8 @@ fn resolve_effective_target(plan: &DirectDownloadPlan) -> (String, bool, Preflig
             .effective_url()
             .ok()
             .flatten()
-            .filter(|u| u.starts_with("http")).map_or_else(|| current.clone(), std::borrow::ToOwned::to_owned);
+            .filter(|u| u.starts_with("http"))
+            .map_or_else(|| current.clone(), std::borrow::ToOwned::to_owned);
 
         if let Ok(t) = easy.total_time() {
             preflight.initial_rtt_us = t.as_micros() as u64;
@@ -497,55 +501,55 @@ fn update_curl_task_progress(
     };
     if let Some(job) = jobs.get_mut(id) {
         job.task.downloaded_bytes = downloaded;
-            job.task.size_bytes = total_size;
-            job.task.speed_bytes_per_sec = speed.max(0.0) as u64;
-            job.task.elapsed_seconds = job.start_time.elapsed().as_secs();
-            job.task.time_left_seconds = if speed > 0.0 && total_size > downloaded {
-                ((total_size - downloaded) as f64 / speed).ceil() as u64
+        job.task.size_bytes = total_size;
+        job.task.speed_bytes_per_sec = speed.max(0.0) as u64;
+        job.task.elapsed_seconds = job.start_time.elapsed().as_secs();
+        job.task.time_left_seconds = if speed > 0.0 && total_size > downloaded {
+            ((total_size - downloaded) as f64 / speed).ceil() as u64
+        } else {
+            0
+        };
+        if job.segment_prev_bytes.len() != ranges.len() {
+            job.segment_prev_bytes.resize(ranges.len(), 0);
+        }
+        let mut segment_speeds: Vec<u64> = Vec::with_capacity(ranges.len());
+        for (i, (range, progress, initial)) in ranges.iter().enumerate() {
+            let seg_total = part_size(range);
+            let seg_downloaded = (*initial + progress.load(Ordering::Relaxed)).min(seg_total);
+            let prev = job.segment_prev_bytes[i];
+            let seg_speed = if seg_downloaded > prev {
+                (seg_downloaded - prev) as f64 / elapsed
             } else {
-                0
+                0.0
             };
-            if job.segment_prev_bytes.len() != ranges.len() {
-                job.segment_prev_bytes.resize(ranges.len(), 0);
-            }
-            let mut segment_speeds: Vec<u64> = Vec::with_capacity(ranges.len());
-            for (i, (range, progress, initial)) in ranges.iter().enumerate() {
+            job.segment_prev_bytes[i] = seg_downloaded;
+            segment_speeds.push(seg_speed.max(0.0) as u64);
+        }
+        job.task.segments = ranges
+            .iter()
+            .enumerate()
+            .map(|(i, (range, progress, initial))| {
                 let seg_total = part_size(range);
                 let seg_downloaded = (*initial + progress.load(Ordering::Relaxed)).min(seg_total);
-                let prev = job.segment_prev_bytes[i];
-                let seg_speed = if seg_downloaded > prev {
-                    (seg_downloaded - prev) as f64 / elapsed
-                } else {
-                    0.0
-                };
-                job.segment_prev_bytes[i] = seg_downloaded;
-                segment_speeds.push(seg_speed.max(0.0) as u64);
-            }
-            job.task.segments = ranges
-                .iter()
-                .enumerate()
-                .map(|(i, (range, progress, initial))| {
-                    let seg_total = part_size(range);
-                    let seg_downloaded = (*initial + progress.load(Ordering::Relaxed)).min(seg_total);
-                    Segment {
-                        id: range.index as u32,
-                        progress: if seg_total > 0 {
-                            seg_downloaded as f64 / seg_total as f64
-                        } else {
-                            0.0
-                        },
-                        downloaded_bytes: seg_downloaded,
-                        total_bytes: seg_total,
-                        active: seg_downloaded < seg_total && job.task.status == "downloading",
-                        speed: segment_speeds[i],
-                    }
-                })
-                .collect();
-            let task = job.task.clone();
-            drop(jobs);
-            lock_or_err!(state.task_snapshot).insert(id.to_owned(), task);
-            state.mark_dirty();
-        }
+                Segment {
+                    id: range.index as u32,
+                    progress: if seg_total > 0 {
+                        seg_downloaded as f64 / seg_total as f64
+                    } else {
+                        0.0
+                    },
+                    downloaded_bytes: seg_downloaded,
+                    total_bytes: seg_total,
+                    active: seg_downloaded < seg_total && job.task.status == "downloading",
+                    speed: segment_speeds[i],
+                }
+            })
+            .collect();
+        let task = job.task.clone();
+        drop(jobs);
+        lock_or_err!(state.task_snapshot).insert(id.to_owned(), task);
+        state.mark_dirty();
+    }
 }
 
 /// HTTP(S) transfers always yield a non-zero response code after a
@@ -738,24 +742,25 @@ fn run_single_libcurl(
         let speed_u64 = speed.max(0.0) as u64;
         state.bandwidth_manager.report_speed(id, speed_u64);
 
-    // Retry loop: try_lock with backoff to avoid silent drops on contention.
-    let mut jobs = loop {
-        if let Ok(jobs) = state.curl_jobs.try_lock() {
-            break jobs;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    };
-    {
+        // Retry loop: try_lock with backoff to avoid silent drops on contention.
+        let mut jobs = loop {
+            if let Ok(jobs) = state.curl_jobs.try_lock() {
+                break jobs;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        };
+        {
             if let Some(job) = jobs.get_mut(id) {
                 job.task.downloaded_bytes = effective_downloaded;
                 job.task.size_bytes = plan.total_size;
                 job.task.speed_bytes_per_sec = speed_u64;
                 job.task.elapsed_seconds = job.start_time.elapsed().as_secs();
-                job.task.time_left_seconds = if speed > 0.0 && plan.total_size > effective_downloaded {
-                    ((plan.total_size - effective_downloaded) as f64 / speed).ceil() as u64
-                } else {
-                    0
-                };
+                job.task.time_left_seconds =
+                    if speed > 0.0 && plan.total_size > effective_downloaded {
+                        ((plan.total_size - effective_downloaded) as f64 / speed).ceil() as u64
+                    } else {
+                        0
+                    };
                 let task = job.task.clone();
                 drop(jobs);
                 lock_or_err!(state.task_snapshot).insert(id.to_owned(), task);
@@ -808,13 +813,13 @@ fn run_single_libcurl(
         }
         if on_disk == 0 {
             return Err(
-                "Server replied 304 Not Modified but no local file exists to validate against".to_owned(),
+                "Server replied 304 Not Modified but no local file exists to validate against"
+                    .to_owned(),
             );
         }
-        let (captured, encoded) = capture
-            .lock()
-            .ok()
-            .map_or((None, false), |cap| (cap.validator.clone(), cap.content_encoded));
+        let (captured, encoded) = capture.lock().ok().map_or((None, false), |cap| {
+            (cap.validator.clone(), cap.content_encoded)
+        });
         return Ok(TransferOutcome {
             size: on_disk,
             validator: captured,
@@ -883,7 +888,8 @@ fn run_single_libcurl(
         if curl_written == 0 {
             return Err(
                 "Transfer failed: no HTTP response received (DNS, connection, or TLS error). \
-                 The download engine could not reach the server.".to_owned(),
+                 The download engine could not reach the server."
+                    .to_owned(),
             );
         }
         // Partial data was received but the connection dropped before a complete
@@ -903,10 +909,9 @@ fn run_single_libcurl(
             ));
         }
     }
-    let (captured, encoded) = capture
-        .lock()
-        .ok()
-        .map_or((None, false), |cap| (cap.validator.clone(), cap.content_encoded));
+    let (captured, encoded) = capture.lock().ok().map_or((None, false), |cap| {
+        (cap.validator.clone(), cap.content_encoded)
+    });
     Ok(TransferOutcome {
         size: FileWriter::current_size(&plan.output_path),
         validator: captured,
@@ -1036,7 +1041,8 @@ fn run_segmented_libcurl(
     guard.configure_limits(
         global_config().connection_limits_for(effective_connections, &plan.url),
     )?;
-    guard.multi()?
+    guard
+        .multi()?
         .pipelining(false, true)
         .map_err(|e| format!("Could not enable libcurl multiplexing: {e}"))?;
     let mut socket_runtime = if matches!(plan.config.event_loop_mode(), EventLoopMode::MultiSocket)
@@ -1200,7 +1206,9 @@ fn run_segmented_libcurl(
     let (captured_validator, encoded) = seg_captures
         .first()
         .and_then(|cap| cap.lock().ok())
-        .map_or((None, false), |cap| (cap.validator.clone(), cap.content_encoded));
+        .map_or((None, false), |cap| {
+            (cap.validator.clone(), cap.content_encoded)
+        });
     merge_parts(&plan.output_path, &ranges).map(|s| TransferOutcome {
         size: s,
         validator: captured_validator,
@@ -1267,9 +1275,7 @@ fn run_libcurl_download(
             plan.url = effective_url;
         }
         if plan.segmented && !supports_range {
-            log::info!(
-                "Task {id}: server does not honour byte ranges; using a single connection"
-            );
+            log::info!("Task {id}: server does not honour byte ranges; using a single connection");
             plan.segmented = false;
         }
     }
@@ -1376,10 +1382,7 @@ fn run_libcurl_download(
                         let expected_hex = if let Some(bytes) =
                             crate::daemon::utils::base64_decode(expected_raw.trim_matches(':'))
                         {
-                            bytes
-                                .iter()
-                                .map(|b| format!("{b:02x}"))
-                                .collect::<String>()
+                            bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
                         } else {
                             expected_raw.clone()
                         };
@@ -1440,9 +1443,7 @@ fn run_libcurl_download(
                             use crate::daemon::engine::policy_engine::RecoveryAction;
                             match action {
                                 RecoveryAction::Abort => {
-                                    log::warn!(
-                                        "Task {id}: self-healer recommends abort — {error}"
-                                    );
+                                    log::warn!("Task {id}: self-healer recommends abort — {error}");
                                     healer_abort = true;
                                 }
                                 RecoveryAction::ReduceConnections => {
@@ -1529,11 +1530,7 @@ fn run_libcurl_download(
                     ) {
                         Ok(fb) => {
                             crate::daemon::direct::record_host_ceiling(&plan.url, 1);
-                            validate_transfer_size(
-                                plan.total_size,
-                                fb.content_encoded,
-                                fb.size,
-                            )?;
+                            validate_transfer_size(plan.total_size, fb.content_encoded, fb.size)?;
                             return Ok(fb.size);
                         }
                         Err(fb_error)
@@ -1578,7 +1575,8 @@ fn run_libcurl_download(
                         if cancel.load(Ordering::Acquire) {
                             return Err("cancelled".to_owned());
                         }
-                        let chunk = Duration::from_millis(500).min(actual_delay.checked_sub(elapsed).unwrap());
+                        let chunk = Duration::from_millis(500)
+                            .min(actual_delay.checked_sub(elapsed).unwrap());
                         std::thread::sleep(chunk);
                         elapsed += chunk;
                     }
@@ -1589,12 +1587,7 @@ fn run_libcurl_download(
     Err(last_error)
 }
 
-pub fn mark_curl_task_finished(
-    state: &SharedState,
-    id: &str,
-    final_size: u64,
-    generation: u64,
-) {
+pub fn mark_curl_task_finished(state: &SharedState, id: &str, final_size: u64, generation: u64) {
     log::info!("Task {id}: download completed (final_size={final_size}, generation={generation})");
     state.priority_queue.stop_download(id);
     // download_stats scoped to this block and released before curl_jobs
@@ -1727,9 +1720,7 @@ pub fn start_curl_process(state: &SharedState, id: &str) {
     let id2 = id.to_owned();
     std::thread::spawn(move || {
         let (plan, cancel, generation) = record;
-        log::info!(
-            "Starting libcurl multi transfer for task {id2} generation {generation}"
-        );
+        log::info!("Starting libcurl multi transfer for task {id2} generation {generation}");
         let remove_on_error = plan.remove_on_error;
         let output_path = plan.output_path.clone();
         let expected_size = plan.total_size;
@@ -1767,14 +1758,10 @@ pub fn start_curl_process(state: &SharedState, id: &str) {
                     remove_stale_parts_for(&output_path);
                 }
                 if cancelled {
-                    let watchdog_set_error = state2
-                        .curl_jobs
-                        .lock()
-                        .ok()
-                        .is_some_and(|j| {
-                            j.get(&id2)
-                                .is_some_and(|job| job.task.error_message.is_some())
-                        });
+                    let watchdog_set_error = state2.curl_jobs.lock().ok().is_some_and(|j| {
+                        j.get(&id2)
+                            .is_some_and(|job| job.task.error_message.is_some())
+                    });
                     if watchdog_set_error {
                         log::info!(
                             "Task {id2}: watchdog already set error; preserving instead of marking cancelled"
@@ -1837,14 +1824,14 @@ pub fn start_curl_process(state: &SharedState, id: &str) {
                     Ok(j) => j,
                     Err(_) => return,
                 };
-                if let Some(job) = jobs.get(&watchdog_id) { (
-                    job.task.status.clone(),
-                    job.task.downloaded_bytes,
-                    job.task.speed_bytes_per_sec,
-                ) } else {
-                    log::info!(
-                        "Watchdog for {watchdog_id}: job removed from curl_jobs, exiting"
-                    );
+                if let Some(job) = jobs.get(&watchdog_id) {
+                    (
+                        job.task.status.clone(),
+                        job.task.downloaded_bytes,
+                        job.task.speed_bytes_per_sec,
+                    )
+                } else {
+                    log::info!("Watchdog for {watchdog_id}: job removed from curl_jobs, exiting");
                     return;
                 }
             };

@@ -55,8 +55,7 @@ impl ThreadPool {
                         }
                         Err(_) => break,
                     }
-                })
-            {
+                }) {
                 Ok(handle) => handles.push(handle),
                 Err(e) => {
                     log::error!("Failed to spawn nova worker thread {i}: {e}");

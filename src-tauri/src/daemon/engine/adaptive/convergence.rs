@@ -23,7 +23,9 @@ impl ConvergenceDetector {
     pub fn new() -> Self {
         Self {
             history: VecDeque::with_capacity(60),
-            last_adjustment: Instant::now().checked_sub(Duration::from_secs(60)).unwrap_or(Instant::now()),
+            last_adjustment: Instant::now()
+                .checked_sub(Duration::from_secs(60))
+                .unwrap_or(Instant::now()),
             adjustments_in_window: 0,
             window_start: Instant::now(),
             consecutive_no_improvement: 0,

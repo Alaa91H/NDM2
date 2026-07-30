@@ -71,7 +71,8 @@ fn check_ffmpeg_latest(http: &reqwest::Client, os: &str) -> Result<UpdateInfo, S
                     let tag_name = json
                         .get("tag_name")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("unknown").to_owned();
+                        .unwrap_or("unknown")
+                        .to_owned();
 
                     let published_at = json
                         .get("published_at")
@@ -154,7 +155,8 @@ fn check_ytdlp_latest(http: &reqwest::Client, os: &str) -> Result<UpdateInfo, St
                     let tag_name = json
                         .get("tag_name")
                         .and_then(|v| v.as_str())
-                        .unwrap_or("unknown").to_owned();
+                        .unwrap_or("unknown")
+                        .to_owned();
 
                     let published_at = json
                         .get("published_at")
@@ -229,10 +231,9 @@ pub fn download_and_install(
     })
     .map_err(|e| format!("Download request failed: {e}"))?;
 
-    let bytes = tokio::task::block_in_place(|| {
-        rt_handle.block_on(async { response.bytes().await })
-    })
-    .map_err(|e| format!("Failed to read download: {e}"))?;
+    let bytes =
+        tokio::task::block_in_place(|| rt_handle.block_on(async { response.bytes().await }))
+            .map_err(|e| format!("Failed to read download: {e}"))?;
 
     let filename = download_url.rsplit('/').next().unwrap_or("tool");
     let dest_path = install_dir.join(filename);

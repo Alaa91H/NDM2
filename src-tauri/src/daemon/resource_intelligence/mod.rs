@@ -9,7 +9,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use types::{ResolutionReport, ResolutionPhase, ResourceType, RequestDiagnostics, CapabilityState, RetryDecision, ResourceIdentity, ErrorCategory, DownloadStrategy, StrategyRationale};
+use types::{
+    CapabilityState, DownloadStrategy, ErrorCategory, RequestDiagnostics, ResolutionPhase,
+    ResolutionReport, ResourceIdentity, ResourceType, RetryDecision, StrategyRationale,
+};
 
 use crate::daemon::state::SharedState;
 use crate::daemon::types::CreateDownloadBody;

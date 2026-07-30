@@ -129,10 +129,9 @@ impl DownloadRuleEngine {
                 continue;
             }
             let all_match = conditions.iter().all(|cc| match &cc.condition {
-                RuleCondition::UrlMatches { .. } => cc
-                    .regex
-                    .as_ref()
-                    .is_some_and(|re| re.is_match(url)),
+                RuleCondition::UrlMatches { .. } => {
+                    cc.regex.as_ref().is_some_and(|re| re.is_match(url))
+                }
                 RuleCondition::UrlContains { text } => url.contains(text.as_str()),
                 RuleCondition::UrlExtension { extensions } => {
                     let lower = url.to_lowercase();
@@ -140,12 +139,8 @@ impl DownloadRuleEngine {
                         .iter()
                         .any(|ext| lower.ends_with(&format!(".{ext}")))
                 }
-                RuleCondition::FileSizeAbove { bytes } => {
-                    size_bytes.is_some_and(|s| s > *bytes)
-                }
-                RuleCondition::FileSizeBelow { bytes } => {
-                    size_bytes.is_some_and(|s| s < *bytes)
-                }
+                RuleCondition::FileSizeAbove { bytes } => size_bytes.is_some_and(|s| s > *bytes),
+                RuleCondition::FileSizeBelow { bytes } => size_bytes.is_some_and(|s| s < *bytes),
                 RuleCondition::HostnameEquals { hostname: h } => hostname.eq_ignore_ascii_case(h),
                 RuleCondition::HostnameContains { text } => {
                     hostname.to_lowercase().contains(&text.to_lowercase())

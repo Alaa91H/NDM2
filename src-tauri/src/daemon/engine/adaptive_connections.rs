@@ -131,5 +131,4 @@ mod tests {
         assert_eq!(mgr.speed(), 200_000);
         assert_eq!(mgr.peak_speed(), 500_000);
     }
-
 }

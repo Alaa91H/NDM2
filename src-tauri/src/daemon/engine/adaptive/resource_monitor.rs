@@ -23,8 +23,7 @@ impl Default for ResourceSnapshot {
 
 impl ResourceSnapshot {
     fn detect_cpu_count() -> u32 {
-        std::thread::available_parallelism()
-            .map_or(4, |n| n.get() as u32)
+        std::thread::available_parallelism().map_or(4, |n| n.get() as u32)
     }
 }
 
@@ -261,7 +260,6 @@ impl ResourceMonitor {
     fn sample_memory_fallback(&mut self) {
         self.available_memory_mb = 2048;
     }
-
 }
 
 #[cfg(test)]

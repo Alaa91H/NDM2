@@ -18,7 +18,7 @@ use crate::daemon::state::SharedState;
 use crate::daemon::types::CreateDownloadBody;
 use crate::daemon::ytdlp::create_ytdlp_task;
 
-use super::common::{hidden_output_timed, PROBE_USER_AGENT, header_string, header_u64};
+use super::common::{header_string, header_u64, hidden_output_timed, PROBE_USER_AGENT};
 use super::engine::extension_capabilities_from_status;
 
 use serde_json::json;
@@ -318,7 +318,8 @@ pub(super) fn map_candidate_file_type(media_type: &str, extension: Option<&str>)
         // identically.
         _ => crate::daemon::utils::file_type_from_extension(
             extension.unwrap_or("").to_ascii_lowercase().as_str(),
-        ).to_owned(),
+        )
+        .to_owned(),
     }
 }
 
@@ -337,7 +338,8 @@ pub(super) fn extension_candidate_to_download_body(
         .unwrap_or("");
     if matches!(media_type, "torrent" | "magnet") {
         return Err(
-            "Torrent and magnet candidates are not supported by the libcurl direct engine.".to_owned(),
+            "Torrent and magnet candidates are not supported by the libcurl direct engine."
+                .to_owned(),
         );
     }
     let url = candidate
@@ -725,8 +727,14 @@ pub async fn handle_v1_stream_resolve(
         }
     }
     qualities.sort_by(|a, b| {
-        let ah = a.get("height").and_then(serde_json::Value::as_u64).unwrap_or(0);
-        let bh = b.get("height").and_then(serde_json::Value::as_u64).unwrap_or(0);
+        let ah = a
+            .get("height")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let bh = b
+            .get("height")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
         bh.cmp(&ah)
     });
     qualities.dedup_by(|a, b| a.get("url") == b.get("url"));
@@ -879,7 +887,8 @@ pub async fn handle_v1_analyze(
         .get("url")
         .and_then(|v| v.as_str())
         .unwrap_or("")
-        .trim().to_owned();
+        .trim()
+        .to_owned();
     if url.is_empty() {
         return Json(serde_json::json!({"ok": false, "stage": "init", "message": "Missing url"}));
     }
@@ -946,8 +955,14 @@ pub async fn handle_v1_analyze(
                     Some(u) => u,
                     None => continue,
                 };
-                let height = fmt.get("height").and_then(serde_json::Value::as_u64).map(|v| v as u32);
-                let width = fmt.get("width").and_then(serde_json::Value::as_u64).map(|v| v as u32);
+                let height = fmt
+                    .get("height")
+                    .and_then(serde_json::Value::as_u64)
+                    .map(|v| v as u32);
+                let width = fmt
+                    .get("width")
+                    .and_then(serde_json::Value::as_u64)
+                    .map(|v| v as u32);
                 let bandwidth = fmt
                     .get("tbr")
                     .and_then(serde_json::Value::as_f64)
@@ -1021,10 +1036,22 @@ pub async fn handle_v1_analyze(
 
     // Sort formats: video by height desc, audio by bandwidth desc
     formats.sort_by(|a, b| {
-        let a_h = a.get("height").and_then(serde_json::Value::as_u64).unwrap_or(0);
-        let b_h = b.get("height").and_then(serde_json::Value::as_u64).unwrap_or(0);
-        let a_bw = a.get("bandwidth").and_then(serde_json::Value::as_u64).unwrap_or(0);
-        let b_bw = b.get("bandwidth").and_then(serde_json::Value::as_u64).unwrap_or(0);
+        let a_h = a
+            .get("height")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let b_h = b
+            .get("height")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let a_bw = a
+            .get("bandwidth")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let b_bw = b
+            .get("bandwidth")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
         if a_h != b_h {
             return b_h.cmp(&a_h);
         }
@@ -1034,12 +1061,16 @@ pub async fn handle_v1_analyze(
 
     // Detect media type from HTTP probe + format analysis
     let detected_type = if !formats.is_empty() {
-        let has_video = formats
-            .iter()
-            .any(|f| f.get("hasVideo").and_then(serde_json::Value::as_bool).unwrap_or(false));
-        let has_audio = formats
-            .iter()
-            .any(|f| f.get("hasAudio").and_then(serde_json::Value::as_bool).unwrap_or(false));
+        let has_video = formats.iter().any(|f| {
+            f.get("hasVideo")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+        });
+        let has_audio = formats.iter().any(|f| {
+            f.get("hasAudio")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+        });
         if has_video {
             "video"
         } else if has_audio {
@@ -1109,7 +1140,8 @@ pub async fn handle_v1_analyze_progress(
         .get("url")
         .and_then(|v| v.as_str())
         .unwrap_or("")
-        .trim().to_owned();
+        .trim()
+        .to_owned();
     let _context = body.get("context").cloned().unwrap_or_else(|| json!({}));
     let cancel = CancellationToken::new();
 
@@ -1201,7 +1233,10 @@ async fn http_probe_for_analyze(state: &SharedState, url: &str) -> Option<serde_
         if content_length > 0 {
             meta.insert("sizeBytes".to_owned(), json!(content_length));
         }
-        meta.insert("acceptRanges".to_owned(), json!(accept_ranges.eq_ignore_ascii_case("bytes")));
+        meta.insert(
+            "acceptRanges".to_owned(),
+            json!(accept_ranges.eq_ignore_ascii_case("bytes")),
+        );
         Some(serde_json::Value::Object(meta))
     })
     .await
@@ -1238,7 +1273,10 @@ async fn ytdlp_probe_for_analyze(state: &SharedState, url: &str) -> Option<serde
     }
     let stdout = String::from_utf8_lossy(&process_output.stdout);
     if stdout.len() > 1_048_576 {
-        log::warn!("yt-dlp output exceeded 1 MB size limit ({} bytes)", stdout.len());
+        log::warn!(
+            "yt-dlp output exceeded 1 MB size limit ({} bytes)",
+            stdout.len()
+        );
         return None;
     }
     serde_json::from_str(&stdout).ok()

@@ -852,7 +852,10 @@ async fn background_size_probe(state: SharedState, task_id: String, url: String)
     };
     let probe_result = probe_url_with_options(&state, &url, Some(&probe_body)).await;
     let size = match probe_result {
-        Ok(json) => json.get("sizeBytes").and_then(serde_json::Value::as_u64).unwrap_or(0),
+        Ok(json) => json
+            .get("sizeBytes")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0),
         Err(e) => {
             log::debug!("background_size_probe for {task_id}: {e:?}");
             return;
@@ -883,9 +886,7 @@ async fn background_size_probe(state: SharedState, task_id: String, url: String)
         }
         state.priority_queue.update_size(&task_id, size);
         state.mark_dirty();
-        log::info!(
-            "background_size_probe: updated task {task_id} size to {size} bytes"
-        );
+        log::info!("background_size_probe: updated task {task_id} size to {size} bytes");
     }
 }
 

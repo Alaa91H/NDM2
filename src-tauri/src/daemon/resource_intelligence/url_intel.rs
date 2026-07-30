@@ -18,7 +18,8 @@ pub fn analyze_url(url: &str) -> UrlIntelligence {
     let host = parsed
         .as_ref()
         .and_then(|u| u.host_str())
-        .unwrap_or("").to_owned();
+        .unwrap_or("")
+        .to_owned();
     let port = parsed
         .as_ref()
         .and_then(tauri::Url::port)

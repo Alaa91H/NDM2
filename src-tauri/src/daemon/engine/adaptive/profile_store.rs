@@ -192,7 +192,8 @@ impl UnifiedProfileStore {
             }
             if old.median_rtt_us > 0 && persisted.initial_rtt_us > 0 {
                 let alpha = 0.3;
-                persisted.median_rtt_us = (old.median_rtt_us as f64).mul_add(1.0 - alpha, persisted.initial_rtt_us as f64 * alpha)
+                persisted.median_rtt_us = (old.median_rtt_us as f64)
+                    .mul_add(1.0 - alpha, persisted.initial_rtt_us as f64 * alpha)
                     as u64;
             }
             persisted.bandwidth_plateau_detected = old.bandwidth_plateau_detected;
@@ -336,16 +337,11 @@ impl UnifiedProfileStore {
 
     fn write_to_disk(profiles: &HashMap<String, PersistedProfile>, path: &PathBuf) {
         if let Ok(json) = serde_json::to_string_pretty(profiles) {
-            if let Err(e) =
-                fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new(".")))
-            {
+            if let Err(e) = fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new("."))) {
                 log::error!("profile_store: failed to create dir: {e}");
             }
             if let Err(e) = fs::write(path, json) {
-                log::error!(
-                    "profile_store: failed to write {}: {e}",
-                    path.display()
-                );
+                log::error!("profile_store: failed to write {}: {e}", path.display());
             }
         }
     }
@@ -355,7 +351,10 @@ impl UnifiedProfileStore {
     }
 
     pub fn known_hosts(&self) -> Vec<&str> {
-        self.profiles.keys().map(std::string::String::as_str).collect()
+        self.profiles
+            .keys()
+            .map(std::string::String::as_str)
+            .collect()
     }
 
     fn load_from_disk(path: &PathBuf) -> HashMap<String, PersistedProfile> {

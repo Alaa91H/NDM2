@@ -87,7 +87,10 @@ impl SelfHealer {
         }
 
         let decision = {
-            let pe = self.policy_engine.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let pe = self
+                .policy_engine
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             pe.decide_recovery(ctx)
         };
 
@@ -116,7 +119,9 @@ impl SelfHealer {
     }
 
     fn can_recover(&self) -> bool {
-        let window_start = Instant::now().checked_sub(self.recovery_window).unwrap_or(Instant::now());
+        let window_start = Instant::now()
+            .checked_sub(self.recovery_window)
+            .unwrap_or(Instant::now());
         // Count only records where recovery was actually applied, not all
         // failures. Raw failures (e.g., DNS timeouts from different hosts)
         // should not consume the recovery budget.

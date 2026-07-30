@@ -71,7 +71,8 @@ pub(super) fn header_string(headers: &reqwest::header::HeaderMap, key: &str) -> 
     headers
         .get(key)
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("").to_owned()
+        .unwrap_or("")
+        .to_owned()
 }
 
 pub(super) fn header_u64(headers: &reqwest::header::HeaderMap, key: &str) -> u64 {

@@ -269,7 +269,8 @@ fn first_line(text: &str) -> String {
 fn second_token(line: &str) -> String {
     line.split_whitespace()
         .nth(1)
-        .unwrap_or("unknown").to_owned()
+        .unwrap_or("unknown")
+        .to_owned()
 }
 
 fn lower_set(values: &[String]) -> HashSet<String> {
@@ -297,7 +298,8 @@ fn parse_long_flags(help: &str) -> HashSet<String> {
                     .split(['=', '[', '<', '|', ','])
                     .next()
                     .unwrap_or(cleaned)
-                    .trim().to_owned();
+                    .trim()
+                    .to_owned();
                 if flag.starts_with("--") {
                     flags.insert(flag);
                 }
@@ -509,17 +511,20 @@ fn linked_libcurl_flags(version: &::curl::Version) -> HashSet<String> {
 
 fn expected_libcurl_version() -> String {
     option_env!("NOVA_BUILD_LIBCURL_VERSION")
-        .unwrap_or("unmanaged").to_owned()
+        .unwrap_or("unmanaged")
+        .to_owned()
 }
 
 fn expected_libcurl_tag() -> String {
     option_env!("NOVA_BUILD_LIBCURL_TAG")
-        .unwrap_or("unmanaged").to_owned()
+        .unwrap_or("unmanaged")
+        .to_owned()
 }
 
 fn expected_libcurl_sha256() -> String {
     option_env!("NOVA_BUILD_LIBCURL_SHA256")
-        .unwrap_or("unmanaged").to_owned()
+        .unwrap_or("unmanaged")
+        .to_owned()
 }
 
 fn expected_csv_set(value: &str) -> HashSet<String> {
@@ -561,17 +566,20 @@ fn checkable_features() -> HashSet<String> {
 
 fn expected_libcurl_feature_profile() -> String {
     option_env!("NOVA_BUILD_LIBCURL_FEATURE_PROFILE")
-        .unwrap_or("unmanaged").to_owned()
+        .unwrap_or("unmanaged")
+        .to_owned()
 }
 
 fn expected_libcurl_prefix() -> String {
     option_env!("NOVA_BUILD_LIBCURL_PREFIX")
-        .unwrap_or("unmanaged").to_owned()
+        .unwrap_or("unmanaged")
+        .to_owned()
 }
 
 fn libcurl_link_mode() -> String {
     option_env!("NOVA_BUILD_LIBCURL_LINK_MODE")
-        .unwrap_or("system-or-vendored-fallback").to_owned()
+        .unwrap_or("system-or-vendored-fallback")
+        .to_owned()
 }
 
 fn normalize_libcurl_version(value: &str) -> String {
@@ -579,7 +587,8 @@ fn normalize_libcurl_version(value: &str) -> String {
         .trim()
         .split(['-', '+'])
         .next()
-        .unwrap_or("").to_owned()
+        .unwrap_or("")
+        .to_owned()
 }
 
 fn linked_libcurl_version() -> String {
@@ -607,7 +616,10 @@ fn linked_libcurl_model() -> (
     HashSet<String>,
 ) {
     let linked = ::curl::Version::get();
-    let protocols: Vec<String> = linked.protocols().map(std::borrow::ToOwned::to_owned).collect();
+    let protocols: Vec<String> = linked
+        .protocols()
+        .map(std::borrow::ToOwned::to_owned)
+        .collect();
     let features = linked_libcurl_features(&linked);
     let version_line = format!("libcurl {}", linked.version());
     let tls = linked_libcurl_tls_backend();
@@ -1130,7 +1142,8 @@ pub fn validate_curl_direct_options(
             "3" | "http3" => "3",
             "3-only" | "http3-only" => "3-only",
             other => other,
-        }.to_owned();
+        }
+        .to_owned();
         if !http_versions.iter().any(|item| item == &normalized) {
             return Err(format!(
                 "Requested HTTP version '{}' is not supported by this curl build. Supported versions: {}",
@@ -1436,7 +1449,8 @@ pub fn ffmpeg_status(ffmpeg_bin: &str) -> Value {
     let output = hidden_output(ffmpeg_bin, &["-version"]);
     let available = output.is_some() || executable_available(ffmpeg_bin);
     let version_text = output
-        .as_deref().map_or_else(|| "unknown".to_owned(), first_line);
+        .as_deref()
+        .map_or_else(|| "unknown".to_owned(), first_line);
     let formats = if available {
         parse_ffmpeg_list(&hidden_output_any(ffmpeg_bin, &["-formats"]).unwrap_or_default())
     } else {

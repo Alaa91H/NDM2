@@ -24,28 +24,14 @@ fn main() {
     println!("cargo:rerun-if-env-changed=NOVA_EXPECT_LIBCURL_PROTOCOLS");
     println!("cargo:rerun-if-env-changed=NOVA_EXPECT_LIBCURL_FEATURES");
     println!("cargo:rerun-if-env-changed=NOVA_LIBCURL_FEATURE_PROFILE");
-    println!(
-        "cargo:rustc-env=NOVA_BUILD_LIBCURL_VERSION={libcurl_version}"
-    );
+    println!("cargo:rustc-env=NOVA_BUILD_LIBCURL_VERSION={libcurl_version}");
     println!("cargo:rustc-env=NOVA_BUILD_LIBCURL_TAG={libcurl_tag}");
-    println!(
-        "cargo:rustc-env=NOVA_BUILD_LIBCURL_SHA256={libcurl_sha256}"
-    );
-    println!(
-        "cargo:rustc-env=NOVA_BUILD_LIBCURL_PREFIX={libcurl_prefix}"
-    );
-    println!(
-        "cargo:rustc-env=NOVA_BUILD_LIBCURL_LINK_MODE={libcurl_link_mode}"
-    );
-    println!(
-        "cargo:rustc-env=NOVA_BUILD_LIBCURL_PROTOCOLS={libcurl_protocols}"
-    );
-    println!(
-        "cargo:rustc-env=NOVA_BUILD_LIBCURL_FEATURES={libcurl_features}"
-    );
-    println!(
-        "cargo:rustc-env=NOVA_BUILD_LIBCURL_FEATURE_PROFILE={libcurl_feature_profile}"
-    );
+    println!("cargo:rustc-env=NOVA_BUILD_LIBCURL_SHA256={libcurl_sha256}");
+    println!("cargo:rustc-env=NOVA_BUILD_LIBCURL_PREFIX={libcurl_prefix}");
+    println!("cargo:rustc-env=NOVA_BUILD_LIBCURL_LINK_MODE={libcurl_link_mode}");
+    println!("cargo:rustc-env=NOVA_BUILD_LIBCURL_PROTOCOLS={libcurl_protocols}");
+    println!("cargo:rustc-env=NOVA_BUILD_LIBCURL_FEATURES={libcurl_features}");
+    println!("cargo:rustc-env=NOVA_BUILD_LIBCURL_FEATURE_PROFILE={libcurl_feature_profile}");
 
     if libcurl_link_mode.contains("fallback") || libcurl_prefix == "unmanaged" {
         println!(

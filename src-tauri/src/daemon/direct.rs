@@ -221,7 +221,8 @@ impl SegmentPlanner {
         let file_base = output_path
             .file_name()
             .and_then(|value| value.to_str())
-            .unwrap_or("download").to_owned();
+            .unwrap_or("download")
+            .to_owned();
         let dir = output_path.parent().unwrap_or_else(|| Path::new(""));
         let mut ranges = Vec::with_capacity(count);
         let mut start = 0u64;
@@ -255,8 +256,7 @@ impl FileWriter {
     }
 
     pub fn current_size(path: &Path) -> u64 {
-        std::fs::metadata(path)
-            .map_or(0, |metadata| metadata.len())
+        std::fs::metadata(path).map_or(0, |metadata| metadata.len())
     }
 
     pub fn cleanup_parts(ranges: &[SegmentRange]) {
@@ -288,11 +288,12 @@ impl FileWriter {
     pub fn merge_parts(output_path: &Path, ranges: &[SegmentRange]) -> Result<u64, String> {
         // Include a random suffix to prevent collisions if two NOVA processes
         // merge the same file concurrently or the same file is re-downloaded.
-        let random_suffix: u64 = u64::from(std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .subsec_nanos())
-            ^ u64::from(std::process::id()) << 24;
+        let random_suffix: u64 = u64::from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .subsec_nanos(),
+        ) ^ u64::from(std::process::id()) << 24;
         let tmp_path = output_path.with_extension(format!("nova-merge-tmp-{random_suffix:x}"));
         let _ = std::fs::remove_file(&tmp_path);
         let mut out = OpenOptions::new()
@@ -363,7 +364,7 @@ impl RetryPolicy {
         if attempt == 0 || self.attempts <= 1 {
             return Duration::ZERO;
         }
-        let exp = f64::from(attempt.saturating_sub(1) );
+        let exp = f64::from(attempt.saturating_sub(1));
         let base = self.delay.as_secs_f64() * self.backoff_multiplier.powf(exp);
         let capped = base.min(self.max_delay.as_secs_f64());
         if self.jitter {

@@ -1,4 +1,7 @@
-use super::types::{ResourceIdentity, ServerCapabilities, StabilityAnalysis, ServerProfile, DownloadStrategy, StrategyRationale, CapabilityState};
+use super::types::{
+    CapabilityState, DownloadStrategy, ResourceIdentity, ServerCapabilities, ServerProfile,
+    StabilityAnalysis, StrategyRationale,
+};
 
 pub fn select_strategy(
     _resource: &ResourceIdentity,

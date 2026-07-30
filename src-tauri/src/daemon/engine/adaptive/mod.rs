@@ -364,7 +364,9 @@ impl AdaptiveEngine {
             total_size,
             current_connections: connections,
             last_decision: AdaptationDecision::default(),
-            last_tick: Instant::now().checked_sub(Duration::from_secs(10)).unwrap_or(Instant::now()),
+            last_tick: Instant::now()
+                .checked_sub(Duration::from_secs(10))
+                .unwrap_or(Instant::now()),
             tick_interval: Duration::from_secs(2),
         }
     }

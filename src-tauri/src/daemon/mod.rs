@@ -20,8 +20,8 @@ use reqwest::Client as HttpClient;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Mutex, RwLock};
-use tokio::sync::oneshot;
 use std::time::Instant;
+use tokio::sync::oneshot;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
@@ -132,13 +132,17 @@ fn resolve_engine_binary(resource_dir: &str, binary_name: &str) -> String {
 
     candidates
         .into_iter()
-        .find(|candidate| candidate.exists()).map_or_else(|| {
-            log::error!(
-                "{binary_name} not found in bundled locations; falling back to PATH lookup. \
+        .find(|candidate| candidate.exists())
+        .map_or_else(
+            || {
+                log::error!(
+                    "{binary_name} not found in bundled locations; falling back to PATH lookup. \
                  This may be a security risk if PATH has been tampered with."
-            );
-            binary_name.to_owned()
-        }, |candidate| candidate.display().to_string())
+                );
+                binary_name.to_owned()
+            },
+            |candidate| candidate.display().to_string(),
+        )
 }
 
 pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
@@ -407,7 +411,9 @@ pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
                     }
                 }
             }
-            let listener = if let Some(l) = listener { l } else {
+            let listener = if let Some(l) = listener {
+                l
+            } else {
                 log::error!("Failed to bind daemon to {addr} after 5 retries");
                 return;
             };
@@ -416,7 +422,8 @@ pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
             // and browser extension can discover it, and so we can kill only the
             // correct process on restart (not other services on the port range).
             let port_file = std::path::Path::new(&data_dir).join("nova-daemon.port");
-            if let Err(e) = std::fs::write(&port_file, format!("{}\n{}", port, std::process::id())) {
+            if let Err(e) = std::fs::write(&port_file, format!("{}\n{}", port, std::process::id()))
+            {
                 log::warn!("Failed to write daemon port file: {e}");
             }
             let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -586,7 +593,8 @@ fn restore_persisted_tasks(
             task.status = "error".to_owned();
             task.engine_status = Some("unsupported-engine".to_owned());
             task.error_message = Some(
-                "This download used a removed engine. Re-add it with the libcurl engine.".to_owned(),
+                "This download used a removed engine. Re-add it with the libcurl engine."
+                    .to_owned(),
             );
             task.speed_bytes_per_sec = 0;
         }

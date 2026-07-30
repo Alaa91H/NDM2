@@ -2,7 +2,9 @@ use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 use uuid::Uuid;
 
-use super::{destination_from_body, args, task_from_body, start_curl_process, Arc, remove_stale_parts_for};
+use super::{
+    args, destination_from_body, remove_stale_parts_for, start_curl_process, task_from_body, Arc,
+};
 use crate::daemon::direct::DirectUrl;
 use crate::daemon::engine::extractor::{EngineStatus, Extractor, ValidateError};
 use crate::daemon::state::SharedState;
@@ -444,7 +446,8 @@ pub async fn redownload_task(state: &SharedState, id: &str) -> Result<Task, Stri
                     if std::fs::remove_file(&path).is_ok() {
                         break;
                     }
-                    tokio::time::sleep(std::time::Duration::from_millis(200 * (1 << attempt))).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(200 * (1 << attempt)))
+                        .await;
                 }
             }
             lock_or_err!(state.task_snapshot).insert(id.to_owned(), task.clone());
@@ -502,11 +505,7 @@ pub async fn redownload_task(state: &SharedState, id: &str) -> Result<Task, Stri
     Err("Task not found".to_owned())
 }
 
-pub async fn delete_task(
-    state: &SharedState,
-    id: &str,
-    delete_files: bool,
-) -> Result<(), String> {
+pub async fn delete_task(state: &SharedState, id: &str, delete_files: bool) -> Result<(), String> {
     {
         let entry = {
             let mut jobs = lock_or_err!(state.media_jobs);
@@ -514,10 +513,7 @@ pub async fn delete_task(
                 if let Some(pid) = job.child {
                     kill_process(pid);
                 }
-                Some((
-                    std::path::PathBuf::from(&job.task.save_path),
-                    job.task.url,
-                ))
+                Some((std::path::PathBuf::from(&job.task.save_path), job.task.url))
             } else {
                 None
             }
@@ -533,7 +529,8 @@ pub async fn delete_task(
                     if std::fs::remove_file(&path).is_ok() {
                         break;
                     }
-                    tokio::time::sleep(std::time::Duration::from_millis(200 * (1 << attempt))).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(200 * (1 << attempt)))
+                        .await;
                 }
             }
             if let Ok(mut trackers) = state.engine_trackers.write() {
@@ -558,12 +555,7 @@ pub async fn delete_task(
             // Remove from snapshot before curl_jobs to prevent ghost task.
             lock_or_err!(state.task_snapshot).remove(id);
             let job = jobs.remove(id);
-            job.map(|job| {
-                (
-                    std::path::PathBuf::from(&job.task.save_path),
-                    job.task.url,
-                )
-            })
+            job.map(|job| (std::path::PathBuf::from(&job.task.save_path), job.task.url))
         };
         if let Some((path, url)) = entry {
             state.priority_queue.remove(id);
@@ -576,7 +568,8 @@ pub async fn delete_task(
                     if std::fs::remove_file(&path).is_ok() {
                         break;
                     }
-                    tokio::time::sleep(std::time::Duration::from_millis(200 * (1 << attempt))).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(200 * (1 << attempt)))
+                        .await;
                 }
                 remove_stale_parts_for(&path);
             }

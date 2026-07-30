@@ -330,7 +330,10 @@ impl ServerProfiler {
     }
 
     pub fn active_hosts(&self) -> Vec<&str> {
-        self.profiles.keys().map(std::string::String::as_str).collect()
+        self.profiles
+            .keys()
+            .map(std::string::String::as_str)
+            .collect()
     }
 }
 

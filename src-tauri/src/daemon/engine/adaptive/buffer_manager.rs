@@ -37,7 +37,9 @@ impl BufferManager {
             peak_speed: 0,
             memory_pressure: 0.0,
             active_connections: 1,
-            last_adjustment: Instant::now().checked_sub(Duration::from_secs(10)).unwrap_or(Instant::now()),
+            last_adjustment: Instant::now()
+                .checked_sub(Duration::from_secs(10))
+                .unwrap_or(Instant::now()),
             adjustment_interval: Duration::from_secs(3),
         }
     }

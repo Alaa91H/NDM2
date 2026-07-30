@@ -685,9 +685,7 @@ pub fn apply_easy_options<H: Handler>(
     }
     if let Some(key) = plan.config.str_("key") {
         if key.contains("..") || key.starts_with('/') || key.starts_with('\\') {
-            return Err(
-                "key path must be a relative path within the working directory".to_owned(),
-            );
+            return Err("key path must be a relative path within the working directory".to_owned());
         }
         easy.ssl_key(key)
             .map_err(|e| format!("Could not configure SSL key: {e}"))?;
@@ -1201,8 +1199,8 @@ pub fn create_easy_for_range_ext(
 /// list of protocol names (e.g. "http,https,ftp").
 fn reject_unsafe_protocols(value: &str, field: &str) -> Result<(), String> {
     const FORBIDDEN: &[&str] = &[
-        "file", "gopher", "scp", "smb", "smbs", "telnet", "dict", "ldap",
-        "tftp", "gophers", "imap", "imaps", "smtp", "smtps",
+        "file", "gopher", "scp", "smb", "smbs", "telnet", "dict", "ldap", "tftp", "gophers",
+        "imap", "imaps", "smtp", "smtps",
     ];
     let lower = value.to_lowercase();
     for &bad in FORBIDDEN {

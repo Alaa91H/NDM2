@@ -366,10 +366,8 @@ fn media_output_produced(task: &crate::daemon::types::Task) -> bool {
         return true;
     }
     let path = std::path::Path::new(&task.save_path);
-    let non_empty = |p: &std::path::Path| {
-        std::fs::metadata(p)
-            .is_ok_and(|m| m.is_file() && m.len() > 0)
-    };
+    let non_empty =
+        |p: &std::path::Path| std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.len() > 0);
     if non_empty(path) {
         return true;
     }
@@ -977,7 +975,8 @@ pub async fn create_ytdlp_task(
             "downloading"
         } else {
             "queued"
-        }.to_owned(),
+        }
+        .to_owned(),
         size_bytes: 0,
         downloaded_bytes: 0,
         speed_bytes_per_sec: 0,
@@ -1091,10 +1090,7 @@ impl Extractor for YtDlpExtractor {
             name: "yt-dlp".to_owned(),
             available,
             version,
-            features: vec![
-                "media-extraction".to_owned(),
-                "format-selection".to_owned(),
-            ],
+            features: vec!["media-extraction".to_owned(), "format-selection".to_owned()],
         }
     }
 }

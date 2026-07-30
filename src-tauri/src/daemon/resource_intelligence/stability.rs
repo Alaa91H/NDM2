@@ -171,8 +171,9 @@ impl ServerProfileStore {
         }
 
         let connection_failures = f64::from(consecutive_failures) / total;
-        let overall =
-            connection_failures.mul_add(-0.2, rate_limit_freq.mul_add(-0.3, successes / total)).clamp(0.0, 1.0);
+        let overall = connection_failures
+            .mul_add(-0.2, rate_limit_freq.mul_add(-0.3, successes / total))
+            .clamp(0.0, 1.0);
 
         StabilityAnalysis {
             response_stability: if variance < 1000.0 { 1.0 } else { 0.5 },

@@ -192,7 +192,9 @@ impl EventBus {
     pub fn publish(&self, event: EngineEvent) {
         // Phase 1: lock + decide whether to store or queue
         let (ts_event, subscriber_clone) = {
-            let mut inner = if let Ok(g) = self.inner.lock() { g } else {
+            let mut inner = if let Ok(g) = self.inner.lock() {
+                g
+            } else {
                 log::error!("EventBus: mutex poisoned, dropping event");
                 return;
             };
@@ -334,9 +336,7 @@ impl EventBus {
     }
 
     pub fn subscriber_count(&self) -> usize {
-        self.inner
-            .lock()
-            .map_or(0, |inner| inner.subscribers.len())
+        self.inner.lock().map_or(0, |inner| inner.subscribers.len())
     }
 }
 

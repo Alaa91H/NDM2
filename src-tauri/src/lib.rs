@@ -71,9 +71,10 @@ fn get_version() -> String {
 
 #[tauri::command]
 fn get_daemon_url(state: tauri::State<DaemonUrl>) -> String {
-    state
-        .0
-        .lock().map_or_else(|_| format!("http://127.0.0.1:{DEFAULT_DAEMON_PORT}"), |g| g.clone())
+    state.0.lock().map_or_else(
+        |_| format!("http://127.0.0.1:{DEFAULT_DAEMON_PORT}"),
+        |g| g.clone(),
+    )
 }
 
 /// Return the daemon's API bearer token so the trusted desktop webview can
@@ -566,7 +567,7 @@ fn kill_old_daemon_range(our_pid: u32, preferred: u16) {
     }
 }
 
-#[must_use] 
+#[must_use]
 pub fn is_integration_mode() -> bool {
     std::env::args().any(|arg| arg == "--integration" || arg == "--background")
 }
@@ -604,9 +605,7 @@ pub fn run_integration_mode() {
         format!("{home}/nova-download-manager")
     };
 
-    log::info!(
-        "Integration mode: starting daemon on port {port} (no GUI)"
-    );
+    log::info!("Integration mode: starting daemon on port {port} (no GUI)");
     daemon::start_daemon(resource_dir, data_dir, port);
 
     // Keep the process alive

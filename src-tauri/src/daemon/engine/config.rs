@@ -27,8 +27,7 @@ impl Default for EngineConfig {
 }
 
 fn cpu_count() -> u32 {
-    std::thread::available_parallelism()
-        .map_or(4, |n| n.get() as u32)
+    std::thread::available_parallelism().map_or(4, |n| n.get() as u32)
 }
 
 /// Returns a shared singleton `EngineConfig`. First call detects system resources.

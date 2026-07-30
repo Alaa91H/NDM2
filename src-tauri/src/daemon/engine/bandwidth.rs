@@ -127,10 +127,10 @@ impl BandwidthManager {
         if let Ok(mut history) = self.speed_history.lock() {
             // Evict entries older than 60 seconds when over capacity.
             if history.len() >= MAX_SPEED_HISTORY_TASKS && !history.contains_key(task_id) {
-                let cutoff = Instant::now().checked_sub(std::time::Duration::from_secs(60)).unwrap_or(Instant::now());
-                history.retain(|_, samples| {
-                    samples.back().is_some_and(|s| s.0 >= cutoff)
-                });
+                let cutoff = Instant::now()
+                    .checked_sub(std::time::Duration::from_secs(60))
+                    .unwrap_or(Instant::now());
+                history.retain(|_, samples| samples.back().is_some_and(|s| s.0 >= cutoff));
             }
             let entry = history.entry(task_id.to_owned()).or_default();
             entry.push_back((Instant::now(), bytes_per_sec));

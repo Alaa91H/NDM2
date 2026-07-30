@@ -117,7 +117,10 @@ impl ExternalToolManager {
                     .as_ref()
                     .map(|p| p.display().to_string())
                     .unwrap_or_default();
-                let ver_display = installation.version.as_ref().map(std::string::ToString::to_string);
+                let ver_display = installation
+                    .version
+                    .as_ref()
+                    .map(std::string::ToString::to_string);
                 registry::register_tool(
                     reg,
                     tool.id().as_str(),
@@ -260,7 +263,10 @@ impl ExternalToolManager {
             name: tool.name().to_owned(),
             description: tool.description().to_owned(),
             status: installation.status.display_text().to_owned(),
-            version: installation.version.as_ref().map(std::string::ToString::to_string),
+            version: installation
+                .version
+                .as_ref()
+                .map(std::string::ToString::to_string),
             latest_version: update_info.latest_version.clone(),
             path: installation.path.as_ref().map(|p| p.display().to_string()),
             custom_path: installation.custom_path,

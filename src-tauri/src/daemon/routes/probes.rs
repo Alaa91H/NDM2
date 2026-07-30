@@ -12,7 +12,11 @@ use crate::daemon::state::SharedState;
 use crate::daemon::types::CreateDownloadBody;
 use crate::daemon::utils::infer_file_type;
 
-use super::common::{header_string, extract_sha256_digest, extract_best_size, content_disposition_filename, fallback_file_name, PROBE_USER_AGENT, PROBE_HEAD_TIMEOUT_SECS, PROBE_RANGE_TIMEOUT_SECS, is_cloudflare_challenge, hidden_output_timed, hidden_output};
+use super::common::{
+    content_disposition_filename, extract_best_size, extract_sha256_digest, fallback_file_name,
+    header_string, hidden_output, hidden_output_timed, is_cloudflare_challenge,
+    PROBE_HEAD_TIMEOUT_SECS, PROBE_RANGE_TIMEOUT_SECS, PROBE_USER_AGENT,
+};
 use crate::daemon::utils::{parse_meta_refresh_url, refreshed_url};
 
 fn probe_payload(
@@ -46,7 +50,10 @@ fn probe_payload(
         .filter_map(|v| v.to_str().ok())
         .flat_map(crate::daemon::utils::parse_link_mirrors)
         .collect();
-    let mirror_priorities: Vec<u64> = parsed_mirrors.iter().map(|m| u64::from(m.priority)).collect();
+    let mirror_priorities: Vec<u64> = parsed_mirrors
+        .iter()
+        .map(|m| u64::from(m.priority))
+        .collect();
     let link_mirrors: Vec<String> = parsed_mirrors.into_iter().map(|m| m.url).collect();
 
     serde_json::json!({
@@ -258,12 +265,7 @@ fn cache_probe_payload(state: &SharedState, url: &str, payload: &serde_json::Val
     if ct.contains("text/html") {
         return;
     }
-    let get_str = |key: &str| {
-        payload
-            .get(key)
-            .and_then(|v| v.as_str())
-            .map(str::to_owned)
-    };
+    let get_str = |key: &str| payload.get(key).and_then(|v| v.as_str()).map(str::to_owned);
     let mut headers = HashMap::new();
     if let Some(final_url) = get_str("finalUrl") {
         headers.insert("finalUrl".to_owned(), final_url);
@@ -551,9 +553,7 @@ async fn probe_url_uncached(
                 log::info!("probe: challenge/interstitial page detected for {url}");
             }
         } else {
-            log::warn!(
-                "probe GET (encoding) {url} -> {status} {status_reason}"
-            );
+            log::warn!("probe GET (encoding) {url} -> {status} {status_reason}");
         }
         body_text
     } else {
@@ -673,7 +673,10 @@ pub async fn handle_ytdlp_probe(
         )
     })?;
 
-    let duration = info.get("duration").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+    let duration = info
+        .get("duration")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0);
     let hours = (duration / 3600.0).floor();
     let minutes = ((duration % 3600.0) / 60.0).floor();
     let seconds = (duration % 60.0).floor();
@@ -783,9 +786,13 @@ pub async fn handle_ytdlp_probe_playlist(
                     .get("playlist_title")
                     .or(info.get("title"))
                     .and_then(|v| v.as_str())
-                    .unwrap_or("Playlist").to_owned();
+                    .unwrap_or("Playlist")
+                    .to_owned();
             }
-            let dur = info.get("duration").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+            let dur = info
+                .get("duration")
+                .and_then(serde_json::Value::as_f64)
+                .unwrap_or(0.0);
             let hours = (dur / 3600.0).floor();
             let minutes = ((dur % 3600.0) / 60.0).floor();
             let seconds = (dur % 60.0).floor();
@@ -817,8 +824,8 @@ pub async fn handle_ytdlp_probe_playlist(
 }
 
 pub async fn handle_ytdlp_ffmpeg(State(state): State<SharedState>) -> Json<serde_json::Value> {
-    let available = hidden_output(&state.ffmpeg_bin, &["-version"])
-        .is_ok_and(|o| o.status.success());
+    let available =
+        hidden_output(&state.ffmpeg_bin, &["-version"]).is_ok_and(|o| o.status.success());
     Json(serde_json::json!({"available": available, "binary": state.ffmpeg_bin.clone()}))
 }
 

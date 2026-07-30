@@ -6,7 +6,7 @@ use std::time::Duration;
 use ::curl::easy::{Easy2, Handler};
 use ::curl::multi::{Easy2Handle, Events, Multi, Socket, WaitFd};
 
-use super::{PROGRESS_INTERVAL_MS, AtomicBool};
+use super::{AtomicBool, PROGRESS_INTERVAL_MS};
 use crate::daemon::direct::ConnectionLimits;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -284,10 +284,7 @@ impl MultiSocketRuntime {
     }
 }
 
-pub fn configure_multi_limits(
-    multi: &mut Multi,
-    limits: ConnectionLimits,
-) -> Result<(), String> {
+pub fn configure_multi_limits(multi: &mut Multi, limits: ConnectionLimits) -> Result<(), String> {
     multi
         .set_max_total_connections(limits.total)
         .map_err(|e| format!("Could not configure total libcurl connections: {e}"))?;

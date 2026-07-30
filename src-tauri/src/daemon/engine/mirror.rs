@@ -37,7 +37,9 @@ impl MirrorManager {
             active_mirror: Arc::new(std::sync::Mutex::new(Some(0))),
             failover_enabled: Arc::new(AtomicBool::new(true)),
             last_failover: Arc::new(std::sync::Mutex::new(
-                Instant::now().checked_sub(Duration::from_secs(60)).unwrap_or(Instant::now()),
+                Instant::now()
+                    .checked_sub(Duration::from_secs(60))
+                    .unwrap_or(Instant::now()),
             )),
             failover_cooldown: Duration::from_secs(30),
         }

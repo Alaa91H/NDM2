@@ -65,7 +65,10 @@ pub async fn handle_telegram_update_config(
                 "https://api.telegram.org".to_owned()
             });
         }
-        if let Some(v) = body.get("fileUploadLimitMb").and_then(serde_json::Value::as_u64) {
+        if let Some(v) = body
+            .get("fileUploadLimitMb")
+            .and_then(serde_json::Value::as_u64)
+        {
             cfg.file_upload_limit_mb = v.clamp(1, 2000);
         }
     }
@@ -155,7 +158,9 @@ pub fn send_telegram_msg_blocking_with_api(
     chat_id: i64,
     text: &str,
 ) -> bool {
-    let client = if let Some(c) = blocking_client() { c } else {
+    let client = if let Some(c) = blocking_client() {
+        c
+    } else {
         log::error!("Cannot send Telegram message: HTTP client not available");
         return false;
     };
@@ -206,7 +211,8 @@ pub fn start_telegram_bot(state: SharedState) {
                     if let Ok(body) = resp.json::<serde_json::Value>() {
                         if let Some(updates) = body.get("result").and_then(|r| r.as_array()) {
                             for update in updates {
-                                if let Some(uid) = update.get("update_id").and_then(serde_json::Value::as_i64)
+                                if let Some(uid) =
+                                    update.get("update_id").and_then(serde_json::Value::as_i64)
                                 {
                                     {
                                         let mut lid = lock_or_err!(state.telegram_last_update_id);
@@ -386,8 +392,7 @@ fn handle_telegram_command(
                     }
                     "/resume" => {
                         let result = rt.block_on(async {
-                            handle_resume_task(State(state.clone()), AxumPath(arg.to_owned()))
-                                .await
+                            handle_resume_task(State(state.clone()), AxumPath(arg.to_owned())).await
                         });
                         let _ = match result {
                             Ok(_) => send_telegram_msg_blocking_with_api(
@@ -429,9 +434,7 @@ fn handle_telegram_command(
                     api_base,
                     token,
                     chat_id,
-                    &format!(
-                        "Unknown command: {cmd}\nUse /help for available commands."
-                    ),
+                    &format!("Unknown command: {cmd}\nUse /help for available commands."),
                 );
             }
         }
@@ -541,7 +544,8 @@ pub async fn handle_telegram_send_file(
     let file_name = canonical
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("document").to_owned();
+        .unwrap_or("document")
+        .to_owned();
     let stream = FramedRead::new(file, BytesCodec::new());
     let part =
         Part::stream_with_length(Body::wrap_stream(stream), metadata.len()).file_name(file_name);
