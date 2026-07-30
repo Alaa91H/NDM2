@@ -644,12 +644,14 @@ impl Extractor for CurlExtractor {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::daemon::curl::{build_curl_args, drive_multi_socket, split_ranges, CurlMultiGuard};
     use crate::daemon::types::CreateDownloadBody;
     use ::curl::easy::Easy2;
     use std::io::Read;
     use std::io::Write;
     use std::net::TcpListener;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
 

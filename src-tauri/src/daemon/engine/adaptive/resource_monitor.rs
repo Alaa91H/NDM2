@@ -307,9 +307,9 @@ mod tests {
     #[test]
     fn disk_bottleneck_below_threshold() {
         let mut m = ResourceMonitor::new();
-        m.disk_write_mbps = 5;
+        m.snapshot.disk_write_mbps = 5;
         assert!(m.disk_bottleneck());
-        m.disk_write_mbps = 100;
+        m.snapshot.disk_write_mbps = 100;
         assert!(!m.disk_bottleneck());
     }
 
@@ -325,7 +325,7 @@ mod tests {
     #[test]
     fn disk_write_budget_divides_evenly() {
         let mut m = ResourceMonitor::new();
-        m.disk_write_mbps = 100;
+        m.snapshot.disk_write_mbps = 100;
         let budget = m.disk_write_budget(4);
         assert_eq!(budget, 25 * 1024 * 1024);
     }
