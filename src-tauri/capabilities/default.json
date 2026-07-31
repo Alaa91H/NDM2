@@ -23,6 +23,7 @@
     "core:window:allow-set-size",
     "core:window:allow-set-position",
     "core:window:allow-request-user-attention",
+    "core:window:allow-set-progress-bar",
     "core:tray:default",
     "clipboard-manager:allow-clear",
     "clipboard-manager:allow-read-text",
