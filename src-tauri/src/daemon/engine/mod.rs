@@ -19,4 +19,5 @@ pub mod retry;
 pub mod rules;
 pub mod scheduler;
 pub mod self_healing;
+pub mod sysinfo;
 pub mod thread_pool;

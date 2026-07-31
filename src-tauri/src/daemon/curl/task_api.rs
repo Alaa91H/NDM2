@@ -38,6 +38,14 @@ pub async fn create_curl_task(
         );
     }
 
+    // Validation is intentionally split across two surfaces, both required:
+    // - validate_curl_direct_options checks the machine-readable `direct_options`
+    //   JSON consumed by the in-process easy handle / transfer engine (allowed
+    //   keys, values, and resumable/segmented compatibility).
+    // - build_curl_args_with_capabilities validates the CLI argv for the spawned
+    //   curl process (flag allowlist, URL safety, SSRF pinning). The two are not
+    //   1:1: a flag may exist only on certain curl builds (capability-gated),
+    //   while a direct option has no CLI spelling. Each boundary validates itself.
     let mut direct_options = body.direct_options.clone().unwrap_or_default();
     crate::daemon::engine_capabilities::validate_curl_direct_options(
         &direct_options,
@@ -59,9 +67,8 @@ pub async fn create_curl_task(
         .unwrap_or_default();
     existing_resolve.push(resolve_entry.into());
     direct_options.insert("resolve".to_owned(), existing_resolve.into());
-    drop(curl_args); // args are persisted via direct_options, not executed
     let id = Uuid::new_v4().to_string();
-    let job = task_from_body(body, &id, name, &output_path, direct_options);
+    let job = task_from_body(body, &id, name, &output_path, direct_options, curl_args);
     let task = job.task.clone();
     // Hold curl_jobs + task_snapshot locks together so the capacity check
     // and insertions are atomic w.r.t. concurrent create calls.
@@ -94,6 +101,12 @@ pub async fn list_all_tasks(state: &SharedState) -> Vec<Task> {
         }
     }
 
+    // Merge is eventually consistent by design: live jobs are read from
+    // media_jobs/curl_jobs under separate short-lived read locks, then joined
+    // with any completed/retained tasks from the task_snapshot write lock.
+    // A job created (or removed) concurrently between the two reads may be
+    // missed for this call and observed on the next one; callers treat the
+    // result as a point-in-time view, so no stronger lock is taken.
     let mut tasks: Vec<Task> = lock_or_err!(state.media_jobs)
         .values()
         .map(|j| j.task.clone())

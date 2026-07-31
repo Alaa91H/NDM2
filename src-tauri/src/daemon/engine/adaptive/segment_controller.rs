@@ -79,7 +79,7 @@ pub struct SegmentController {
 }
 
 impl SegmentController {
-    pub fn new(total_size: u64, _connections: u32, min_segment_bytes: u64) -> Self {
+    pub fn new(total_size: u64, min_segment_bytes: u64) -> Self {
         let segments = Self::create_segments(total_size, 1, min_segment_bytes);
         Self {
             segments,
@@ -93,14 +93,14 @@ impl SegmentController {
         }
     }
 
-    pub fn with_profile(total_size: u64, _connections: u32, profile: &ServerProfile) -> Self {
+    pub fn with_profile(total_size: u64, profile: &ServerProfile) -> Self {
         let min_seg = Self::compute_min_segment(total_size, profile);
         let stall_ms = if profile.p95_rtt_us > 0 {
             Duration::from_millis((profile.p95_rtt_us / 1000 * 3).max(1000))
         } else {
             Duration::from_secs(5)
         };
-        let mut ctrl = Self::new(total_size, 1, min_seg);
+        let mut ctrl = Self::new(total_size, min_seg);
         ctrl.stall_threshold = stall_ms;
         ctrl
     }
@@ -144,19 +144,27 @@ impl SegmentController {
             return None;
         }
 
-        let speeds: Vec<u64> = self
+        // Active segments are bounded by `max_segments` (64 by default), so a
+        // fixed stack array avoids a heap allocation just for the median.
+        let mut speeds = [0u64; 64];
+        let mut speed_count = 0;
+        for seg in self
             .segments
             .iter()
             .filter(|s| s.state == SegmentState::Active)
-            .map(|s| s.speed)
-            .collect();
+        {
+            if speed_count < speeds.len() {
+                speeds[speed_count] = seg.speed;
+                speed_count += 1;
+            }
+        }
 
-        let median_speed = if speeds.is_empty() {
+        let median_speed = if speed_count == 0 {
             0
         } else {
-            let mut sorted = speeds;
+            let sorted = &mut speeds[..speed_count];
             sorted.sort_unstable();
-            sorted[sorted.len() / 2]
+            sorted[speed_count / 2]
         };
 
         if median_speed == 0 {
@@ -229,7 +237,7 @@ impl SegmentController {
                 let b_id = consecutive_under[1];
                 let a = self.segments.iter().find(|s| s.id == a_id).unwrap();
                 let b = self.segments.iter().find(|s| s.id == b_id).unwrap();
-                if a.id + 1 == b.id
+                if a.end_byte == b.start_byte
                     && a.remaining_bytes() + b.remaining_bytes() < self.min_segment_bytes * 2
                 {
                     return Some(SegmentPlan::MergeSegments { a: a_id, b: b_id });
@@ -323,15 +331,13 @@ impl SegmentController {
         }
     }
 
-    pub fn mark_connection_failed(&mut self, conn_id: usize) -> Vec<SegmentPlan> {
-        let plans = Vec::new();
+    pub fn mark_connection_failed(&mut self, conn_id: usize) {
         for seg in &mut self.segments {
             if seg.assigned_connection == Some(conn_id) && seg.state == SegmentState::Active {
                 seg.state = SegmentState::Failed;
                 seg.assigned_connection = None;
             }
         }
-        plans
     }
 
     pub fn mark_connection_completed(&mut self, conn_id: usize) {
@@ -471,7 +477,6 @@ impl SegmentController {
                 ) {
                     fast.start_byte = new_start;
                 }
-                self.segments.sort_by_key(|s| s.start_byte);
             }
             SegmentPlan::SplitSegment { segment_id } => {
                 self.split_segment_at(*segment_id);
@@ -480,6 +485,7 @@ impl SegmentController {
                 self.merge_adjacent_segments(*a, *b);
             }
         }
+        self.segments.sort_by_key(|s| s.start_byte);
     }
 
     fn split_segment_at(&mut self, seg_id: u32) {
@@ -637,7 +643,7 @@ mod tests {
     use super::*;
 
     fn basic_controller(total: u64, _conns: u32) -> SegmentController {
-        SegmentController::new(total, _conns, 1024 * 1024)
+        SegmentController::new(total, 1024 * 1024)
     }
 
     #[test]
@@ -738,7 +744,7 @@ mod tests {
 
     #[test]
     fn split_segment_creates_new_segment() {
-        let mut c = SegmentController::new(100000, 1, 1024);
+        let mut c = SegmentController::new(100000, 1024);
         c.set_stall_threshold(Duration::from_millis(1));
         c.update_progress(0, 100, 0);
         std::thread::sleep(Duration::from_millis(5));
@@ -750,7 +756,7 @@ mod tests {
 
     #[test]
     fn split_segment_no_change_when_too_small() {
-        let mut c = SegmentController::new(99, 1, 50);
+        let mut c = SegmentController::new(99, 50);
         c.split_segment_at(0);
         assert_eq!(c.segment_count(), 1);
     }
@@ -846,7 +852,7 @@ mod tests {
 
     #[test]
     fn grow_single_segment_when_throughput_low() {
-        let mut c = SegmentController::new(10_000_000, 1, 1024 * 1024);
+        let mut c = SegmentController::new(10_000_000, 1024 * 1024);
         c.set_eval_interval(Duration::from_millis(1));
         c.peak_throughput = 1000;
         std::thread::sleep(Duration::from_millis(2));
@@ -857,7 +863,7 @@ mod tests {
 
     #[test]
     fn no_grow_when_already_at_peak() {
-        let mut c = SegmentController::new(10_000_000, 1, 1024 * 1024);
+        let mut c = SegmentController::new(10_000_000, 1024 * 1024);
         c.set_eval_interval(Duration::from_millis(1));
         c.peak_throughput = 1000;
         std::thread::sleep(Duration::from_millis(2));
@@ -868,7 +874,7 @@ mod tests {
 
     #[test]
     fn no_grow_when_segment_too_small() {
-        let mut c = SegmentController::new(500, 1, 500);
+        let mut c = SegmentController::new(500, 500);
         c.set_eval_interval(Duration::from_millis(1));
         c.peak_throughput = 1000;
         std::thread::sleep(Duration::from_millis(2));
@@ -879,7 +885,7 @@ mod tests {
 
     #[test]
     fn grow_fastest_segment_when_unbalanced() {
-        let mut c = SegmentController::new(10_000_000, 1, 1024 * 1024);
+        let mut c = SegmentController::new(10_000_000, 1024 * 1024);
         c.set_eval_interval(Duration::from_millis(1));
         std::thread::sleep(Duration::from_millis(2));
         c.split_segment_at(0);
@@ -895,7 +901,7 @@ mod tests {
 
     #[test]
     fn merge_small_slow_segments() {
-        let mut c = SegmentController::new(10_000_000, 1, 1024 * 1024);
+        let mut c = SegmentController::new(10_000_000, 1024 * 1024);
         c.set_eval_interval(Duration::from_millis(1));
         std::thread::sleep(Duration::from_millis(2));
         c.split_segment_at(0);
@@ -913,7 +919,7 @@ mod tests {
 
     #[test]
     fn max_segments_limits_growth() {
-        let mut c = SegmentController::new(100_000_000, 1, 1024 * 1024);
+        let mut c = SegmentController::new(100_000_000, 1024 * 1024);
         c.set_max_segments(2);
         c.set_eval_interval(Duration::from_millis(1));
         c.peak_throughput = 1000;
@@ -927,7 +933,7 @@ mod tests {
 
     #[test]
     fn peak_throughput_tracks_max() {
-        let mut c = SegmentController::new(10_000_000, 1, 1024 * 1024);
+        let mut c = SegmentController::new(10_000_000, 1024 * 1024);
         c.set_eval_interval(Duration::from_millis(1));
         std::thread::sleep(Duration::from_millis(2));
         c.update_progress(0, 100_000, 500);
@@ -948,7 +954,7 @@ mod tests {
 
     #[test]
     fn redistribute_increases_segments() {
-        let mut c = SegmentController::new(10_000_000, 1, 1024 * 1024);
+        let mut c = SegmentController::new(10_000_000, 1024 * 1024);
         assert_eq!(c.active_segment_count(), 1);
         c.redistribute_for_count(4);
         assert!(
@@ -960,7 +966,7 @@ mod tests {
 
     #[test]
     fn redistribute_decreases_segments() {
-        let mut c = SegmentController::new(10_000_000, 1, 1024 * 1024);
+        let mut c = SegmentController::new(10_000_000, 1024 * 1024);
         c.redistribute_for_count(8);
         let high = c.active_segment_count();
         c.redistribute_for_count(2);
@@ -971,7 +977,7 @@ mod tests {
 
     #[test]
     fn redistribute_noop_at_same_count() {
-        let mut c = SegmentController::new(10_000_000, 1, 1024 * 1024);
+        let mut c = SegmentController::new(10_000_000, 1024 * 1024);
         let before = c.segment_count();
         c.redistribute_for_count(1);
         assert_eq!(c.segment_count(), before);
@@ -979,7 +985,7 @@ mod tests {
 
     #[test]
     fn unassigned_segments_count() {
-        let mut c = SegmentController::new(10_000_000, 1, 1024 * 1024);
+        let mut c = SegmentController::new(10_000_000, 1024 * 1024);
         assert_eq!(c.unassigned_active_count(), 1);
         c.segments[0].assigned_connection = Some(0);
         assert_eq!(c.unassigned_active_count(), 0);

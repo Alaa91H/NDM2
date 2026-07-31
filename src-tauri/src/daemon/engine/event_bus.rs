@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -142,12 +141,68 @@ type Subscriber = Arc<dyn Fn(&TimestampedEvent) + Send + Sync>;
 
 pub type SubscriberId = u64;
 
+/// RAII guard that guarantees `EventBusInner::publish_depth` is reset — and
+/// any re-entrantly queued events are collected — even when a panic unwinds
+/// past subscriber notification. Without it, a panic mid-publish would leave
+/// `publish_depth > 0` forever and every subsequent event would be silently
+/// queued into `pending_events` without ever being processed.
+struct PublishGuard<'a> {
+    bus: &'a EventBus,
+    pending: Vec<EngineEvent>,
+    finished: bool,
+}
+
+impl PublishGuard<'_> {
+    /// Reset the publish depth, take the re-entrantly queued events, and
+    /// return them for processing. Marks the guard finished so its `Drop`
+    /// does not run the same logic twice.
+    fn finish(mut self) -> Vec<EngineEvent> {
+        self.finished = true;
+        self.reset_depth();
+        std::mem::take(&mut self.pending)
+    }
+
+    fn reset_depth(&mut self) {
+        let mut inner = match self.bus.inner.lock() {
+            Ok(g) => g,
+            Err(poison) => {
+                log::error!("EventBus: mutex poisoned after publish, recovering");
+                poison.into_inner()
+            }
+        };
+        inner.publish_depth = 0;
+        self.pending
+            .extend(std::mem::take(&mut inner.pending_events));
+    }
+}
+
+impl Drop for PublishGuard<'_> {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        // Panic path: still reset the depth so the bus keeps working. We do
+        // NOT re-publish the queued events here — re-entering `publish`
+        // (which itself locks and invokes subscribers) during unwinding could
+        // panic a second time and abort the process.
+        self.reset_depth();
+        if !self.pending.is_empty() {
+            log::warn!(
+                "EventBus: {} event(s) queued during a panicked publish were dropped",
+                self.pending.len()
+            );
+        }
+    }
+}
+
 struct EventBusInner {
     subscribers: Vec<(SubscriberId, Subscriber)>,
-    next_subscriber_id: AtomicU64,
+    // Counters are only ever read/modified while holding the mutex, so plain
+    // u64 fields suffice; the atomics inside the lock were redundant.
+    next_subscriber_id: u64,
     event_log: Vec<TimestampedEvent>,
     task_index: HashMap<String, Vec<usize>>,
-    next_id: AtomicU64,
+    next_id: u64,
     max_log_size: usize,
     publish_depth: usize,
     pending_events: Vec<EngineEvent>,
@@ -163,10 +218,10 @@ impl EventBus {
         Self {
             inner: Arc::new(Mutex::new(EventBusInner {
                 subscribers: Vec::new(),
-                next_subscriber_id: AtomicU64::new(1),
+                next_subscriber_id: 1,
                 event_log: Vec::new(),
                 task_index: HashMap::new(),
-                next_id: AtomicU64::new(1),
+                next_id: 1,
                 max_log_size: 10_000,
                 publish_depth: 0,
                 pending_events: Vec::new(),
@@ -178,10 +233,10 @@ impl EventBus {
         Self {
             inner: Arc::new(Mutex::new(EventBusInner {
                 subscribers: Vec::new(),
-                next_subscriber_id: AtomicU64::new(1),
+                next_subscriber_id: 1,
                 event_log: Vec::new(),
                 task_index: HashMap::new(),
-                next_id: AtomicU64::new(1),
+                next_id: 1,
                 max_log_size,
                 publish_depth: 0,
                 pending_events: Vec::new(),
@@ -192,11 +247,18 @@ impl EventBus {
     pub fn publish(&self, event: EngineEvent) {
         // Phase 1: lock + decide whether to store or queue
         let (ts_event, subscriber_clone) = {
-            let mut inner = if let Ok(g) = self.inner.lock() {
-                g
-            } else {
-                log::error!("EventBus: mutex poisoned, dropping event");
-                return;
+            let mut inner = match self.inner.lock() {
+                Ok(g) => g,
+                Err(poison) => {
+                    log::error!("EventBus: mutex poisoned, recovering");
+                    let mut recovered = poison.into_inner();
+                    // A previous publish may have panicked while holding the
+                    // lock. Clear the reentrancy guard so the bus can publish
+                    // again; any events that publish had queued are drained by
+                    // this (or the next) publish's Phase 3.
+                    recovered.publish_depth = 0;
+                    recovered
+                }
             };
 
             if inner.publish_depth > 0 {
@@ -207,7 +269,8 @@ impl EventBus {
 
             inner.publish_depth = 1;
 
-            let id = inner.next_id.fetch_add(1, Ordering::Relaxed);
+            let id = inner.next_id;
+            inner.next_id += 1;
             let task_id_opt = event.task_id().map(std::borrow::ToOwned::to_owned);
             let ts_event = TimestampedEvent {
                 id,
@@ -219,17 +282,14 @@ impl EventBus {
             // Rotate log if at capacity.
             if inner.event_log.len() >= inner.max_log_size {
                 let drain_count = (inner.max_log_size / 4).max(1);
-                inner.event_log.drain(..drain_count);
-                let to_index: Vec<(String, usize)> = inner
-                    .event_log
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, evt)| evt.event.task_id().map(|tid| (tid.to_owned(), i)))
-                    .collect();
-                inner.task_index.clear();
-                for (tid, idx) in to_index {
-                    inner.task_index.entry(tid).or_default().push(idx);
+                for indices in inner.task_index.values_mut() {
+                    indices.retain(|&idx| idx >= drain_count);
+                    for idx in indices.iter_mut() {
+                        *idx -= drain_count;
+                    }
                 }
+                inner.task_index.retain(|_, v| !v.is_empty());
+                inner.event_log.drain(..drain_count);
             }
             if let Some(ref tid) = task_id_opt {
                 let idx = inner.event_log.len();
@@ -244,7 +304,26 @@ impl EventBus {
             (ts_event, subscriber_clone)
         };
 
-        // Phase 2: notify subscribers outside the lock so they can safely call back.
+        // `PublishGuard` guarantees `publish_depth` is reset — and any
+        // re-entrant events are collected — even if a panic unwinds past
+        // Phase 2, so the bus can never be permanently stuck in "publishing".
+        let guard = PublishGuard {
+            bus: self,
+            pending: Vec::new(),
+            finished: false,
+        };
+
+        // Phase 2: notify subscribers outside the lock so they can safely call
+        // back into `publish`.
+        //
+        // SAFETY NOTE: `catch_unwind` requires the closure to be `UnwindSafe`,
+        // which `dyn Fn` cannot guarantee statically, hence `AssertUnwindSafe`.
+        // This is a deliberate trade-off: a panicking subscriber must not take
+        // the whole daemon down. The risk is that a subscriber holding interior
+        // mutability (e.g. `RefCell`) can be left in a corrupted state after a
+        // panic — that subscriber should still treat panics as fatal for its
+        // own data. We log every panic defensively so such corruption is
+        // visible in the logs instead of silent.
         for sub in &subscriber_clone {
             let _ = catch_unwind(AssertUnwindSafe(|| sub(&ts_event))).map_err(|e| {
                 let msg = if let Some(s) = e.downcast_ref::<&str>() {
@@ -254,22 +333,15 @@ impl EventBus {
                 } else {
                     "unknown panic".to_owned()
                 };
-                log::error!("EventBus: subscriber panicked: {msg}");
+                log::error!(
+                    "EventBus: subscriber panicked ({msg}); subscriber state may be corrupted"
+                );
             });
         }
 
-        // Phase 3: drain any events that were queued re-entrantly.
-        let pending = {
-            let mut inner = match self.inner.lock() {
-                Ok(g) => g,
-                Err(poison) => {
-                    log::error!("EventBus: mutex poisoned after publish, recovering");
-                    poison.into_inner()
-                }
-            };
-            inner.publish_depth = 0;
-            std::mem::take(&mut inner.pending_events)
-        };
+        // Phase 3: reset the depth + collect events queued re-entrantly, then
+        // process them in publication order.
+        let pending = guard.finish();
         for evt in pending {
             self.publish(evt);
         }
@@ -280,7 +352,8 @@ impl EventBus {
         F: Fn(&TimestampedEvent) + Send + Sync + 'static,
     {
         if let Ok(mut inner) = self.inner.lock() {
-            let id = inner.next_subscriber_id.fetch_add(1, Ordering::Relaxed);
+            let id = inner.next_subscriber_id;
+            inner.next_subscriber_id += 1;
             inner.subscribers.push((id, Arc::new(callback)));
             id
         } else {
@@ -349,7 +422,7 @@ impl Default for EventBus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, AtomicUsize};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     fn make_started(task_id: &str) -> EngineEvent {
         EngineEvent::DownloadStarted {

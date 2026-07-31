@@ -128,7 +128,7 @@ fn find_available_daemon_port(preferred_port: u16) -> u16 {
         if failures >= DAEMON_PORT_SCAN_LIMIT {
             break;
         }
-        port = port.saturating_add(1);
+        port = port.wrapping_add(1);
     }
     // Absolute last resort — let the bind fail naturally.
     preferred_port
@@ -261,7 +261,7 @@ fn scan_downloaded_file(path: String) -> Result<(), String> {
             "-ExecutionPolicy",
             "Bypass",
             "-Command",
-            "Start-MpScan -ScanType CustomScan -ScanPath $args[0]",
+            "$path = Resolve-Path -LiteralPath $args[0] -ErrorAction Stop; Start-MpScan -ScanType CustomScan -ScanPath $path",
         ])
         .arg(&target)
         .stdin(Stdio::null())
@@ -340,10 +340,12 @@ fn open_external_url(url: String) -> Result<(), String> {
     if is_internal {
         return Err("Internal URLs cannot be opened in the browser.".to_owned());
     }
+    // Re-serialize through reqwest::Url to strip any embedded shell metacharacters
+    let clean_url = parsed.as_str().to_owned();
     let mut launcher = Command::new("rundll32.exe");
     hide_command_window(&mut launcher);
     launcher
-        .args(["url.dll,FileProtocolHandler", &url])
+        .args(["url.dll,FileProtocolHandler", &clean_url])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -361,25 +363,34 @@ fn check_tcp_endpoint(host: String, port: u16) -> Result<bool, String> {
     let (tx, rx) = std::sync::mpsc::channel();
     let dns_host = address;
     std::thread::spawn(move || {
-        let result = (|| -> Result<(std::net::SocketAddr, std::net::IpAddr), String> {
-            let mut resolved = dns_host.to_socket_addrs().map_err(|e| e.to_string())?;
-            let socket_addr = resolved
-                .next()
-                .ok_or_else(|| "No addresses resolved".to_owned())?;
-            let ip = socket_addr.ip();
-            Ok((socket_addr, ip))
+        let result = (|| -> Result<Vec<std::net::SocketAddr>, String> {
+            let resolved: Vec<_> = dns_host
+                .to_socket_addrs()
+                .map_err(|e| e.to_string())?
+                .collect();
+            if resolved.is_empty() {
+                return Err("No addresses resolved".to_owned());
+            }
+            // Check ALL resolved addresses are safe, not just the first one
+            for addr in &resolved {
+                if crate::daemon::utils::is_internal_ip(addr.ip()) {
+                    return Err(format!(
+                        "Connections to internal/local addresses are not allowed: {}",
+                        addr.ip()
+                    ));
+                }
+            }
+            Ok(resolved)
         })();
         let _ = tx.send(result);
     });
-    let (socket_addr, ip) = match rx.recv_timeout(Duration::from_secs(5)) {
-        Ok(Ok((addr, ip))) => (addr, ip),
-        Ok(Err(e)) => return Err(format!("Could not resolve endpoint: {e}")),
+    let resolved = match rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(Ok(addrs)) => addrs,
+        Ok(Err(e)) => return Err(e),
         Err(_) => return Err("Could not resolve endpoint: timeout".to_owned()),
     };
-    if crate::daemon::utils::is_internal_ip(ip) {
-        return Err("Connections to internal/local addresses are not allowed".to_owned());
-    }
-    Ok(TcpStream::connect_timeout(&socket_addr, Duration::from_millis(1200)).is_ok())
+    // Connect to the first resolved address (all were verified safe)
+    Ok(TcpStream::connect_timeout(&resolved[0], Duration::from_millis(1200)).is_ok())
 }
 
 #[tauri::command]
@@ -389,10 +400,23 @@ fn validate_source_address(address: String) -> Result<bool, String> {
         .parse()
         .map_err(|_| "Enter a valid IP address for the VPN adapter.".to_owned())?;
 
+    // Reject link-local and loopback addresses which are never valid VPN adapters
+    if parsed.is_loopback()
+        || parsed.is_unspecified()
+        || match parsed {
+            IpAddr::V4(v) => v.is_link_local() || v.is_broadcast(),
+            IpAddr::V6(_) => false,
+        }
+    {
+        return Err(
+            "Link-local and loopback addresses are not valid VPN adapter addresses.".to_owned(),
+        );
+    }
+
     #[cfg(windows)]
     {
         let script =
-            "if (Get-NetIPAddress -IPAddress $args[0] -ErrorAction SilentlyContinue) { 'yes' } else { 'no' }";
+            "if (Get-NetIPAddress -IPAddress (\"$($args[0])\" -as [System.Net.IPAddress]) -ErrorAction SilentlyContinue) { 'yes' } else { 'no' }";
         let mut command = Command::new("powershell");
         hide_command_window(&mut command);
         let output = command
@@ -461,8 +485,11 @@ fn save_config(app: tauri::AppHandle, settings: String) -> Result<(), String> {
             MAX_CONFIG_SIZE
         ));
     }
-    serde_json::from_str::<serde_json::Value>(&settings)
-        .map_err(|e| format!("Invalid JSON config: {e}"))?;
+    let parsed: serde_json::Value =
+        serde_json::from_str(&settings).map_err(|e| format!("Invalid JSON config: {e}"))?;
+    if !parsed.is_object() {
+        return Err("Config must be a JSON object".to_owned());
+    }
     let data_dir = app
         .path()
         .app_data_dir()
@@ -470,7 +497,10 @@ fn save_config(app: tauri::AppHandle, settings: String) -> Result<(), String> {
     std::fs::create_dir_all(&data_dir)
         .map_err(|e| format!("Failed to create app data dir: {e}"))?;
     let config_path = data_dir.join("config.json");
-    std::fs::write(&config_path, &settings).map_err(|e| format!("Failed to save config: {e}"))
+    let tmp_path = data_dir.join("config.json.tmp");
+    std::fs::write(&tmp_path, &settings).map_err(|e| format!("Failed to save config: {e}"))?;
+    std::fs::rename(&tmp_path, &config_path)
+        .map_err(|e| format!("Failed to atomically replace config: {e}"))
 }
 
 #[tauri::command]
@@ -551,9 +581,11 @@ fn kill_old_daemon_range(our_pid: u32, preferred: u16) {
         };
         let script = format!(
             "Get-NetTCPConnection -LocalPort {port} -State Listen -ErrorAction SilentlyContinue \
-             -ErrorVariable e | ForEach-Object {{ \
+             | ForEach-Object {{ \
                 $p = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue; \
-                if ($p -and $p.Id -ne {our_pid}) {{ taskkill /F /PID $p.Id -ErrorAction SilentlyContinue }} \
+                if ($p -and $p.Id -ne {our_pid} -and $p.ProcessName -match 'NOVA') {{ \
+                    taskkill /F /PID $p.Id -ErrorAction SilentlyContinue \
+                }} \
             }}",
         );
         let mut command = Command::new("powershell");

@@ -132,6 +132,10 @@ pub(crate) fn proxy_resolves_to_internal(proxy: &str) -> bool {
     }
     // Resolve hostname with a timeout to avoid blocking the caller
     // (which may be on the tokio runtime) indefinitely on a hung DNS.
+    // A fresh thread per resolution is intentional: this is a cold path
+    // (runs at most once per task creation when validating a proxy), so a
+    // shared resolver pool would add locking/ownership complexity for no
+    // benefit, and `recv_timeout` still bounds the wait if DNS hangs.
     let owned_host = host.to_owned();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {

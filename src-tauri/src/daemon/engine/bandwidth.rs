@@ -5,6 +5,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use crate::lock_or_err;
+
 const SPEED_WINDOW_SIZE: usize = 30;
 /// Maximum unique task IDs to track in `speed_history`. Evicts oldest entries
 /// (by last update) to cap memory. At ~240 bytes/entry, 5000 = ~1.2 MB.
@@ -35,6 +37,8 @@ pub struct BandwidthManager {
     schedule_limits: Arc<Mutex<Vec<ScheduleLimit>>>,
     speed_history: Arc<Mutex<SpeedHistory>>,
     global_paused: Arc<AtomicBool>,
+    /// Tracks insertion/access order of task IDs in speed_history for O(1) eviction.
+    history_order: Arc<Mutex<VecDeque<String>>>,
 }
 
 impl BandwidthManager {
@@ -45,6 +49,7 @@ impl BandwidthManager {
             schedule_limits: Arc::new(Mutex::new(config.schedule_limits)),
             speed_history: Arc::new(Mutex::new(HashMap::new())),
             global_paused: Arc::new(AtomicBool::new(false)),
+            history_order: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 
@@ -100,8 +105,12 @@ impl BandwidthManager {
         if let Ok(mut limits) = self.task_limits.lock() {
             limits.remove(task_id);
         }
-        if let Ok(mut history) = self.speed_history.lock() {
-            history.remove(task_id);
+        let mut history = lock_or_err!(self.speed_history);
+        history.remove(task_id);
+        drop(history);
+        let mut order = lock_or_err!(self.history_order);
+        if let Some(pos) = order.iter().position(|id| id == task_id) {
+            order.remove(pos);
         }
     }
 
@@ -124,13 +133,22 @@ impl BandwidthManager {
     }
 
     pub fn report_speed(&self, task_id: &str, bytes_per_sec: u64) {
-        if let Ok(mut history) = self.speed_history.lock() {
-            // Evict entries older than 60 seconds when over capacity.
+        // lock_or_err! logs on poison instead of silently dropping the sample,
+        // which would otherwise make every speed report read back as 0 after a
+        // panic in a previous holder.
+        let mut history = lock_or_err!(self.speed_history);
+        {
+            // O(1) eviction via VecDeque order — evict oldest entries when at capacity
+            // instead of scanning all entries with retain().
             if history.len() >= MAX_SPEED_HISTORY_TASKS && !history.contains_key(task_id) {
-                let cutoff = Instant::now()
-                    .checked_sub(std::time::Duration::from_secs(60))
-                    .unwrap_or(Instant::now());
-                history.retain(|_, samples| samples.back().is_some_and(|s| s.0 >= cutoff));
+                let mut order = lock_or_err!(self.history_order);
+                while history.len() >= MAX_SPEED_HISTORY_TASKS {
+                    if let Some(oldest) = order.pop_front() {
+                        history.remove(&oldest);
+                    } else {
+                        break;
+                    }
+                }
             }
             let entry = history.entry(task_id.to_owned()).or_default();
             entry.push_back((Instant::now(), bytes_per_sec));
@@ -138,20 +156,25 @@ impl BandwidthManager {
                 entry.pop_front();
             }
         }
+        drop(history);
+        // Track access order outside the history lock for O(1) eviction.
+        let mut order = lock_or_err!(self.history_order);
+        if let Some(pos) = order.iter().position(|id| id == task_id) {
+            order.remove(pos);
+        }
+        order.push_back(task_id.to_owned());
     }
 
     pub fn average_speed(&self, task_id: &str) -> u64 {
-        self.speed_history
-            .lock()
-            .ok()
-            .and_then(|history| {
-                history.get(task_id).map(|entries| {
-                    if entries.is_empty() {
-                        return 0;
-                    }
-                    let sum: u64 = entries.iter().map(|(_, s)| s).sum();
-                    sum / entries.len() as u64
-                })
+        let history = lock_or_err!(self.speed_history);
+        history
+            .get(task_id)
+            .map(|entries| {
+                if entries.is_empty() {
+                    return 0;
+                }
+                let sum: u64 = entries.iter().map(|(_, s)| s).sum();
+                sum / entries.len() as u64
             })
             .unwrap_or(0)
     }

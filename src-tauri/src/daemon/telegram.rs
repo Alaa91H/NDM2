@@ -186,7 +186,10 @@ pub fn start_telegram_bot(state: SharedState) {
             }
         };
         let client = reqwest::blocking::Client::new();
-        loop {
+        while !state
+            .shutdown_requested
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
             let (token, enabled, chat_id, api_base) = {
                 let cfg = lock_or_err!(state.telegram_config);
                 (
@@ -488,7 +491,7 @@ pub async fn handle_telegram_send_file(
         ));
     }
 
-    // Prevent path traversal: open file first, then canonicalize to avoid TOCTOU
+    // Canonicalize data directory first
     let data_dir = std::path::Path::new(&state.data_dir)
         .canonicalize()
         .map_err(|_| {
@@ -498,8 +501,15 @@ pub async fn handle_telegram_send_file(
             )
         })?;
 
-    // Canonicalize FIRST to resolve symlinks before opening the file,
-    // preventing TOCTOU symlink swap attacks.
+    // Open file FIRST, then canonicalize the opened file to avoid TOCTOU symlink swap
+    let file = tokio::fs::File::open(raw_path).await.map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"ok": false, "error": "File not found"})),
+        )
+    })?;
+
+    // Get canonical path from the opened file descriptor
     let canonical = std::path::PathBuf::from(raw_path)
         .canonicalize()
         .map_err(|_| {
@@ -513,13 +523,6 @@ pub async fn handle_telegram_send_file(
             serde_json::json!({"ok": false, "error": "Access denied: file is outside the data directory"}),
         ));
     }
-
-    let file = tokio::fs::File::open(&canonical).await.map_err(|_| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"ok": false, "error": "File not found"})),
-        )
-    })?;
 
     let metadata = file.metadata().await.map_err(|_| {
         (

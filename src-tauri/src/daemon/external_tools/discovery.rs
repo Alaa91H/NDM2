@@ -77,15 +77,26 @@ fn is_executable_path(path: &std::path::Path) -> bool {
 }
 
 fn which_on_path(name: &str) -> Option<PathBuf> {
-    let mut cmd = std::process::Command::new(if cfg!(windows) { "where" } else { "which" });
-    crate::daemon::utils::hide_command_window(&mut cmd);
-    if let Ok(output) = cmd.arg(name).output() {
-        if output.status.success() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let line = stdout.lines().next().unwrap_or("").trim();
-            if !line.is_empty() {
-                return Some(PathBuf::from(line));
+    // Manually search PATH to avoid CWD hijack on Windows (where.exe checks CWD first)
+    let path_var = std::env::var_os("PATH")?;
+    let is_windows = cfg!(target_os = "windows");
+    for dir in std::env::split_paths(&path_var) {
+        // Skip empty entries (which represent CWD on Windows)
+        if dir.as_os_str().is_empty() || dir == std::path::Path::new(".") {
+            continue;
+        }
+        let candidate = if is_windows {
+            let with_exe = dir.join(format!("{}.exe", name));
+            if with_exe.exists() {
+                with_exe
+            } else {
+                dir.join(name)
             }
+        } else {
+            dir.join(name)
+        };
+        if candidate.exists() && candidate.is_file() {
+            return Some(candidate);
         }
     }
     None

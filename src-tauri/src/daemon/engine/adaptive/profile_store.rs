@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
@@ -55,7 +55,14 @@ impl From<&ServerProfile> for PersistedProfile {
             stability_score: f64::from(p.stability_score),
             total_probes: p.total_probes,
             successful_probes: p.successful_probes,
-            rate_limit_cooldown_until: None,
+            rate_limit_cooldown_until: p.rate_limit_cooldown_until.map(|cooldown| {
+                let now_secs = SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let remaining = cooldown.saturating_duration_since(Instant::now());
+                now_secs + remaining.as_secs()
+            }),
             last_updated: SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -111,9 +118,9 @@ impl PersistedProfile {
             initial_throughput: self.throughput_ceiling,
             handshake_time_us: self.handshake_time_us,
             initial_ttfb_us: 0,
-            rtt_samples: Vec::new(),
+            rtt_samples: VecDeque::new(),
             ttfb_samples: Vec::new(),
-            throughput_samples: Vec::new(),
+            throughput_samples: VecDeque::new(),
             median_rtt_us: self.median_rtt_us,
             p95_rtt_us: self.p95_rtt_us,
             throughput_ceiling: self.throughput_ceiling,
@@ -186,10 +193,10 @@ impl UnifiedProfileStore {
         let mut persisted = PersistedProfile::from(profile);
 
         if let Some(old) = existing {
-            if old.total_probes > 0 {
-                persisted.total_probes = old.total_probes + 1;
-                persisted.successful_probes = old.successful_probes + 1;
-            }
+            persisted.total_probes = old.total_probes.saturating_add(persisted.total_probes);
+            persisted.successful_probes = old
+                .successful_probes
+                .saturating_add(persisted.successful_probes);
             if old.median_rtt_us > 0 && persisted.initial_rtt_us > 0 {
                 let alpha = 0.3;
                 persisted.median_rtt_us = (old.median_rtt_us as f64)
@@ -198,6 +205,9 @@ impl UnifiedProfileStore {
             }
             persisted.bandwidth_plateau_detected = old.bandwidth_plateau_detected;
             persisted.detected_rate_limit_headers = old.detected_rate_limit_headers.clone();
+            if persisted.rate_limit_cooldown_until.is_none() {
+                persisted.rate_limit_cooldown_until = old.rate_limit_cooldown_until;
+            }
         }
 
         self.profiles.insert(host.to_owned(), persisted);

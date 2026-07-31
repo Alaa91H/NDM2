@@ -147,14 +147,27 @@ impl DownloadProfile {
     }
 
     pub fn to_adaptive_config(&self) -> AdaptiveConfig {
-        // Pick evaluation cadence and stall tolerance from the preset that
-        // matches the profile's character, then overlay profile thresholds.
-        let base = if !self.adaptive {
-            AdaptiveConfig::conservative()
+        // Only the evaluation cadence and stall tolerance survive the overlay
+        // below; every other base value (connection bounds and speed
+        // thresholds) is replaced by the profile's own values. Compute just
+        // those two fields directly instead of building a whole
+        // aggressive()/conservative()/default() config that is mostly thrown
+        // away.
+        let (stall_threshold, eval_interval) = if !self.adaptive {
+            (
+                std::time::Duration::from_secs(10),
+                std::time::Duration::from_secs(5),
+            )
         } else if self.max_connections >= 40 {
-            AdaptiveConfig::aggressive()
+            (
+                std::time::Duration::from_secs(3),
+                std::time::Duration::from_millis(1500),
+            )
         } else {
-            AdaptiveConfig::default()
+            (
+                std::time::Duration::from_secs(5),
+                std::time::Duration::from_secs(2),
+            )
         };
         AdaptiveConfig {
             min_connections: self.default_connections.min(self.max_connections),
@@ -162,7 +175,8 @@ impl DownloadProfile {
             speed_high_threshold: (self.adaptive_config.speed_high_threshold_mbps * 125_000.0)
                 as u64,
             speed_low_threshold: (self.adaptive_config.speed_low_threshold_kbps * 125.0) as u64,
-            ..base
+            stall_threshold,
+            eval_interval,
         }
     }
 
@@ -201,15 +215,18 @@ impl ProfileManager {
     }
 
     pub fn active_profile(&self) -> DownloadProfile {
-        let id = self
-            .active_profile
-            .lock()
-            .map(|g| g.clone())
-            .unwrap_or_default();
-        self.profiles
-            .lock()
-            .ok()
-            .and_then(|p| p.get(&id).cloned())
+        let active_guard = match self.active_profile.lock() {
+            Ok(g) => g,
+            Err(_) => return DownloadProfile::balanced(),
+        };
+        let profiles_guard = match self.profiles.lock() {
+            Ok(g) => g,
+            Err(_) => return DownloadProfile::balanced(),
+        };
+        // Both locks held — set_active() cannot change the ID under us
+        profiles_guard
+            .get(&*active_guard)
+            .cloned()
             .unwrap_or_else(DownloadProfile::balanced)
     }
 

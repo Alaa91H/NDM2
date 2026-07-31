@@ -1,12 +1,14 @@
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
 
 use crate::daemon::engine::config::global_config;
 
 pub struct ThreadPool {
     tx: Option<mpsc::Sender<Box<dyn FnOnce() + Send>>>,
-    handles: Vec<thread::JoinHandle<()>>,
+    worker_handles: Vec<thread::JoinHandle<()>>,
+    dispatcher_handle: Option<thread::JoinHandle<()>>,
     active_count: Arc<AtomicU32>,
     max_size: u32,
 }
@@ -18,45 +20,37 @@ impl ThreadPool {
     }
 
     pub fn with_size(size: u32) -> Self {
-        let (tx, rx) = mpsc::channel::<Box<dyn FnOnce() + Send>>();
-        let rx = Arc::new(std::sync::Mutex::new(rx));
         let active_count = Arc::new(AtomicU32::new(0));
-        let mut handles = Vec::with_capacity(size as usize);
+        let mut worker_handles = Vec::with_capacity(size as usize);
 
+        // Create per-worker channels so workers never contend on a single
+        // Mutex-protected Receiver (C-04 fix).
+        let mut worker_txs = Vec::with_capacity(size as usize);
         for i in 0..size {
-            let rx = rx.clone();
+            let (tx, rx) = mpsc::channel::<Box<dyn FnOnce() + Send>>();
+            worker_txs.push(tx);
             let ac = active_count.clone();
             match thread::Builder::new()
                 .name(format!("nova-worker-{i}"))
-                .spawn(move || loop {
-                    let task = {
-                        let lock = match rx.lock() {
-                            Ok(l) => l,
-                            Err(_) => break,
-                        };
-                        lock.recv()
-                    };
-                    match task {
-                        Ok(task_fn) => {
-                            ac.fetch_add(1, Ordering::Relaxed);
-                            let result =
-                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(task_fn));
-                            ac.fetch_sub(1, Ordering::Relaxed);
-                            if let Err(panic) = result {
-                                let msg = if let Some(s) = panic.downcast_ref::<&str>() {
-                                    (*s).to_owned()
-                                } else if let Some(s) = panic.downcast_ref::<String>() {
-                                    s.clone()
-                                } else {
-                                    "unknown".to_owned()
-                                };
-                                log::error!("Worker thread task panicked: {msg}");
-                            }
+                .spawn(move || {
+                    while let Ok(task_fn) = rx.recv() {
+                        ac.fetch_add(1, Ordering::Relaxed);
+                        let result =
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(task_fn));
+                        ac.fetch_sub(1, Ordering::Relaxed);
+                        if let Err(panic) = result {
+                            let msg = if let Some(s) = panic.downcast_ref::<&str>() {
+                                (*s).to_owned()
+                            } else if let Some(s) = panic.downcast_ref::<String>() {
+                                s.clone()
+                            } else {
+                                "unknown".to_owned()
+                            };
+                            log::error!("Worker thread task panicked: {msg}");
                         }
-                        Err(_) => break,
                     }
                 }) {
-                Ok(handle) => handles.push(handle),
+                Ok(handle) => worker_handles.push(handle),
                 Err(e) => {
                     log::error!("Failed to spawn nova worker thread {i}: {e}");
                     break;
@@ -64,9 +58,51 @@ impl ThreadPool {
             }
         }
 
+        // Dispatcher thread: receives tasks from the public channel and
+        // distributes them round-robin across per-worker channels.
+        let (public_tx, public_rx) = mpsc::channel::<Box<dyn FnOnce() + Send>>();
+        let dispatcher_handle = thread::Builder::new()
+            .name("nova-dispatcher".to_owned())
+            .spawn(move || {
+                let mut idx = 0usize;
+                let count = worker_txs.len();
+                loop {
+                    let task = match public_rx.recv() {
+                        Ok(t) => t,
+                        Err(_) => break,
+                    };
+                    let start = idx;
+                    let result = worker_txs[idx].send(task);
+                    match result {
+                        Ok(()) => {
+                            idx = (idx + 1) % count;
+                        }
+                        Err(send_err) => {
+                            let mut returned_task = send_err.0;
+                            loop {
+                                idx = (idx + 1) % count;
+                                if idx == start {
+                                    log::error!("All worker channels closed, dropping task");
+                                    break;
+                                }
+                                match worker_txs[idx].send(returned_task) {
+                                    Ok(()) => {
+                                        idx = (idx + 1) % count;
+                                        break;
+                                    }
+                                    Err(e) => returned_task = e.0,
+                                }
+                            }
+                        }
+                    }
+                }
+            })
+            .unwrap();
+
         Self {
-            tx: Some(tx),
-            handles,
+            tx: Some(public_tx),
+            worker_handles,
+            dispatcher_handle: Some(dispatcher_handle),
             active_count,
             max_size: size,
         }
@@ -90,7 +126,10 @@ impl ThreadPool {
     #[cfg(test)]
     pub fn shutdown(mut self) {
         drop(self.tx.take());
-        for handle in self.handles.drain(..) {
+        if let Some(h) = self.dispatcher_handle.take() {
+            let _ = h.join();
+        }
+        for handle in self.worker_handles.drain(..) {
             let _ = handle.join();
         }
     }
@@ -98,9 +137,16 @@ impl ThreadPool {
 
 impl Drop for ThreadPool {
     fn drop(&mut self) {
-        if self.handles.iter().any(|h| !h.is_finished()) {
+        // Fast path: if no worker is alive there is nothing to signal or join.
+        // This check races with a worker finishing between `is_finished()` and
+        // `join()`, but that is harmless — joining an already-finished thread
+        // returns immediately, so the cleanup below is always safe.
+        if self.worker_handles.iter().any(|h| !h.is_finished()) {
             drop(self.tx.take());
-            for handle in self.handles.drain(..) {
+            if let Some(h) = self.dispatcher_handle.take() {
+                let _ = h.join();
+            }
+            for handle in self.worker_handles.drain(..) {
                 let _ = handle.join();
             }
         }

@@ -120,6 +120,13 @@ fn run_version_check(tool: &dyn ExternalTool, path: &std::path::Path) -> Result<
                 if Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
+                    // Join reader threads after kill/wait so pipes close and they unblock
+                    if let Some(h) = stdout_thread {
+                        let _ = h.join();
+                    }
+                    if let Some(h) = stderr_thread {
+                        let _ = h.join();
+                    }
                     return Err(format!("Version check timed out after {timeout:?}"));
                 }
                 std::thread::sleep(Duration::from_millis(50));
@@ -128,6 +135,7 @@ fn run_version_check(tool: &dyn ExternalTool, path: &std::path::Path) -> Result<
         }
     };
 
+    // Join reader threads after the child has exited to ensure pipes are drained
     if let Some(h) = stdout_thread {
         let _ = h.join();
     }

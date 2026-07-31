@@ -252,6 +252,7 @@ pub struct ToolRegistryEntry {
     pub installed_at: Option<String>,
     pub custom_path: bool,
     pub auto_update: bool,
+    pub checksum_sha256: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

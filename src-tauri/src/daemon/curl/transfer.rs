@@ -148,6 +148,7 @@ pub fn task_from_body(
     name: String,
     output_path: &Path,
     direct_options: HashMap<String, serde_json::Value>,
+    args: Vec<String>,
 ) -> CurlJob {
     use crate::daemon::utils::infer_file_type;
     let category = body
@@ -159,7 +160,10 @@ pub fn task_from_body(
         .clone()
         .unwrap_or_else(|| infer_file_type(&name).to_owned());
     let initial_size = body.size_bytes.unwrap_or(0);
-    let downloaded = FileWriter::current_size(output_path);
+    // Blocking filesystem read (a single stat on the partial file). This fn is
+    // synchronous and called from the async create_curl_task handler; kept here
+    // intentionally so the caller can decide how to schedule it.
+    let downloaded = FileWriter::current_size(output_path).unwrap_or(0);
     let task = crate::daemon::types::Task {
         id: id.to_owned(),
         name,
@@ -212,6 +216,7 @@ pub fn task_from_body(
         run_generation: Arc::new(AtomicU64::new(0)),
         start_time: Instant::now(),
         segment_prev_bytes: Vec::new(),
+        args,
     }
 }
 
@@ -388,7 +393,7 @@ fn resolve_effective_target(plan: &DirectDownloadPlan) -> (String, bool, Preflig
             .ok()
             .flatten()
             .filter(|u| u.starts_with("http"))
-            .map_or_else(|| current.clone(), std::borrow::ToOwned::to_owned);
+            .map_or_else(|| current.clone(), |u| u.to_owned());
 
         if let Ok(t) = easy.total_time() {
             preflight.initial_rtt_us = t.as_micros() as u64;
@@ -441,10 +446,7 @@ fn resolve_effective_target(plan: &DirectDownloadPlan) -> (String, bool, Preflig
             return (effective, false, preflight);
         }
 
-        return (effective, code == 206, {
-            preflight.supports_range = code == 206;
-            preflight
-        });
+        return (effective, code == 206, preflight);
     }
 
     (current, false, preflight)
@@ -492,12 +494,11 @@ fn update_curl_task_progress(
         }
     }
 
-    // Retry: try_lock with backoff to avoid silent drops on contention.
-    let mut jobs = loop {
-        if let Ok(jobs) = state.curl_jobs.try_lock() {
-            break jobs;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(1));
+    // Blocking lock: a try_lock spin would delay cancellation checks and
+    // stall progress ticks under contention.
+    let mut jobs = match state.curl_jobs.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
     };
     if let Some(job) = jobs.get_mut(id) {
         job.task.downloaded_bytes = downloaded;
@@ -619,7 +620,7 @@ fn run_single_libcurl(
         // completed object. An empty file, or one whose size disagrees with
         // a known remote size, must be (re)downloaded instead of being
         // silently accepted as "complete".
-        let existing = FileWriter::current_size(&plan.output_path);
+        let existing = FileWriter::current_size(&plan.output_path)?;
         let plausible = if plan.total_size > 0 {
             existing == plan.total_size
         } else {
@@ -636,7 +637,7 @@ fn run_single_libcurl(
         );
     }
     if plan.output_path.exists() {
-        let existing = FileWriter::current_size(&plan.output_path);
+        let existing = FileWriter::current_size(&plan.output_path)?;
         if plan.total_size > 0 && existing == plan.total_size {
             return Ok(TransferOutcome::plain(existing, None));
         }
@@ -666,11 +667,11 @@ fn run_single_libcurl(
     }
 
     let resume_existing = if plan.resumable && plan.validator.is_some() {
-        FileWriter::current_size(&plan.output_path)
+        FileWriter::current_size(&plan.output_path)?
     } else {
         0
     };
-    let on_disk_before = FileWriter::current_size(&plan.output_path);
+    let on_disk_before = FileWriter::current_size(&plan.output_path)?;
     let capture = Arc::new(Mutex::new(ResponseCapture::default()));
     let downloaded_counter = Arc::new(AtomicU64::new(0));
     let progress = SegmentProgress {
@@ -720,7 +721,7 @@ fn run_single_libcurl(
         let effective_downloaded = if is_preallocated {
             on_disk_before + counter_bytes
         } else {
-            let disk_bytes = FileWriter::current_size(&plan.output_path);
+            let disk_bytes = FileWriter::current_size(&plan.output_path).unwrap_or(0);
             on_disk_before + counter_bytes.max(disk_bytes.saturating_sub(on_disk_before))
         };
         let now = Instant::now();
@@ -739,15 +740,14 @@ fn run_single_libcurl(
             cancel_for_tick.store(true, Ordering::Release);
         }
 
-        let speed_u64 = speed.max(0.0) as u64;
+        let speed_u64 = speed as u64;
         state.bandwidth_manager.report_speed(id, speed_u64);
 
-        // Retry loop: try_lock with backoff to avoid silent drops on contention.
-        let mut jobs = loop {
-            if let Ok(jobs) = state.curl_jobs.try_lock() {
-                break jobs;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(1));
+        // Blocking lock: a try_lock spin would delay progress ticks and the
+        // in-loop stall detector under contention.
+        let mut jobs = match state.curl_jobs.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
         };
         {
             if let Some(job) = jobs.get_mut(id) {
@@ -793,7 +793,7 @@ fn run_single_libcurl(
         // missing or empty, the conditional request was satisfied against
         // data we no longer have; retry once WITHOUT the validator so the
         // server returns the full body instead of another 304.
-        let on_disk = FileWriter::current_size(&plan.output_path);
+        let on_disk = FileWriter::current_size(&plan.output_path)?;
         if on_disk == 0 && plan.validator.is_some() {
             log::info!(
                 "304 Not Modified but no local data for {}; retrying without conditional headers",
@@ -827,7 +827,7 @@ fn run_single_libcurl(
         });
     }
     if response == 412 {
-        let existing = FileWriter::current_size(&plan.output_path);
+        let existing = FileWriter::current_size(&plan.output_path)?;
         if existing > 0 {
             log::info!(
                 "412 Precondition Failed: resource changed, discarding {} bytes of partial data for {}",
@@ -839,7 +839,7 @@ fn run_single_libcurl(
         return Err("resource-changed-412".to_owned());
     }
     if response == 416 {
-        let existing = FileWriter::current_size(&plan.output_path);
+        let existing = FileWriter::current_size(&plan.output_path)?;
         if existing > 0 {
             log::info!(
                 "416 Range Not Satisfiable: discarding {} bytes of partial data for {}",
@@ -882,7 +882,7 @@ fn run_single_libcurl(
         let curl_written = downloaded_counter.load(Ordering::Acquire);
         log::warn!(
             "Task {id}: HTTP response=0 — curl_written={curl_written}, on_disk={}, total_size={}",
-            FileWriter::current_size(&plan.output_path),
+            FileWriter::current_size(&plan.output_path).unwrap_or(0),
             plan.total_size
         );
         if curl_written == 0 {
@@ -913,7 +913,7 @@ fn run_single_libcurl(
         (cap.validator.clone(), cap.content_encoded)
     });
     Ok(TransferOutcome {
-        size: FileWriter::current_size(&plan.output_path),
+        size: FileWriter::current_size(&plan.output_path)?,
         validator: captured,
         content_encoded: encoded,
     })
@@ -930,7 +930,7 @@ fn run_segmented_libcurl(
 ) -> Result<TransferOutcome, String> {
     FileWriter::ensure_parent(&plan.output_path)?;
     if !plan.allow_overwrite && plan.output_path.exists() {
-        let existing = FileWriter::current_size(&plan.output_path);
+        let existing = FileWriter::current_size(&plan.output_path)?;
         if existing == plan.total_size && plan.total_size > 0 {
             return Ok(TransferOutcome::plain(existing, None));
         }
@@ -944,7 +944,7 @@ fn run_segmented_libcurl(
         remove_stale_parts_for(&plan.output_path);
     }
     if plan.output_path.exists()
-        && FileWriter::current_size(&plan.output_path) == plan.total_size
+        && FileWriter::current_size(&plan.output_path)? == plan.total_size
         && plan.total_size > 0
     {
         return Ok(TransferOutcome::plain(plan.total_size, None));
@@ -986,13 +986,14 @@ fn run_segmented_libcurl(
             host,
             plan.total_size,
             rie_connections,
-            protocol.clone(),
+            protocol,
             cfg.min_segment_bytes,
         );
         if preflight.initial_rtt_us > 0 || preflight.ttfb_us > 0 {
             engine.seed_profile(
                 protocol,
                 preflight.supports_range,
+                plan.resumable,
                 None,
                 if preflight.uses_tls {
                     Some("TLS".into())
@@ -1031,7 +1032,7 @@ fn run_segmented_libcurl(
                     ),
                 segments: Some(segment_scheduler.clone()),
                 retry_state: crate::daemon::engine::retry::RetryState::new(),
-                adaptive_engine: Some(adaptive_engine),
+                adaptive_engine: Mutex::new(Some(adaptive_engine)),
             },
         );
     }
@@ -1061,7 +1062,7 @@ fn run_segmented_libcurl(
     };
     for range in ranges.iter().cloned() {
         let expected = part_size(&range);
-        let actual = FileWriter::current_size(&range.path);
+        let actual = FileWriter::current_size(&range.path)?;
         let existing = if actual > expected {
             let _ = std::fs::remove_file(&range.path);
             0
@@ -1128,21 +1129,23 @@ fn run_segmented_libcurl(
             seg_downloads.push(seg_downloaded);
             seg_speeds.push(seg_speed);
         }
-        if let Ok(mut trackers) = state.engine_trackers.write() {
-            if let Some(tracker) = trackers.get_mut(id) {
-                if let Some(ref mut engine) = tracker.adaptive_engine {
-                    for (i, (&downloaded, &speed)) in
-                        seg_downloads.iter().zip(seg_speeds.iter()).enumerate()
-                    {
-                        engine
-                            .segment_ctrl
-                            .update_progress(i as u32, downloaded, speed);
+        if let Ok(trackers) = state.engine_trackers.read() {
+            if let Some(tracker) = trackers.get(id) {
+                if let Ok(mut engine_guard) = tracker.adaptive_engine.lock() {
+                    if let Some(ref mut engine) = engine_guard.as_mut() {
+                        for (i, (&downloaded, &speed)) in
+                            seg_downloads.iter().zip(seg_speeds.iter()).enumerate()
+                        {
+                            engine
+                                .segment_ctrl
+                                .update_progress(i as u32, downloaded, speed);
+                        }
+                        // Adaptive engine evaluate() and decision application are
+                        // disabled — the decisions (target_connections, segment
+                        // split/merge/etc.) have no code path that reconfigures
+                        // the active curl multi handle's easy handles. Progress
+                        // data is still fed to segment_ctrl for future use.
                     }
-                    // Adaptive engine evaluate() and decision application are
-                    // disabled — the decisions (target_connections, segment
-                    // split/merge/etc.) have no code path that reconfigures
-                    // the active curl multi handle's easy handles. Progress
-                    // data is still fed to segment_ctrl for future use.
                 }
             }
         }
@@ -1192,6 +1195,9 @@ fn run_segmented_libcurl(
             ));
         }
         if code == 200 && ranges.len() > 1 && is_http_family(&plan.url) {
+            for r in &ranges {
+                let _ = std::fs::remove_file(&r.path);
+            }
             return Err("Server did not honor byte-range requests; retry with one connection or probe the URL again.".to_owned());
         }
     }
@@ -1237,7 +1243,6 @@ fn run_libcurl_download(
     let mut last_error = String::new();
     let retry_after = Arc::new(AtomicU64::new(0));
     let streaming_digest_out = Arc::new(Mutex::new(None::<String>));
-    let streaming_digest_reader = streaming_digest_out.clone();
     if plan.segmented && crate::daemon::direct::learned_host_ceiling(&plan.url) == Some(1) {
         plan.segmented = false;
     }
@@ -1285,7 +1290,7 @@ fn run_libcurl_download(
     // the reported bug where NOVA "detects size but never downloads" because a
     // stale partial file from a previous failed attempt blocked the new one.
     if !plan.allow_overwrite && plan.output_path.exists() {
-        let existing_size = FileWriter::current_size(&plan.output_path);
+        let existing_size = FileWriter::current_size(&plan.output_path)?;
         let is_complete = plan.total_size > 0 && existing_size == plan.total_size;
         if !is_complete {
             if let Some(renamed) = auto_rename_path(&plan.output_path) {
@@ -1368,7 +1373,7 @@ fn run_libcurl_download(
                 // response headers) — never merely assumed from config.
                 validate_transfer_size(plan.total_size, outcome.content_encoded, size)?;
                 if let Some(ref expected_raw) = plan.digest_sha256 {
-                    let actual_hex = streaming_digest_reader
+                    let actual_hex = streaming_digest_out
                         .lock()
                         .ok()
                         .and_then(|s| s.clone())
@@ -1406,7 +1411,11 @@ fn run_libcurl_download(
                 }
                 if let Some(etag_file) = plan.config.str_("etagSave") {
                     if let Some(ref captured) = captured_validator {
-                        let _ = std::fs::write(etag_file, captured);
+                        if let Err(e) = std::fs::write(etag_file, captured) {
+                            log::warn!(
+                                "Task {id}: failed to persist ETag to {etag_file}: {e} — next resume will re-download"
+                            );
+                        }
                     }
                 }
                 return Ok(size);
@@ -1552,7 +1561,7 @@ fn run_libcurl_download(
                 }
                 last_error = error;
                 if attempt + 1 < retry_policy.attempts {
-                    let hinted = retry_after.swap(0, Ordering::Relaxed);
+                    let hinted = retry_after.swap(0, Ordering::AcqRel);
                     // Use the self-healer's recommended pause if available,
                     // otherwise fall back to Retry-After header or exponential backoff.
                     let backoff_delay = if let Some(pause) = healer_pause {
@@ -1576,7 +1585,7 @@ fn run_libcurl_download(
                             return Err("cancelled".to_owned());
                         }
                         let chunk = Duration::from_millis(500)
-                            .min(actual_delay.checked_sub(elapsed).unwrap());
+                            .min(actual_delay.checked_sub(elapsed).unwrap_or(Duration::ZERO));
                         std::thread::sleep(chunk);
                         elapsed += chunk;
                     }
@@ -1708,7 +1717,7 @@ pub fn start_curl_process(state: &SharedState, id: &str) {
         (plan, token, generation)
     };
     state.mark_dirty();
-    state.priority_queue.start_download(id);
+    state.priority_queue.start_download();
 
     let watchdog_cancel = record.1.clone();
     let watchdog_generation = record.2;
@@ -1791,110 +1800,123 @@ pub fn start_curl_process(state: &SharedState, id: &str) {
     // (which prevents tick() and the in-loop stall detector from firing),
     // this watchdog detects the stall from OUTSIDE and force-sets the cancel
     // token so the curl thread exits as soon as it checks it.
-    let hard_deadline_secs = if watchdog_expected > 0 {
-        let estimated = (watchdog_expected / 10_000) + 120;
-        estimated.clamp(300, 10800)
-    } else {
-        7200
-    };
-    let watchdog_handle = std::thread::spawn(move || {
-        log::info!(
-            "Watchdog started for task {watchdog_id} (hard deadline: {hard_deadline_secs}s)"
-        );
-        let start = Instant::now();
-        let mut last_downloaded: u64 = 0;
-        let mut last_progress_time = Instant::now();
-        let stall_timeout = Duration::from_secs(60);
+    // Small (< 1 MiB) downloads finish in seconds and are fully covered by the
+    // in-loop stall detector, so the extra watchdog thread is skipped for them.
+    if watchdog_expected >= 1_048_576 {
+        let hard_deadline_secs = if watchdog_expected > 0 {
+            let estimated = (watchdog_expected / 10_000) + 120;
+            estimated.clamp(300, 10800)
+        } else {
+            7200
+        };
+        let watchdog_handle = std::thread::spawn(move || {
+            log::info!(
+                "Watchdog started for task {watchdog_id} (hard deadline: {hard_deadline_secs}s)"
+            );
+            let start = Instant::now();
+            let mut last_downloaded: u64 = 0;
+            let mut last_progress_time = Instant::now();
+            let stall_timeout = Duration::from_secs(60);
 
-        loop {
-            std::thread::sleep(Duration::from_secs(3));
+            loop {
+                std::thread::sleep(Duration::from_secs(3));
 
-            if watchdog_state.shutdown_requested.load(Ordering::Acquire) {
-                log::info!("Watchdog for {watchdog_id}: daemon shutting down, exiting");
-                return;
-            }
-
-            if watchdog_cancel.load(Ordering::Acquire) {
-                log::info!("Watchdog for {watchdog_id}: cancel token already set, exiting");
-                return;
-            }
-
-            let (status, downloaded, speed) = {
-                let jobs = match watchdog_state.curl_jobs.lock() {
-                    Ok(j) => j,
-                    Err(_) => return,
-                };
-                if let Some(job) = jobs.get(&watchdog_id) {
-                    (
-                        job.task.status.clone(),
-                        job.task.downloaded_bytes,
-                        job.task.speed_bytes_per_sec,
-                    )
-                } else {
-                    log::info!("Watchdog for {watchdog_id}: job removed from curl_jobs, exiting");
+                if watchdog_state.shutdown_requested.load(Ordering::Acquire) {
+                    log::info!("Watchdog for {watchdog_id}: daemon shutting down, exiting");
                     return;
                 }
-            };
 
-            if status != "downloading" {
-                log::info!("Watchdog for {watchdog_id}: status is '{status}', exiting");
-                return;
-            }
+                if watchdog_cancel.load(Ordering::Acquire) {
+                    log::info!("Watchdog for {watchdog_id}: cancel token already set, exiting");
+                    return;
+                }
 
-            if downloaded > last_downloaded {
-                last_downloaded = downloaded;
-                last_progress_time = Instant::now();
-            }
+                let (status, downloaded, speed) = {
+                    let jobs = match watchdog_state.curl_jobs.lock() {
+                        Ok(j) => j,
+                        Err(_) => {
+                            log::error!("Watchdog for {watchdog_id}: curl_jobs lock poisoned, force-cancelling");
+                            watchdog_cancel.store(true, Ordering::Release);
+                            return;
+                        }
+                    };
+                    if let Some(job) = jobs.get(&watchdog_id) {
+                        (
+                            job.task.status.clone(),
+                            job.task.downloaded_bytes,
+                            job.task.speed_bytes_per_sec,
+                        )
+                    } else {
+                        log::info!(
+                            "Watchdog for {watchdog_id}: job removed from curl_jobs, exiting"
+                        );
+                        return;
+                    }
+                };
 
-            let elapsed = start.elapsed().as_secs();
+                if status != "downloading" {
+                    log::info!("Watchdog for {watchdog_id}: status is '{status}', exiting");
+                    return;
+                }
 
-            // Stall check: no bytes received for stall_timeout seconds
-            if last_progress_time.elapsed() >= stall_timeout {
-                log::warn!(
-                    "Watchdog: task {watchdog_id} stalled for {}s with 0 bytes/s — force-cancelling transfer (downloaded={downloaded})",
-                    stall_timeout.as_secs()
-                );
-                watchdog_cancel.store(true, Ordering::Release);
-                force_error_status(
-                    &watchdog_state,
-                    &watchdog_id,
-                    watchdog_generation,
-                    format!(
-                        "Download stalled: no data received for {} seconds. The connection may have hung or the server stopped responding.",
+                if downloaded > last_downloaded {
+                    last_downloaded = downloaded;
+                    last_progress_time = Instant::now();
+                }
+
+                let elapsed = start.elapsed().as_secs();
+
+                // Stall check: no bytes received for stall_timeout seconds
+                if last_progress_time.elapsed() >= stall_timeout {
+                    log::warn!(
+                        "Watchdog: task {watchdog_id} stalled for {}s with 0 bytes/s — force-cancelling transfer (downloaded={downloaded})",
                         stall_timeout.as_secs()
-                    ),
-                );
-                return;
-            }
+                    );
+                    watchdog_cancel.store(true, Ordering::Release);
+                    force_error_status(
+                        &watchdog_state,
+                        &watchdog_id,
+                        watchdog_generation,
+                        format!(
+                            "Download stalled: no data received for {} seconds. The connection may have hung or the server stopped responding.",
+                            stall_timeout.as_secs()
+                        ),
+                    );
+                    return;
+                }
 
-            // Hard deadline: total elapsed time exceeded
-            if elapsed >= hard_deadline_secs {
-                log::warn!(
-                    "Watchdog: task {watchdog_id} exceeded hard deadline of {hard_deadline_secs}s — force-cancelling transfer (downloaded={downloaded})"
-                );
-                watchdog_cancel.store(true, Ordering::Release);
-                force_error_status(
-                    &watchdog_state,
-                    &watchdog_id,
-                    watchdog_generation,
-                    format!(
-                        "Download timed out after {hard_deadline_secs} seconds. The transfer did not complete within the allowed time limit."
-                    ),
-                );
-                return;
-            }
+                // Hard deadline: total elapsed time exceeded
+                if elapsed >= hard_deadline_secs {
+                    log::warn!(
+                        "Watchdog: task {watchdog_id} exceeded hard deadline of {hard_deadline_secs}s — force-cancelling transfer (downloaded={downloaded})"
+                    );
+                    watchdog_cancel.store(true, Ordering::Release);
+                    force_error_status(
+                        &watchdog_state,
+                        &watchdog_id,
+                        watchdog_generation,
+                        format!(
+                            "Download timed out after {hard_deadline_secs} seconds. The transfer did not complete within the allowed time limit."
+                        ),
+                    );
+                    return;
+                }
 
-            // Periodic heartbeat log every 30s
-            if elapsed > 0 && elapsed % 30 == 0 {
-                log::info!(
-                    "Watchdog heartbeat: task {watchdog_id} — {elapsed}s elapsed, downloaded={downloaded}, speed={speed} B/s, status={status}"
-                );
+                // Periodic heartbeat log every 30s
+                if elapsed > 0 && elapsed % 30 == 0 {
+                    log::info!(
+                        "Watchdog heartbeat: task {watchdog_id} — {elapsed}s elapsed, downloaded={downloaded}, speed={speed} B/s, status={status}"
+                    );
+                }
             }
+        });
+        match state.watchdog_handles.lock() {
+            Ok(mut handles) => {
+                handles.retain(|h| !h.is_finished());
+                handles.push(watchdog_handle);
+            }
+            Err(e) => log::error!("watchdog_handles lock poisoned: {e}"),
         }
-    });
-    match state.watchdog_handles.lock() {
-        Ok(mut handles) => handles.push(watchdog_handle),
-        Err(e) => log::error!("watchdog_handles lock poisoned: {e}"),
     }
 }
 
@@ -1952,7 +1974,12 @@ fn auto_rename_path(original: &std::path::Path) -> Option<std::path::PathBuf> {
         {
             Ok(f) => {
                 drop(f);
-                let _ = std::fs::remove_file(candidate);
+                if let Err(e) = std::fs::remove_file(candidate) {
+                    log::warn!(
+                        "auto_rename_path: failed to remove placeholder file {}: {e}",
+                        candidate.display()
+                    );
+                }
                 true
             }
             Err(_) => false,

@@ -85,6 +85,9 @@ impl ConvergenceDetector {
             self.cooldown_until = Some(Instant::now() + double_interval);
         }
 
+        if self.history.len() >= 60 {
+            self.history.pop_front();
+        }
         self.history.push_back(SpeedSample {
             timestamp: Instant::now(),
             aggregate_speed: speed_after,

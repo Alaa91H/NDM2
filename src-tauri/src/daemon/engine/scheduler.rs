@@ -98,7 +98,22 @@ impl SmartScheduler {
         }
     }
 
-    pub fn evaluate(&self, current_bandwidth_kbps: u64, active_count: u32) -> Vec<SchedulerAction> {
+    /// Evaluate all enabled rules against the current download state.
+    ///
+    /// `active_count` is the number of downloads currently in flight,
+    /// `queued_count` the number waiting to start, and `total_count` the total
+    /// number of known tasks. These are used to give the `QueueEmpty` and
+    /// `AllComplete` triggers distinct semantics:
+    ///   - `QueueEmpty` fires when nothing is running and nothing is queued.
+    ///   - `AllComplete` fires only when *something existed to complete*
+    ///     (`total_count > 0`) and every task has reached a terminal state.
+    pub fn evaluate(
+        &self,
+        current_bandwidth_kbps: u64,
+        active_count: u32,
+        queued_count: u32,
+        total_count: u32,
+    ) -> Vec<SchedulerAction> {
         let rules = match self.rules.lock() {
             Ok(g) => g,
             Err(_) => return Vec::new(),
@@ -132,8 +147,10 @@ impl SmartScheduler {
                 SchedulerTrigger::BandwidthBelow { threshold_kbps } => {
                     current_bandwidth_kbps < *threshold_kbps && current_bandwidth_kbps > 0
                 }
-                SchedulerTrigger::QueueEmpty => active_count == 0,
-                SchedulerTrigger::AllComplete => active_count == 0,
+                SchedulerTrigger::QueueEmpty => active_count == 0 && queued_count == 0,
+                SchedulerTrigger::AllComplete => {
+                    active_count == 0 && queued_count == 0 && total_count > 0
+                }
             };
 
             if triggered {
@@ -184,7 +201,7 @@ mod tests {
     #[test]
     fn empty_rules_returns_no_actions() {
         let sched = SmartScheduler::new();
-        let actions = sched.evaluate(1000, 5);
+        let actions = sched.evaluate(1000, 5, 3, 4);
         assert!(actions.is_empty());
     }
 
@@ -200,7 +217,7 @@ mod tests {
         );
         rule.enabled = false;
         sched.add_rule(rule);
-        let actions = sched.evaluate(1000, 0);
+        let actions = sched.evaluate(1000, 0, 0, 0);
         assert!(actions.is_empty());
     }
 
@@ -214,7 +231,7 @@ mod tests {
                 message: "queue empty".into(),
             },
         ));
-        let actions = sched.evaluate(1000, 0);
+        let actions = sched.evaluate(1000, 0, 0, 0);
         assert_eq!(actions.len(), 1);
     }
 
@@ -228,7 +245,7 @@ mod tests {
                 message: "queue empty".into(),
             },
         ));
-        let actions = sched.evaluate(1000, 3);
+        let actions = sched.evaluate(1000, 3, 0, 3);
         assert!(actions.is_empty());
     }
 
@@ -244,7 +261,7 @@ mod tests {
                 message: "low bw".into(),
             },
         ));
-        let actions = sched.evaluate(3000, 1);
+        let actions = sched.evaluate(3000, 1, 0, 1);
         assert_eq!(actions.len(), 1);
     }
 
@@ -260,7 +277,7 @@ mod tests {
                 message: "low bw".into(),
             },
         ));
-        let actions = sched.evaluate(6000, 1);
+        let actions = sched.evaluate(6000, 1, 0, 1);
         assert!(actions.is_empty());
     }
 
@@ -276,7 +293,7 @@ mod tests {
                 message: "low bw".into(),
             },
         ));
-        let actions = sched.evaluate(0, 1);
+        let actions = sched.evaluate(0, 1, 0, 1);
         assert!(actions.is_empty());
     }
 
@@ -299,7 +316,7 @@ mod tests {
                 message: "in window".into(),
             },
         ));
-        let actions = sched.evaluate(1000, 1);
+        let actions = sched.evaluate(1000, 1, 0, 0);
         assert_eq!(actions.len(), 1);
     }
 
@@ -322,7 +339,7 @@ mod tests {
                 message: "in window".into(),
             },
         ));
-        let actions = sched.evaluate(1000, 1);
+        let actions = sched.evaluate(1000, 1, 0, 0);
         assert!(actions.is_empty());
     }
 
@@ -336,9 +353,9 @@ mod tests {
                 message: "test".into(),
             },
         ));
-        assert_eq!(sched.evaluate(1000, 0).len(), 1);
+        assert_eq!(sched.evaluate(1000, 0, 0, 0).len(), 1);
         sched.remove_rule("r1");
-        assert!(sched.evaluate(1000, 0).is_empty());
+        assert!(sched.evaluate(1000, 0, 0, 0).is_empty());
     }
 
     #[test]
@@ -360,8 +377,8 @@ mod tests {
                 message: "new".into(),
             },
         ));
-        assert!(sched.evaluate(1000, 0).is_empty());
-        assert_eq!(sched.evaluate(50, 1).len(), 1);
+        assert!(sched.evaluate(1000, 0, 0, 0).is_empty());
+        assert_eq!(sched.evaluate(50, 1, 0, 1).len(), 1);
     }
 
     #[test]
@@ -383,7 +400,7 @@ mod tests {
                 message: "test2".into(),
             },
         ));
-        sched.evaluate(3000, 0);
+        sched.evaluate(3000, 0, 0, 0);
         let ids = sched.active_rule_ids();
         assert!(ids.contains(&"r1".to_string()));
         assert!(ids.contains(&"r2".to_string()));
@@ -426,7 +443,7 @@ mod tests {
             },
             SchedulerAction::SetBandwidthLimit { kbps: 1000 },
         ));
-        let actions = sched.evaluate(3000, 0);
+        let actions = sched.evaluate(3000, 0, 0, 0);
         assert_eq!(actions.len(), 2);
     }
 }

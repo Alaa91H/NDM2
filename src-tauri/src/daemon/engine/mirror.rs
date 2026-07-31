@@ -14,9 +14,14 @@ pub struct MirrorSource {
 }
 
 #[derive(Clone)]
+struct InnerMirrorState {
+    mirrors: Vec<MirrorSource>,
+    active_mirror: Option<usize>,
+}
+
+#[derive(Clone)]
 pub struct MirrorManager {
-    mirrors: Arc<std::sync::Mutex<Vec<MirrorSource>>>,
-    active_mirror: Arc<std::sync::Mutex<Option<usize>>>,
+    mirrors: Arc<std::sync::Mutex<InnerMirrorState>>,
     failover_enabled: Arc<AtomicBool>,
     last_failover: Arc<std::sync::Mutex<Instant>>,
     failover_cooldown: Duration,
@@ -33,8 +38,10 @@ impl MirrorManager {
             healthy: true,
         }];
         Self {
-            mirrors: Arc::new(std::sync::Mutex::new(mirrors)),
-            active_mirror: Arc::new(std::sync::Mutex::new(Some(0))),
+            mirrors: Arc::new(std::sync::Mutex::new(InnerMirrorState {
+                mirrors,
+                active_mirror: Some(0),
+            })),
             failover_enabled: Arc::new(AtomicBool::new(true)),
             last_failover: Arc::new(std::sync::Mutex::new(
                 Instant::now()
@@ -46,34 +53,32 @@ impl MirrorManager {
     }
 
     pub fn add_mirror(&self, mirror: MirrorSource) {
-        if let Ok(mut mirrors) = self.mirrors.lock() {
-            mirrors.push(mirror);
-            mirrors.sort_by_key(|m| m.priority);
+        if let Ok(mut state) = self.mirrors.lock() {
+            state.mirrors.push(mirror);
+            state.mirrors.sort_by_key(|m| m.priority);
         }
     }
 
     pub fn set_mirrors(&self, mirrors: Vec<MirrorSource>) {
-        if let Ok(mut m) = self.mirrors.lock() {
+        if let Ok(mut state) = self.mirrors.lock() {
             let is_empty = mirrors.is_empty();
-            *m = mirrors;
-            m.sort_by_key(|m| m.priority);
-            drop(m);
-            if let Ok(mut active) = self.active_mirror.lock() {
-                *active = if is_empty { None } else { Some(0) };
-            }
+            state.mirrors = mirrors;
+            state.mirrors.sort_by_key(|m| m.priority);
+            state.active_mirror = if is_empty { None } else { Some(0) };
         }
     }
 
     pub fn active_url(&self) -> String {
-        let mirrors = match self.mirrors.lock() {
+        let state = match self.mirrors.lock() {
             Ok(g) => g,
             Err(_) => return String::new(),
         };
-        let idx = self.active_mirror.lock().ok().and_then(|i| *i).unwrap_or(0);
-        mirrors
+        let idx = state.active_mirror.unwrap_or(0);
+        state
+            .mirrors
             .get(idx)
             .map(|m| m.url.clone())
-            .or_else(|| mirrors.first().map(|m| m.url.clone()))
+            .or_else(|| state.mirrors.first().map(|m| m.url.clone()))
             .unwrap_or_default()
     }
 
@@ -89,32 +94,30 @@ impl MirrorManager {
             return None;
         }
 
-        // Lock both mirrors and active_mirror together to prevent TOCTOU race.
-        let mut mirrors = match self.mirrors.lock() {
+        // Single lock for both mirrors and active_mirror — no ABBA risk.
+        let mut state = match self.mirrors.lock() {
             Ok(g) => g,
             Err(_) => return None,
         };
-        let mut active = match self.active_mirror.lock() {
-            Ok(g) => g,
-            Err(_) => return None,
-        };
-        if let Some(m) = mirrors.iter_mut().find(|m| m.url == url) {
+        if let Some(m) = state.mirrors.iter_mut().find(|m| m.url == url) {
             m.healthy = false;
         }
-        if let Some(idx) = mirrors.iter().position(|m| m.url == url) {
-            if let Some(new_idx) = mirrors
+        if let Some(idx) = state.mirrors.iter().position(|m| m.url == url) {
+            if let Some(new_idx) = state
+                .mirrors
                 .iter()
                 .enumerate()
                 .filter(|(i, m)| *i != idx && m.healthy)
                 .min_by_key(|(_, m)| m.priority)
                 .map(|(i, _)| i)
             {
-                *active = Some(new_idx);
+                state.active_mirror = Some(new_idx);
                 *last = Instant::now();
-                return mirrors
+                return state
+                    .mirrors
                     .get(new_idx)
                     .map(|m| m.url.clone())
-                    .or_else(|| mirrors.first().map(|m| m.url.clone()))
+                    .or_else(|| state.mirrors.first().map(|m| m.url.clone()))
                     .unwrap_or_default()
                     .into();
             }
@@ -123,15 +126,18 @@ impl MirrorManager {
     }
 
     pub fn report_success(&self, url: &str) {
-        if let Ok(mut mirrors) = self.mirrors.lock() {
-            if let Some(m) = mirrors.iter_mut().find(|m| m.url == url) {
+        if let Ok(mut state) = self.mirrors.lock() {
+            if let Some(m) = state.mirrors.iter_mut().find(|m| m.url == url) {
                 m.healthy = true;
             }
         }
     }
 
     pub fn mirrors(&self) -> Vec<MirrorSource> {
-        self.mirrors.lock().map(|g| g.clone()).unwrap_or_default()
+        self.mirrors
+            .lock()
+            .map(|state| state.mirrors.clone())
+            .unwrap_or_default()
     }
 
     pub fn enable_failover(&self) {

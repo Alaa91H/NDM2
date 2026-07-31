@@ -44,6 +44,9 @@ md-5 = "0.10"
 zip = "2"
 unicode-normalization = "0.1"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
+
 [profile.release]
 lto = "fat"
 codegen-units = 1

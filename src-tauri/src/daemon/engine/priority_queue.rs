@@ -28,6 +28,7 @@ impl DownloadPriority {
         match v {
             0 => Self::Critical,
             1 => Self::High,
+            2 => Self::Normal,
             3 => Self::Low,
             4 => Self::Background,
             _ => Self::Normal,
@@ -121,7 +122,7 @@ impl PriorityBandwidthQueue {
         None
     }
 
-    pub fn start_download(&self, _task_id: &str) {
+    pub fn start_download(&self) {
         self.active_downloads.fetch_add(1, AtomicOrder::Relaxed);
         self.reallocate();
     }
@@ -170,9 +171,7 @@ impl PriorityBandwidthQueue {
         let mut priority_counts: std::collections::HashMap<DownloadPriority, u32> =
             std::collections::HashMap::new();
         for entry in entries.iter() {
-            if entry.size_bytes > 0 {
-                *priority_counts.entry(entry.priority).or_insert(0) += 1;
-            }
+            *priority_counts.entry(entry.priority).or_insert(0) += 1;
         }
 
         if priority_counts.is_empty() {
@@ -180,9 +179,6 @@ impl PriorityBandwidthQueue {
         }
 
         for entry in entries.iter() {
-            if entry.size_bytes == 0 {
-                continue;
-            }
             let share = entry.priority.bandwidth_share();
             let count = f64::from(priority_counts.get(&entry.priority).copied().unwrap_or(1));
             let per_task = (total_bw as f64 * share / count) as u64;
@@ -419,7 +415,7 @@ mod tests {
         let q = PriorityBandwidthQueue::new(0);
         q.enqueue(make_entry("bg", DownloadPriority::Background));
         q.enqueue(make_entry("crit", DownloadPriority::Critical));
-        q.start_download("crit");
+        q.start_download();
 
         assert_eq!(q.active_count(), 1);
 
@@ -441,8 +437,8 @@ mod tests {
                 DownloadPriority::Critical,
             ));
         }
-        for i in 0..21 {
-            q.start_download(&format!("active_{}", i));
+        for _ in 0..21 {
+            q.start_download();
         }
         q.enqueue(make_entry("queued", DownloadPriority::Critical));
 
@@ -457,7 +453,7 @@ mod tests {
     fn next_to_start_with_bandwidth_fits_high_priority() {
         let q = PriorityBandwidthQueue::new(1000);
         q.enqueue(make_entry("a", DownloadPriority::Normal));
-        q.start_download("a");
+        q.start_download();
 
         q.enqueue(make_entry("b", DownloadPriority::Critical));
         let next = q.next_to_start();
@@ -467,9 +463,9 @@ mod tests {
     #[test]
     fn start_download_increments_count() {
         let q = PriorityBandwidthQueue::new(1000);
-        q.start_download("x");
+        q.start_download();
         assert_eq!(q.active_count(), 1);
-        q.start_download("y");
+        q.start_download();
         assert_eq!(q.active_count(), 2);
     }
 
@@ -477,7 +473,7 @@ mod tests {
     fn stop_download_decrements_and_removes() {
         let q = PriorityBandwidthQueue::new(1000);
         q.enqueue(make_entry("a", DownloadPriority::Normal));
-        q.start_download("a");
+        q.start_download();
         assert_eq!(q.active_count(), 1);
 
         q.stop_download("a");
@@ -490,8 +486,8 @@ mod tests {
         let q = PriorityBandwidthQueue::new(1000);
         q.enqueue(make_entry("a", DownloadPriority::High));
         q.enqueue(make_entry("b", DownloadPriority::Low));
-        q.start_download("a");
-        q.start_download("b");
+        q.start_download();
+        q.start_download();
 
         q.stop_download("a");
         assert_eq!(q.active_count(), 1);
@@ -522,8 +518,8 @@ mod tests {
         let q = PriorityBandwidthQueue::new(1000);
         q.enqueue(make_entry("crit", DownloadPriority::Critical));
         q.enqueue(make_entry("high", DownloadPriority::High));
-        q.start_download("crit");
-        q.start_download("high");
+        q.start_download();
+        q.start_download();
         q.reallocate();
 
         let entries = q.entries();
@@ -547,8 +543,8 @@ mod tests {
         let q = PriorityBandwidthQueue::new(1000);
         q.enqueue(make_entry("a", DownloadPriority::Normal));
         q.enqueue(make_entry("b", DownloadPriority::Normal));
-        q.start_download("a");
-        q.start_download("b");
+        q.start_download();
+        q.start_download();
         q.reallocate();
 
         let entries = q.entries();
@@ -569,7 +565,7 @@ mod tests {
     fn set_total_bandwidth_triggers_reallocate() {
         let q = PriorityBandwidthQueue::new(1000);
         q.enqueue(make_entry("a", DownloadPriority::Critical));
-        q.start_download("a");
+        q.start_download();
         q.set_total_bandwidth(2000);
 
         assert_eq!(q.total_bandwidth(), 2000);
@@ -594,8 +590,8 @@ mod tests {
         q.enqueue(make_entry("l", DownloadPriority::Low));
         q.enqueue(make_entry("b", DownloadPriority::Background));
 
-        for t in ["c", "h", "n", "l", "b"] {
-            q.start_download(t);
+        for _ in ["c", "h", "n", "l", "b"] {
+            q.start_download();
         }
         q.reallocate();
 

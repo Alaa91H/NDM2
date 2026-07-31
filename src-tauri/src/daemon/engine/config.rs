@@ -18,6 +18,10 @@ pub struct EngineConfig {
     pub read_buffer_bytes: usize,
     pub flush_interval_ms: u64,
     pub worker_threads: u32,
+    /// Hard cap for the default overall transfer timeout (seconds) applied
+    /// when no per-download `timeoutSec` is set. Prevents hung transfers
+    /// (stuck DNS, stalled TLS handshake, silent server) from running forever.
+    pub default_timeout_sec: u64,
 }
 
 impl Default for EngineConfig {
@@ -40,7 +44,7 @@ impl EngineConfig {
     /// Detect system resources and build the initial autonomous config.
     pub fn detect() -> Self {
         let cpus = cpu_count();
-        let total_ram = total_system_memory_bytes();
+        let total_ram = crate::daemon::engine::sysinfo::total_physical_memory_bytes();
 
         let max_connections_per_download = (cpus * 2).clamp(2, 64);
         let max_total_connections = (cpus * 4).clamp(4, 128);
@@ -80,6 +84,7 @@ impl EngineConfig {
             read_buffer_bytes,
             flush_interval_ms,
             worker_threads,
+            default_timeout_sec: 7200,
         }
     }
 
@@ -114,69 +119,6 @@ impl EngineConfig {
     }
 }
 
-fn total_system_memory_bytes() -> u64 {
-    #[cfg(target_os = "windows")]
-    {
-        use std::mem;
-        #[repr(C)]
-        struct MemoryStatusEx {
-            dw_length: u32,
-            dw_memory_load: u32,
-            ull_total_phys: u64,
-            ull_avail_phys: u64,
-            ull_total_page_file: u64,
-            ull_avail_page_file: u64,
-            ull_total_virtual: u64,
-            ull_avail_virtual: u64,
-            ull_avail_extended_virtual: u64,
-        }
-        extern "system" {
-            fn GlobalMemoryStatusEx(lpBuffer: *mut MemoryStatusEx) -> i32;
-        }
-        unsafe {
-            let mut status: MemoryStatusEx = mem::zeroed();
-            status.dw_length = mem::size_of::<MemoryStatusEx>() as u32;
-            if GlobalMemoryStatusEx(&mut status) != 0 {
-                status.ull_total_phys
-            } else {
-                4 * 1024 * 1024 * 1024
-            }
-        }
-    }
-    #[cfg(target_os = "linux")]
-    {
-        if let Ok(content) = std::fs::read_to_string("/proc/meminfo") {
-            for line in content.lines() {
-                if line.starts_with("MemTotal:") {
-                    if let Some(kb_str) = line.split_whitespace().nth(1) {
-                        if let Ok(kb) = kb_str.parse::<u64>() {
-                            return kb * 1024;
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-        4 * 1024 * 1024 * 1024
-    }
-    #[cfg(target_os = "macos")]
-    {
-        use std::process::Command;
-        if let Ok(output) = Command::new("sysctl").args(["-n", "hw.memsize"]).output() {
-            if let Ok(s) = String::from_utf8(output.stdout) {
-                if let Ok(bytes) = s.trim().parse::<u64>() {
-                    return bytes;
-                }
-            }
-        }
-        4 * 1024 * 1024 * 1024
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
-    {
-        4 * 1024 * 1024 * 1024
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,6 +136,7 @@ mod tests {
         assert!(cfg.write_buffer_bytes >= 32 * 1024);
         assert!(cfg.read_buffer_bytes >= 32 * 1024);
         assert!(cfg.worker_threads >= 1);
+        assert!(cfg.default_timeout_sec >= 60);
     }
 
     #[test]

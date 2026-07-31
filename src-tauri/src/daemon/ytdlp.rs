@@ -131,7 +131,14 @@ fn is_safe_extra_arg(arg: &str) -> bool {
     }
     // Reject shell metacharacters in any extra arg
     if arg.contains(|c: char| {
-        c == ';' || c == '|' || c == '&' || c == '$' || c == '`' || c == '\n' || c == '\r'
+        c == ';'
+            || c == '|'
+            || c == '&'
+            || c == '$'
+            || c == '`'
+            || c == '\n'
+            || c == '\r'
+            || c == '\0'
     }) {
         return false;
     }
@@ -465,13 +472,13 @@ pub fn update_ytdlp_progress(state: &SharedState, id: &str, text: &str) {
     }
 
     let task_data = jobs.get(id).map(|j| j.task.clone());
-    drop(jobs);
     state.mark_dirty();
     if let Some(task_data) = task_data {
         if let Ok(mut snapshot) = state.task_snapshot.lock() {
             snapshot.insert(id.to_owned(), task_data);
         }
     }
+    drop(jobs);
 }
 
 pub fn parse_size(s: &str) -> Option<u64> {

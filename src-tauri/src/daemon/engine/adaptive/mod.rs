@@ -146,10 +146,16 @@ impl TelemetryBus {
 
     pub fn report_speed(&self, conn_id: usize, speed: u64) {
         if conn_id < MAX_TRACKED_CONNECTIONS {
-            self.connections[conn_id]
+            let prev = self.connections[conn_id]
                 .speed
-                .store(speed, Ordering::Relaxed);
-            self.aggregate_speed.store(speed, Ordering::Relaxed);
+                .swap(speed, Ordering::Relaxed);
+            if speed > prev {
+                self.aggregate_speed
+                    .fetch_add(speed - prev, Ordering::Relaxed);
+            } else if prev > speed {
+                self.aggregate_speed
+                    .fetch_sub(prev - speed, Ordering::Relaxed);
+            }
             self.aggregate_peak.fetch_max(speed, Ordering::Relaxed);
         }
     }
@@ -357,7 +363,7 @@ impl AdaptiveEngine {
             convergence: ConvergenceDetector::new(),
             resources: ResourceMonitor::new(),
             protocol: ProtocolAdapter::new(protocol),
-            segment_ctrl: SegmentController::new(total_size, connections, min_segment_bytes),
+            segment_ctrl: SegmentController::new(total_size, min_segment_bytes),
             chunk_manager: ChunkManager::new(total_size),
             buffer_manager: BufferManager::new(),
             host,
@@ -378,7 +384,7 @@ impl AdaptiveEngine {
         profile: server_profiler::ServerProfile,
         min_segment_bytes: u64,
     ) -> Self {
-        let protocol = profile.protocol.clone();
+        let protocol = profile.protocol;
         let mut engine = Self::new(
             host.clone(),
             total_size,
@@ -386,8 +392,7 @@ impl AdaptiveEngine {
             protocol,
             min_segment_bytes,
         );
-        engine.profiler.get_or_create(&host);
-        let p = engine.profiler.get_mut(&host).unwrap();
+        let p = engine.profiler.get_or_create(&host);
         p.protocol = profile.protocol;
         p.supports_range = profile.supports_range;
         p.supports_resume = profile.supports_resume;
@@ -417,6 +422,7 @@ impl AdaptiveEngine {
         &mut self,
         protocol: ProtocolVersion,
         supports_range: bool,
+        supports_resume: bool,
         tls_version: Option<String>,
         alpn: Option<String>,
         server_header: Option<String>,
@@ -424,11 +430,12 @@ impl AdaptiveEngine {
         handshake_us: u64,
         ttfb_us: u64,
     ) {
-        self.protocol = ProtocolAdapter::new(protocol.clone());
+        self.protocol = ProtocolAdapter::new(protocol);
         self.profiler.seed_from_preflight(
             &self.host,
             protocol,
             supports_range,
+            supports_resume,
             tls_version,
             alpn,
             server_header,
@@ -458,7 +465,7 @@ impl AdaptiveEngine {
                     false,
                 );
                 if conn.error_count > 0 {
-                    for _ in 0..conn.error_count {
+                    for _ in 0..conn.error_count.min(10) {
                         self.profiler
                             .update_from_telemetry(&self.host, 0, 0, 0, true);
                     }
@@ -466,14 +473,12 @@ impl AdaptiveEngine {
             }
         }
 
-        let agg_speed = snapshot.aggregate.peak_speed.max(
-            snapshot
-                .connections
-                .iter()
-                .filter(|c| c.alive)
-                .map(|c| c.last_speed)
-                .sum::<u64>(),
-        );
+        let agg_speed = snapshot
+            .connections
+            .iter()
+            .filter(|c| c.alive)
+            .map(|c| c.last_speed)
+            .sum::<u64>();
 
         self.convergence
             .record_speed(agg_speed, snapshot.aggregate.active_connections);
@@ -531,6 +536,20 @@ impl AdaptiveEngine {
                 target = target.saturating_sub(1).max(1);
                 decision.reason.push_str("[disk-bottleneck] ");
             }
+        }
+
+        // Diminishing returns: once recent adjustments stopped producing
+        // meaningful speed gains, don't keep growing the connection count.
+        if self.convergence.diminishing_returns() && target > self.current_connections {
+            target = self.current_connections;
+            decision.reason.push_str("[diminishing-returns] ");
+        }
+
+        // A declining speed trend across the recent sample window means more
+        // connections are hurting throughput; back off one connection.
+        if self.convergence.speed_trend(8) < -0.1 && target > 1 {
+            target = target.saturating_sub(1).max(1);
+            decision.reason.push_str("[speed-declining] ");
         }
 
         if !self.convergence.should_adjust(&AdaptiveThresholds {
@@ -611,7 +630,9 @@ impl AdaptiveEngine {
 
         if let Some(profile) = host_profile {
             if profile.per_connection_ceiling > 0 && self.protocol.prefer_multiplexing() {
-                let total_budget = profile.per_connection_ceiling * u64::from(target);
+                let total_budget = profile
+                    .per_connection_ceiling
+                    .saturating_mul(u64::from(target));
                 decision.per_connection_limit = Some(total_budget / u64::from(target.max(1)));
             }
         }
@@ -805,6 +826,7 @@ mod tests {
         engine.seed_profile(
             ProtocolVersion::Http2,
             true,
+            true,
             Some("TLSv1.3".into()),
             Some("h2".into()),
             Some("nginx".into()),
@@ -829,6 +851,7 @@ mod tests {
         );
         engine.seed_profile(
             ProtocolVersion::Http2,
+            true,
             true,
             Some("TLSv1.3".into()),
             Some("h2".into()),

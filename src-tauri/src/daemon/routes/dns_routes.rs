@@ -21,14 +21,27 @@ async fn handle_dns_ping_all() -> Json<serde_json::Value> {
         ("CleanBrowsing", "185.228.168.9"),
     ];
 
-    let mut results = Vec::with_capacity(providers.len());
+    // Ping all providers in parallel so a single diagnostics request doesn't
+    // block for the sum of all timeouts (7 sequential pings x 2s worst case).
+    let mut handles = Vec::with_capacity(providers.len());
     for (name, ip) in providers {
-        let latency = ping_ip(ip).await;
-        results.push(serde_json::json!({
-            "name": name,
-            "ip": ip,
-            "latencyMs": latency,
+        let name = name.to_owned();
+        let ip = ip.to_owned();
+        handles.push(tokio::spawn(async move {
+            let latency = ping_ip(&ip).await;
+            serde_json::json!({
+                "name": name,
+                "ip": ip,
+                "latencyMs": latency,
+            })
         }));
+    }
+
+    let mut results = Vec::with_capacity(handles.len());
+    for handle in handles {
+        if let Ok(json) = handle.await {
+            results.push(json);
+        }
     }
 
     Json(serde_json::json!({ "results": results }))

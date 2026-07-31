@@ -64,13 +64,13 @@ impl RetryPolicy {
         let capped = base.min(self.max_delay.as_secs_f64());
         if self.jitter {
             let jitter_range = capped * 0.25;
-            // Use nanosecond timestamp for entropy to avoid thundering herd
-            // when multiple tasks retry at the same attempt number.
-            let nanos = std::time::SystemTime::now()
+            // Use total elapsed and subsecond nanos for entropy to avoid
+            // thundering herd when multiple tasks retry at the same attempt.
+            let dur = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .subsec_nanos();
-            let jitter = f64::from(nanos) % jitter_range;
+                .unwrap_or_default();
+            let nanos = dur.as_secs() + u64::from(dur.subsec_nanos());
+            let jitter = (nanos as f64) % jitter_range;
             Duration::from_secs_f64((capped + jitter).max(0.1))
         } else {
             Duration::from_secs_f64(capped)

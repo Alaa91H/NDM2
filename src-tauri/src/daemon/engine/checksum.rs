@@ -49,52 +49,42 @@ pub struct ChecksumResult {
     pub passed: bool,
 }
 
+/// Stream a file through any `Digest` hasher in fixed-size chunks. Shared by
+/// all three algorithms so the file-scanning loop isn't duplicated per hasher.
+fn hash_file<D: Digest>(mut file: File, name: &str) -> Result<String, String> {
+    let mut hasher = D::new();
+    let mut buffer = [0u8; BUFFER_SIZE];
+    loop {
+        let bytes_read = file
+            .read(&mut buffer)
+            .map_err(|e| format!("Read error during {name}: {e}"))?;
+        if bytes_read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes_read]);
+    }
+    Ok(hex_digest(hasher))
+}
+
+/// Render a digest output as lowercase hex. Avoids `format!("{:x}", ..)` on the
+/// output array, whose `LowerHex` impl requires a concrete output-size bound.
+fn hex_digest<D: Digest>(hasher: D) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let output = hasher.finalize();
+    let mut hex = String::with_capacity(output.len() * 2);
+    for &byte in output.iter() {
+        hex.push(HEX[(byte >> 4) as usize] as char);
+        hex.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    hex
+}
+
 pub fn compute_checksum(path: &Path, algorithm: &ChecksumAlgorithm) -> Result<String, String> {
-    let mut file =
-        File::open(path).map_err(|e| format!("Failed to open file for checksum: {e}"))?;
+    let file = File::open(path).map_err(|e| format!("Failed to open file for checksum: {e}"))?;
     match algorithm {
-        ChecksumAlgorithm::Sha256 => {
-            let mut hasher = Sha256::new();
-            let mut buffer = [0u8; BUFFER_SIZE];
-            loop {
-                let bytes_read = file
-                    .read(&mut buffer)
-                    .map_err(|e| format!("Read error during SHA-256: {e}"))?;
-                if bytes_read == 0 {
-                    break;
-                }
-                hasher.update(&buffer[..bytes_read]);
-            }
-            Ok(format!("{:x}", hasher.finalize()))
-        }
-        ChecksumAlgorithm::Sha1 => {
-            let mut hasher = Sha1::new();
-            let mut buffer = [0u8; BUFFER_SIZE];
-            loop {
-                let bytes_read = file
-                    .read(&mut buffer)
-                    .map_err(|e| format!("Read error during SHA-1: {e}"))?;
-                if bytes_read == 0 {
-                    break;
-                }
-                hasher.update(&buffer[..bytes_read]);
-            }
-            Ok(format!("{:x}", hasher.finalize()))
-        }
-        ChecksumAlgorithm::Md5 => {
-            let mut hasher = Md5::new();
-            let mut buffer = [0u8; BUFFER_SIZE];
-            loop {
-                let bytes_read = file
-                    .read(&mut buffer)
-                    .map_err(|e| format!("Read error during MD5: {e}"))?;
-                if bytes_read == 0 {
-                    break;
-                }
-                hasher.update(&buffer[..bytes_read]);
-            }
-            Ok(format!("{:x}", hasher.finalize()))
-        }
+        ChecksumAlgorithm::Sha256 => hash_file::<Sha256>(file, "SHA-256"),
+        ChecksumAlgorithm::Sha1 => hash_file::<Sha1>(file, "SHA-1"),
+        ChecksumAlgorithm::Md5 => hash_file::<Md5>(file, "MD5"),
     }
 }
 

@@ -255,8 +255,15 @@ impl FileWriter {
         Ok(())
     }
 
-    pub fn current_size(path: &Path) -> u64 {
-        std::fs::metadata(path).map_or(0, |metadata| metadata.len())
+    pub fn current_size(path: &Path) -> Result<u64, String> {
+        match std::fs::metadata(path) {
+            Ok(metadata) => Ok(metadata.len()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(0),
+            Err(e) => Err(format!(
+                "Failed to read file size for {}: {e}",
+                path.display()
+            )),
+        }
     }
 
     pub fn cleanup_parts(ranges: &[SegmentRange]) {
@@ -305,7 +312,7 @@ impl FileWriter {
         let mut total = 0u64;
         for range in ranges {
             let expected = range.len();
-            let actual = Self::current_size(&range.path);
+            let actual = Self::current_size(&range.path)?;
             if actual != expected {
                 return Err(format!(
                     "Segment {} is incomplete: expected {} bytes, got {} bytes",
@@ -337,7 +344,7 @@ impl FileWriter {
                 let _ = dir.sync_all();
             }
         }
-        let final_size = Self::current_size(output_path);
+        let final_size = Self::current_size(output_path)?;
         if final_size != total {
             return Err(format!(
                 "Merged file size mismatch: expected {total} bytes, got {final_size} bytes"

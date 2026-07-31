@@ -15,6 +15,7 @@ use super::{
     proxy_resolves_to_internal, safe_value, CurlTransferConfig, DirectDownloadPlan, SegmentProgress,
 };
 use crate::daemon::direct::FileWriter;
+use crate::daemon::engine::config::global_config;
 use crate::daemon::utils::DEFAULT_USER_AGENT;
 use sha2::Digest;
 
@@ -78,8 +79,25 @@ fn parse_rate_to_bytes(rate_str: &str) -> Option<u64> {
     } else {
         (trimmed, 1)
     };
-    let num: f64 = num_str.trim().parse().ok()?;
-    Some((num * multiplier as f64) as u64)
+    let num_str = num_str.trim();
+    // Use integer math, not f64, so very large rates stay exact (f64 loses
+    // precision above ~2^53 bytes/s, i.e. >9 PB/s). An optional fractional
+    // part ("1.5M") is handled by scaling everything by 10^frac_digits,
+    // multiplying, then dividing back; truncation matches the old f64 cast.
+    let (whole, frac) = match num_str.split_once('.') {
+        Some((w, f)) => (w, f),
+        None => (num_str, ""),
+    };
+    if whole.is_empty() || !frac.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let scale = 10u64.checked_pow(frac.len() as u32)?;
+    let scaled = whole
+        .parse::<u64>()
+        .ok()?
+        .checked_mul(scale)?
+        .checked_add(frac.parse::<u64>().ok()?)?;
+    scaled.checked_mul(multiplier)?.checked_div(scale)
 }
 
 pub struct SegmentWriter {
@@ -397,7 +415,7 @@ pub fn apply_easy_options<H: Handler>(
         easy.range(&format!("{start}-{end}"))
             .map_err(|e| format!("Could not configure range: {e}"))?;
     } else if plan.resumable {
-        let existing = FileWriter::current_size(&plan.output_path);
+        let existing = FileWriter::current_size(&plan.output_path)?;
         if existing > 0 {
             easy.resume_from(existing)
                 .map_err(|e| format!("Could not configure resume: {e}"))?;
@@ -575,13 +593,15 @@ pub fn apply_easy_options<H: Handler>(
         // Default overall timeout: without this, a transfer that hangs in the
         // multi socket interface (e.g., stuck DNS, TLS handshake stall, or a
         // server that accepts the connection but never sends data) runs forever.
+        // The hard cap comes from global_config so the engine can tune it.
         // For known-size files: at least 10 KB/s average + 60s grace.
         // For unknown-size files: 1 hour hard cap.
+        let max_default = global_config().default_timeout_sec;
         let default_timeout = if plan.total_size > 0 {
             let estimated = (plan.total_size / 10_000) + 60;
-            estimated.clamp(120, 7200)
+            estimated.clamp(120, max_default)
         } else {
-            3600
+            max_default.min(3600)
         };
         let _ = easy.timeout(Duration::from_secs(default_timeout));
     }

@@ -33,21 +33,19 @@ pub fn process_memory_usage_mb() -> u64 {
     }
     #[cfg(target_os = "windows")]
     {
-        if let Ok(output) = hidden_output(
-            "powershell",
-            &[
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                "[math]::Round((Get-Process -Id $PID).WorkingSet64 / 1MB)",
-            ],
-        ) {
-            if output.status.success() {
-                return String::from_utf8_lossy(&output.stdout)
-                    .trim()
-                    .parse::<u64>()
-                    .unwrap_or(0);
-            }
+        // Measure the daemon process directly via GetProcessMemoryInfo instead
+        // of spawning PowerShell (which previously reported the helper's own
+        // memory, not the daemon's).
+        use windows_sys::Win32::System::ProcessStatus::{
+            GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+        };
+        use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+        let mut pmc: PROCESS_MEMORY_COUNTERS = unsafe { std::mem::zeroed() };
+        pmc.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+        let ok = unsafe { GetProcessMemoryInfo(GetCurrentProcess(), &mut pmc, pmc.cb) };
+        if ok != 0 && pmc.WorkingSetSize > 0 {
+            return (pmc.WorkingSetSize / 1024 / 1024) as u64;
         }
     }
     #[cfg(target_os = "macos")]

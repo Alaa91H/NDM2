@@ -1,4 +1,4 @@
-use axum::extract::{Path, State};
+use axum::extract::{connect_info::ConnectInfo, Path, State};
 use axum::response::{
     sse::{Event, KeepAlive, Sse},
     Json,
@@ -51,11 +51,18 @@ pub async fn handle_v1_ping(State(state): State<SharedState>) -> Json<serde_json
     }))
 }
 
-pub async fn handle_v1_pair_auto(State(state): State<SharedState>) -> Json<serde_json::Value> {
-    // Only return the token if the request originates from loopback. The endpoint
-    // is already auth-exempt and CORS-restricted, but we add a server-side
-    // localhost check as defense-in-depth against DNS rebinding or proxy abuse.
-    // NOTE: The peer IP check is best-effort; Axum populates it when available.
+pub async fn handle_v1_pair_auto(
+    State(state): State<SharedState>,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+) -> Json<serde_json::Value> {
+    if addr.ip() != std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+        && addr.ip() != std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)
+    {
+        return Json(serde_json::json!({
+            "ok": false,
+            "error": "pair-auto is only available from loopback"
+        }));
+    }
     Json(serde_json::json!({
         "ok": true,
         "pairToken": state.api_token,
@@ -271,9 +278,7 @@ pub async fn handle_v1_events(
     let stream = async_stream::stream! {
         yield Ok::<Event, Infallible>(Event::default().data(serde_json::json!({"type":"connected", "at": now_str_for_events()}).to_string()));
         let mut last_payload = String::new();
-        let mut interval = tokio::time::interval(Duration::from_millis(500));
         loop {
-            interval.tick().await;
             let tasks = list_all_tasks(&state).await;
             let payload = serde_json::to_string(&tasks).unwrap_or_else(|_| "[]".to_owned());
             if payload == last_payload {
@@ -290,6 +295,13 @@ pub async fn handle_v1_events(
                     }).to_string()));
                 }
             }
+            // One SSE message is emitted per task per tick, so scale the tick
+            // up with the task count to bound aggregate bandwidth (e.g. 1000
+            // tasks -> 5s tick instead of 500ms, cutting the rate 10x).
+            let tick_ms = (500u64)
+                .max(tasks.len() as u64 * 5)
+                .min(5000);
+            tokio::time::sleep(Duration::from_millis(tick_ms)).await;
         }
     };
     Sse::new(stream).keep_alive(

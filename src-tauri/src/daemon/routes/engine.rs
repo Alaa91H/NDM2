@@ -154,7 +154,8 @@ pub async fn handle_engine_events_for_task(
     let count = params
         .get("count")
         .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(50);
+        .unwrap_or(50)
+        .min(1000);
     let events = state.event_bus.events_for_task(&task_id, count);
     let serialized: Vec<serde_json::Value> = events
         .into_iter()
@@ -568,14 +569,35 @@ pub async fn handle_scheduler_power_commands(
 
 /// Periodic scheduler tick: evaluate all rules and apply triggered actions.
 pub async fn run_scheduler_tick(state: &SharedState) {
-    let active_count = {
+    // Compute download-state counters for the QueueEmpty/AllComplete
+    // triggers. Locks acquired in documented order: media_jobs → curl_jobs →
+    // task_snapshot.
+    let (active_count, queued_count, total_count) = {
+        let media = lock_or_err!(state.media_jobs);
         let jobs = lock_or_err!(state.curl_jobs);
-        jobs.values()
-            .filter(|j| j.task.status == "downloading" || j.task.status == "active")
-            .count() as u32
+        let snapshot = lock_or_err!(state.task_snapshot);
+        let mut active = 0u32;
+        let mut queued = 0u32;
+        for job in media.values() {
+            match job.task.status.as_str() {
+                "downloading" | "active" => active += 1,
+                "queued" | "waiting" => queued += 1,
+                _ => {}
+            }
+        }
+        for job in jobs.values() {
+            match job.task.status.as_str() {
+                "downloading" | "active" => active += 1,
+                "queued" | "waiting" => queued += 1,
+                _ => {}
+            }
+        }
+        (active, queued, snapshot.len() as u32)
     };
     let current_bw = state.bandwidth_manager.effective_global_limit();
-    let actions = state.scheduler.evaluate(current_bw, active_count);
+    let actions = state
+        .scheduler
+        .evaluate(current_bw, active_count, queued_count, total_count);
     for action in actions {
         match action {
             SchedulerAction::StartDownload { task_ids } => {
@@ -1163,12 +1185,32 @@ async fn handle_engine_download(
                         for i in 0..archive.len() {
                             if let Ok(mut file) = archive.by_index(i) {
                                 let name = file.name().to_owned();
+                                // Zip-slip guard: reject entries whose names
+                                // contain path traversal (".."), are absolute,
+                                // or use a Windows drive-letter/UNC root.
+                                let normalized = name.replace('\\', "/");
+                                let is_unsafe = normalized.split('/').any(|seg| seg == "..")
+                                    || std::path::Path::new(&normalized).is_absolute()
+                                    || normalized.starts_with('/')
+                                    || (normalized.len() >= 2 && normalized.as_bytes()[1] == b':');
+                                if is_unsafe {
+                                    log::warn!("Skipping zip entry with unsafe path: {name:?}");
+                                    continue;
+                                }
                                 let is_ffmpeg = if cfg!(windows) {
                                     name.ends_with("ffmpeg.exe")
                                 } else {
                                     name.ends_with("/ffmpeg") || name == "ffmpeg"
                                 };
                                 if is_ffmpeg {
+                                    // Defense in depth: the resolved destination
+                                    // must stay inside the bin directory.
+                                    if !dest.starts_with(&bin_dir) {
+                                        return Json(serde_json::json!({
+                                            "ok": false,
+                                            "error": "Refusing to write ffmpeg binary outside the bin directory"
+                                        }));
+                                    }
                                     let mut content = Vec::new();
                                     if std::io::Read::read_to_end(&mut file, &mut content).is_ok() {
                                         if let Err(e) = std::fs::write(&dest, &content) {

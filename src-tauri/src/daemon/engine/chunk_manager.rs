@@ -44,6 +44,9 @@ pub struct ChunkManager {
     min_chunk: u64,
     max_chunk: u64,
     total_size: u64,
+    /// Actual bytes still to download, fed from the download state so the
+    /// chunk-size-near-end heuristic reacts to real progress.
+    remaining_bytes: u64,
     network_samples: SlidingWindow,
     disk_samples: SlidingWindow,
     write_latencies: SlidingWindow,
@@ -61,6 +64,7 @@ impl ChunkManager {
             min_chunk,
             max_chunk: max_chunk.max(min_chunk),
             total_size,
+            remaining_bytes: total_size,
             network_samples: SlidingWindow::new(30),
             disk_samples: SlidingWindow::new(10),
             write_latencies: SlidingWindow::new(20),
@@ -107,10 +111,9 @@ impl ChunkManager {
         let memory_factor = self.memory_pressure.mul_add(-0.5, 1.0);
         let adjusted = adjusted * memory_factor;
 
-        // Reduce chunk if remaining data is small
-        let remaining = self
-            .total_size
-            .saturating_sub(self.network_samples.len() as u64 * self.current_chunk_bytes / 4);
+        // Reduce chunk if remaining data is small (actual remaining bytes,
+        // fed from the download state via update_remaining_bytes).
+        let remaining = self.remaining_bytes;
         let remaining_factor = if remaining > 0 {
             (remaining as f64 / self.min_chunk as f64).clamp(0.1, 1.0)
         } else {
@@ -148,7 +151,13 @@ impl ChunkManager {
     /// Update total remaining size (used during resume or segment changes).
     pub fn update_total_size(&mut self, total_size: u64) {
         self.total_size = total_size;
+        self.remaining_bytes = total_size;
         self.max_chunk = (total_size / 2).max(self.min_chunk);
+    }
+
+    /// Update the actual remaining byte count from live download progress.
+    pub fn update_remaining_bytes(&mut self, remaining_bytes: u64) {
+        self.remaining_bytes = remaining_bytes.min(self.total_size);
     }
 
     /// Current recommended chunk size.
@@ -293,5 +302,27 @@ mod tests {
         let c1 = cm.recommend_chunk_size(10_000, 10 * 1024 * 1024, 10 * 1024 * 1024);
         let c2 = cm.recommend_chunk_size(10_000, 10 * 1024 * 1024, 10 * 1024 * 1024);
         assert_eq!(c1, c2, "should not recompute within 500ms");
+    }
+
+    #[test]
+    fn near_end_remaining_bytes_shrinks_chunk() {
+        let mut cm = ChunkManager::new(100 * 1024 * 1024);
+        for _ in 0..10 {
+            cm.record_network_speed(10 * 1024 * 1024);
+            cm.last_adjustment = Instant::now() - Duration::from_secs(1);
+            cm.recommend_chunk_size(10_000, 10 * 1024 * 1024, 10 * 1024 * 1024);
+        }
+        let before = cm.current_chunk();
+        // Now feed the actual remaining progress: only 64KB left.
+        cm.update_remaining_bytes(64 * 1024);
+        cm.last_adjustment = Instant::now() - Duration::from_secs(1);
+        cm.recommend_chunk_size(10_000, 10 * 1024 * 1024, 10 * 1024 * 1024);
+        let after = cm.current_chunk();
+        assert!(
+            after < before,
+            "chunk should shrink near download end: {} < {}",
+            after,
+            before
+        );
     }
 }

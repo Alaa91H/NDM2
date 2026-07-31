@@ -26,8 +26,11 @@ pub fn save_registry(data_dir: &str, registry: &ToolRegistry) -> Result<(), Stri
     let path = registry_path(data_dir);
     let json = serde_json::to_string_pretty(registry)
         .map_err(|e| format!("Failed to serialize registry: {e}"))?;
-    std::fs::write(&path, json)
-        .map_err(|e| format!("Failed to write registry to {}: {}", path.display(), e))
+    let tmp_path = path.with_extension("tmp");
+    std::fs::write(&tmp_path, &json)
+        .map_err(|e| format!("Failed to write temporary registry: {}", e))?;
+    std::fs::rename(&tmp_path, &path)
+        .map_err(|e| format!("Failed to atomically replace registry: {}", e))
 }
 
 pub fn register_tool(
@@ -48,6 +51,7 @@ pub fn register_tool(
             installed_at: Some(chrono::Utc::now().to_rfc3339()),
             custom_path,
             auto_update: false,
+            checksum_sha256: None,
         },
     );
 }

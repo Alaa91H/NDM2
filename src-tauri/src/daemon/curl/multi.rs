@@ -58,9 +58,15 @@ impl CurlMultiGuard {
             .multi
             .as_mut()
             .ok_or_else(|| "CurlMultiGuard: cannot add handle after into_inner()".to_owned())?;
-        let handle = multi
+        let mut handle = multi
             .add2(easy)
             .map_err(|e| format!("Could not add transfer to libcurl multi: {e}"))?;
+        // Assign a per-handle token (1..=n in insertion order) so completion
+        // messages can be mapped back to their handle in O(1) instead of
+        // scanning every handle (see collect_multi_errors).
+        handle
+            .set_token(self.handle_count + 1)
+            .map_err(|e| format!("Could not assign token to libcurl handle: {e}"))?;
         self.handle_count += 1;
         Ok(handle)
     }
@@ -303,9 +309,17 @@ fn collect_multi_errors<H: Handler>(
     label: &str,
 ) -> Vec<String> {
     let mut errors = Vec::new();
+    // `CurlMultiGuard::add2` assigns tokens 1..=n in insertion order, so the
+    // token of `handles[idx]` is `idx + 1`. Building this map once turns the
+    // message→handle lookup from O(handles) per message into O(1), avoiding
+    // O(n*m) work with many segments.
+    let by_token: HashMap<usize, usize> = (0..handles.len()).map(|idx| (idx + 1, idx)).collect();
     multi.messages(|message| {
-        for (idx, handle) in handles.iter().enumerate() {
-            if let Some(Err(error)) = message.result_for2(handle) {
+        // Messages from handles that were never token-assigned carry token 0
+        // and simply match no entry.
+        let token = message.token().unwrap_or(0);
+        if let Some(&idx) = by_token.get(&token) {
+            if let Some(Err(error)) = message.result_for2(&handles[idx]) {
                 if handles.len() == 1 {
                     errors.push(format!("[{label}] {error}"));
                 } else {
@@ -382,6 +396,12 @@ where
         runtime.drain_updates(multi)?;
     }
 
+    // Consecutive loops where libcurl reports running > 0 but zero registered
+    // sockets indicate a stalled multi state (e.g. a timer-only transfer that
+    // never creates sockets). Bail out instead of sleeping forever.
+    const MAX_EMPTY_SOCKET_STALLS: u32 = 3;
+    let mut empty_socket_stalls = 0u32;
+
     while running > 0 {
         if cancel.load(Ordering::Acquire) {
             return Err("cancelled".to_owned());
@@ -389,8 +409,29 @@ where
 
         let timeout = runtime.wait_timeout();
         if timeout.is_zero() || runtime.sockets.is_empty() {
-            if !timeout.is_zero() && runtime.sockets.is_empty() {
-                std::thread::sleep(timeout);
+            if runtime.sockets.is_empty() {
+                empty_socket_stalls += 1;
+                if empty_socket_stalls >= MAX_EMPTY_SOCKET_STALLS {
+                    return Err(wrap_multi_error(
+                        MultiErrorKind::Wait,
+                        "multi handle reports running transfers but no active sockets; \
+                         stalled — aborting drive loop"
+                            .to_owned(),
+                    ));
+                }
+            }
+            // Bounded sleep: never sleep longer than one progress interval, so
+            // an empty-socket + running>0 state cannot block indefinitely and
+            // the stall counter above gets a chance to break the loop. When
+            // the timer is zero (sockets present), keep the original
+            // no-sleep behavior and call multi.timeout() immediately.
+            let sleep = if runtime.sockets.is_empty() {
+                Duration::from_millis(PROGRESS_INTERVAL_MS)
+            } else {
+                Duration::ZERO
+            };
+            if !sleep.is_zero() {
+                std::thread::sleep(sleep);
             }
             running = multi
                 .timeout()
@@ -400,6 +441,7 @@ where
             check_multi_messages(multi, handles, label)?;
             continue;
         }
+        empty_socket_stalls = 0;
 
         let wait_fds = runtime.wait_fds();
         let sockets: Vec<Socket> = wait_fds.iter().map(|(socket, _)| *socket).collect();

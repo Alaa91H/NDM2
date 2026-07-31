@@ -33,6 +33,7 @@ use crate::daemon::types::{CreateDownloadBody, CurlJob, MediaJob, TelegramConfig
 use crate::lock_or_err;
 
 use crate::daemon::engine::extractor::{ExtractorRegistry, SharedExtractorRegistry};
+use crate::daemon::engine::priority_queue::{DownloadPriority, QueueEntry};
 
 /// External shutdown signal, set by the host process (Tauri) to trigger
 /// graceful daemon shutdown via the `graceful_shutdown` future.
@@ -105,6 +106,12 @@ async fn auth_middleware(
             for pair in query.split('&') {
                 if let Some(token) = pair.strip_prefix("token=") {
                     if token == state.api_token {
+                        log::warn!(
+                            "SSE token accepted via URL query parameter on {path}; \
+                             the token can leak into browser history, Referer headers, \
+                             and proxy/access logs. Prefer a fetch-based stream that sends \
+                             the token in an Authorization header."
+                        );
                         return Ok(next.run(request).await);
                     }
                 }
@@ -130,214 +137,296 @@ fn resolve_engine_binary(resource_dir: &str, binary_name: &str) -> String {
         manifest_dir.join("..").join("bin").join(binary_name),
     ];
 
-    candidates
-        .into_iter()
-        .find(|candidate| candidate.exists())
-        .map_or_else(
-            || {
-                log::error!(
-                    "{binary_name} not found in bundled locations; falling back to PATH lookup. \
-                 This may be a security risk if PATH has been tampered with."
-                );
-                binary_name.to_owned()
-            },
-            |candidate| candidate.display().to_string(),
-        )
+    if let Some(candidate) = candidates.into_iter().find(|c| c.exists()) {
+        return candidate.display().to_string();
+    }
+
+    log::error!(
+        "{binary_name} not found in bundled locations; falling back to PATH lookup. \
+     This may be a security risk if PATH has been tampered with."
+    );
+
+    if let Some(path) = find_on_path(binary_name) {
+        if cfg!(target_os = "windows") && !verify_authenticode_signature(&path) {
+            log::error!(
+                "{} found on PATH but Authenticode signature is not valid; refusing to use it",
+                binary_name
+            );
+            return binary_name.to_owned();
+        }
+        return path.display().to_string();
+    }
+
+    binary_name.to_owned()
+}
+
+fn find_on_path(name: &str) -> Option<std::path::PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    let is_windows = cfg!(target_os = "windows");
+    for dir in std::env::split_paths(&path_var) {
+        if dir == std::path::Path::new(".") || dir == std::path::Path::new("") {
+            continue;
+        }
+        let candidate = if is_windows {
+            let with_exe = dir.join(format!("{}.exe", name));
+            if with_exe.exists() {
+                with_exe
+            } else {
+                dir.join(name)
+            }
+        } else {
+            dir.join(name)
+        };
+        if candidate.exists() && candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn verify_authenticode_signature(path: &std::path::Path) -> bool {
+    let verify = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &format!(
+                "if (Get-AuthenticodeSignature '{}').Status -eq 'Valid' {{ exit 0 }} else {{ exit 1 }}",
+                path.display()
+            ),
+        ])
+        .output();
+    match verify {
+        Ok(output) => output.status.success(),
+        Err(e) => {
+            log::error!(
+                "Failed to verify Authenticode signature for {}: {e}",
+                path.display()
+            );
+            false
+        }
+    }
 }
 
 pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
     // Initialise SSL for the curl engine (bundled CA cert)
     crate::daemon::curl::init_download_ssl();
     std::thread::spawn(move || {
-        let rt = match tokio::runtime::Runtime::new() {
-            Ok(rt) => rt,
-            Err(e) => {
-                log::error!("Failed to create tokio runtime: {e}");
-                return;
-            }
-        };
-        rt.block_on(async {
-            if let Err(e) = std::fs::create_dir_all(&data_dir) {
-                log::warn!("Failed to create data directory: {e}");
-            }
-            let restored = persist::load(&data_dir);
-            let ytdlp_binary = if cfg!(windows) {
-                "yt-dlp.exe"
-            } else {
-                "yt-dlp"
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let rt = match tokio::runtime::Runtime::new() {
+                Ok(rt) => rt,
+                Err(e) => {
+                    log::error!("Failed to create tokio runtime: {e}");
+                    return;
+                }
             };
-            let ffmpeg_binary = if cfg!(windows) {
-                "ffmpeg.exe"
-            } else {
-                "ffmpeg"
-            };
-            let ytdlp_bin = resolve_engine_binary(&resource_dir, ytdlp_binary);
-            let ffmpeg_bin = resolve_engine_binary(&resource_dir, ffmpeg_binary);
+            rt.block_on(async {
+                if let Err(e) = std::fs::create_dir_all(&data_dir) {
+                    log::warn!("Failed to create data directory: {e}");
+                }
+                let restored = persist::load(&data_dir);
+                let ytdlp_binary = if cfg!(windows) {
+                    "yt-dlp.exe"
+                } else {
+                    "yt-dlp"
+                };
+                let ffmpeg_binary = if cfg!(windows) {
+                    "ffmpeg.exe"
+                } else {
+                    "ffmpeg"
+                };
+                let ytdlp_bin = resolve_engine_binary(&resource_dir, ytdlp_binary);
+                let ffmpeg_bin = resolve_engine_binary(&resource_dir, ffmpeg_binary);
 
-            // Build extractor registry
-            let mut extractor_registry = ExtractorRegistry::new();
-            extractor_registry.register(std::sync::Arc::new(crate::daemon::curl::CurlExtractor));
-            extractor_registry.register(std::sync::Arc::new(
-                crate::daemon::ytdlp::YtDlpExtractor::new(ytdlp_bin.clone(), ffmpeg_bin.clone()),
-            ));
-            let extractor_registry = SharedExtractorRegistry::new(extractor_registry);
+                // Build extractor registry
+                let mut extractor_registry = ExtractorRegistry::new();
+                extractor_registry
+                    .register(std::sync::Arc::new(crate::daemon::curl::CurlExtractor));
+                extractor_registry.register(std::sync::Arc::new(
+                    crate::daemon::ytdlp::YtDlpExtractor::new(
+                        ytdlp_bin.clone(),
+                        ffmpeg_bin.clone(),
+                    ),
+                ));
+                let extractor_registry = SharedExtractorRegistry::new(extractor_registry);
 
-            let state = AppState {
-                media_jobs: Mutex::new(HashMap::new()),
-                curl_jobs: Mutex::new(HashMap::new()),
-                task_snapshot: Mutex::new(HashMap::new()),
-                persist_dirty: std::sync::atomic::AtomicBool::new(false),
-                telegram_config: Mutex::new(TelegramConfig::default()),
-                telegram_last_update_id: Mutex::new(restored.telegram_last_update_id),
-                http_client: HttpClient::builder()
-                    .pool_idle_timeout(std::time::Duration::from_secs(90))
-                    .pool_max_idle_per_host(4)
-                    .connect_timeout(std::time::Duration::from_secs(15))
-                    .build()
-                    .unwrap_or_else(|_| HttpClient::new()),
-                resource_dir,
-                data_dir: data_dir.clone(),
-                ytdlp_bin,
-                ffmpeg_bin,
-                engine_capabilities_cache: std::sync::RwLock::new(None),
-                task_generation: std::sync::atomic::AtomicU64::new(0),
-                task_list_cache: std::sync::RwLock::new(None),
-                event_bus: crate::daemon::engine::event_bus::EventBus::new_with_capacity(10_000),
-                priority_queue: crate::daemon::engine::priority_queue::PriorityBandwidthQueue::new(
-                    0,
-                ),
-                bandwidth_manager: crate::daemon::engine::bandwidth::BandwidthManager::default(),
-                profile_manager: crate::daemon::engine::profiles::ProfileManager::new(),
-                rule_engine: crate::daemon::engine::rules::DownloadRuleEngine::new(),
-                scheduler: crate::daemon::engine::scheduler::SmartScheduler::new(),
-                metadata_cache: crate::daemon::engine::metadata_cache::MetadataCache::with_ttl(
-                    std::time::Duration::from_secs(3600),
-                ),
-                default_retry_policy: std::sync::RwLock::new(
-                    crate::daemon::engine::config::global_config().retry_policy(),
-                ),
-                plugin_api: crate::daemon::engine::plugin_api::PluginApi::new(),
-                engine_trackers: RwLock::new(HashMap::new()),
-                mirror_managers: Mutex::new(HashMap::new()),
-                extractor_registry,
-                api_token: shared_api_token(),
-                download_stats: Mutex::new({
-                    let mut s = restored.stats.clone();
-                    s.session_started_at = Some(chrono::Utc::now().to_rfc3339());
-                    s
-                }),
-                rie: crate::daemon::resource_intelligence::ResourceIntelligenceEngine::new(),
-                external_tools: {
-                    let http_client = reqwest::Client::builder()
-                        .timeout(std::time::Duration::from_secs(30))
+                let state = AppState {
+                    media_jobs: Mutex::new(HashMap::new()),
+                    curl_jobs: Mutex::new(HashMap::new()),
+                    task_snapshot: Mutex::new(HashMap::new()),
+                    persist_dirty: std::sync::atomic::AtomicBool::new(false),
+                    telegram_config: Mutex::new(TelegramConfig::default()),
+                    telegram_last_update_id: Mutex::new(restored.telegram_last_update_id),
+                    http_client: HttpClient::builder()
+                        .pool_idle_timeout(std::time::Duration::from_secs(90))
+                        .pool_max_idle_per_host(4)
+                        .connect_timeout(std::time::Duration::from_secs(15))
                         .build()
-                        .unwrap_or_else(|_| reqwest::Client::new());
-                    Arc::new(Mutex::new(
-                        crate::daemon::external_tools::ExternalToolManager::new(
-                            &data_dir,
-                            http_client,
-                        ),
-                    ))
-                },
-                policy_engine: {
-                    let pe = crate::daemon::engine::policy_engine::PolicyEngine::new();
-                    Arc::new(Mutex::new(pe))
-                },
-                self_healer: {
-                    let pe_ref = Arc::new(Mutex::new(
-                        crate::daemon::engine::policy_engine::PolicyEngine::new(),
-                    ));
-                    Arc::new(Mutex::new(
-                        crate::daemon::engine::self_healing::SelfHealer::new(pe_ref),
-                    ))
-                },
-                die_orchestrator: Arc::new(Mutex::new(
-                    crate::daemon::engine::die_orchestrator::DieOrchestrator::new(),
-                )),
-                resource_manager: Arc::new(Mutex::new(
-                    crate::daemon::engine::resource_manager::ResourceManager::new(),
-                )),
-                shutdown_requested: std::sync::atomic::AtomicBool::new(false),
-                watchdog_handles: Mutex::new(Vec::new()),
-            };
+                        .unwrap_or_else(|_| HttpClient::new()),
+                    resource_dir,
+                    data_dir: data_dir.clone(),
+                    ytdlp_bin,
+                    ffmpeg_bin,
+                    engine_capabilities_cache: std::sync::RwLock::new(None),
+                    engine_capabilities_probe: Mutex::new(()),
+                    task_generation: std::sync::atomic::AtomicU64::new(0),
+                    task_list_cache: std::sync::RwLock::new(None),
+                    event_bus: crate::daemon::engine::event_bus::EventBus::new_with_capacity(
+                        10_000,
+                    ),
+                    priority_queue:
+                        crate::daemon::engine::priority_queue::PriorityBandwidthQueue::new(0),
+                    bandwidth_manager: crate::daemon::engine::bandwidth::BandwidthManager::default(
+                    ),
+                    profile_manager: crate::daemon::engine::profiles::ProfileManager::new(),
+                    rule_engine: crate::daemon::engine::rules::DownloadRuleEngine::new(),
+                    scheduler: crate::daemon::engine::scheduler::SmartScheduler::new(),
+                    metadata_cache: crate::daemon::engine::metadata_cache::MetadataCache::with_ttl(
+                        std::time::Duration::from_secs(3600),
+                    ),
+                    default_retry_policy: std::sync::RwLock::new(
+                        crate::daemon::engine::config::global_config().retry_policy(),
+                    ),
+                    plugin_api: crate::daemon::engine::plugin_api::PluginApi::new(),
+                    engine_trackers: RwLock::new(HashMap::new()),
+                    mirror_managers: Mutex::new(HashMap::new()),
+                    extractor_registry,
+                    api_token: shared_api_token(),
+                    download_stats: Mutex::new({
+                        let mut s = restored.stats.clone();
+                        s.session_started_at = Some(chrono::Utc::now().to_rfc3339());
+                        s
+                    }),
+                    rie: crate::daemon::resource_intelligence::ResourceIntelligenceEngine::new(),
+                    external_tools: {
+                        let http_client = reqwest::Client::builder()
+                            .timeout(std::time::Duration::from_secs(30))
+                            .build()
+                            .unwrap_or_else(|_| reqwest::Client::new());
+                        Arc::new(Mutex::new(
+                            crate::daemon::external_tools::ExternalToolManager::new(
+                                &data_dir,
+                                http_client,
+                            ),
+                        ))
+                    },
+                    policy_engine: {
+                        let pe = crate::daemon::engine::policy_engine::PolicyEngine::new();
+                        Arc::new(Mutex::new(pe))
+                    },
+                    self_healer: {
+                        let pe_ref = Arc::new(Mutex::new(
+                            crate::daemon::engine::policy_engine::PolicyEngine::new(),
+                        ));
+                        Arc::new(Mutex::new(
+                            crate::daemon::engine::self_healing::SelfHealer::new(pe_ref),
+                        ))
+                    },
+                    die_orchestrator: Arc::new(Mutex::new(
+                        crate::daemon::engine::die_orchestrator::DieOrchestrator::new(),
+                    )),
+                    resource_manager: Arc::new(Mutex::new(
+                        crate::daemon::engine::resource_manager::ResourceManager::new(),
+                    )),
+                    shutdown_requested: std::sync::atomic::AtomicBool::new(false),
+                    watchdog_handles: Mutex::new(Vec::new()),
+                };
 
-            let state = Arc::new(state);
+                let state = Arc::new(state);
 
-            // Warm the engine-capability cache in the background so the very
-            // first /v1/ping from the browser extension does not have to wait
-            // for subprocess probing (yt-dlp --version, ffmpeg -version, …),
-            // which previously made the first extension connection take
-            // several seconds.
-            {
-                let warm_state = state.clone();
-                std::thread::spawn(move || {
-                    let _ = warm_state.engine_capabilities();
-                    log::debug!("Engine capability cache warmed");
-                });
-            }
+                // Warm the engine-capability cache in the background so the very
+                // first /v1/ping from the browser extension does not have to wait
+                // for subprocess probing (yt-dlp --version, ffmpeg -version, …),
+                // which previously made the first extension connection take
+                // several seconds.
+                {
+                    let warm_state = state.clone();
+                    std::thread::spawn(move || {
+                        let _ = warm_state.engine_capabilities();
+                        log::debug!("Engine capability cache warmed");
+                    });
+                }
 
-            log::debug!("Daemon started with API auth enabled");
+                log::debug!("Daemon started with API auth enabled");
 
-            // Discover external tools on startup.
-            {
-                let et = state.external_tools.clone();
-                tokio::task::spawn_blocking(move || {
-                    let et = lock_or_err!(et);
-                    et.discover_and_initialize();
-                })
-                .await
-                .unwrap_or_else(|e| log::error!("External tool discovery panicked: {e}"));
-            }
-
-            if log::log_enabled!(log::Level::Debug) {
-                state.event_bus.subscribe(|event| {
-                    log::debug!("engine event #{}: {:?}", event.id, event.event);
-                });
-            }
-
-            // Periodic smart-scheduler evaluation: applies time-window and
-            // bandwidth-triggered rules (pause/start/limit/notify) for real.
-            let scheduler_state = state.clone();
-            tokio::spawn(async move {
-                let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
-                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                loop {
-                    ticker.tick().await;
-                    let state = scheduler_state.clone();
+                // Discover external tools on startup.
+                {
+                    let et = state.external_tools.clone();
                     tokio::task::spawn_blocking(move || {
-                        let rt = tokio::runtime::Handle::current();
-                        if let Err(e) =
-                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                rt.block_on(crate::daemon::routes::run_scheduler_tick(&state));
-                            }))
-                        {
-                            let msg = if let Some(s) = e.downcast_ref::<&str>() {
-                                (*s).to_owned()
-                            } else if let Some(s) = e.downcast_ref::<String>() {
-                                s.clone()
-                            } else {
-                                "unknown".to_owned()
-                            };
-                            log::error!("Scheduler tick panicked: {msg}");
-                        }
+                        let et = lock_or_err!(et);
+                        et.discover_and_initialize();
                     })
                     .await
-                    .ok();
+                    .unwrap_or_else(|e| log::error!("External tool discovery panicked: {e}"));
                 }
-            });
 
-            // Restore persisted scheduler rules.
-            for rule in &restored.scheduler_rules {
-                state.scheduler.add_rule(rule.clone());
-            }
+                if log::log_enabled!(log::Level::Debug) {
+                    state.event_bus.subscribe(|event| {
+                        log::debug!("engine event #{}: {:?}", event.id, event.event);
+                    });
+                }
 
-            crate::daemon::routes::record_daemon_start();
-            restore_persisted_tasks(&state, restored);
-            persist::start_persistence_loop(state.clone());
+                // Periodic smart-scheduler evaluation: applies time-window and
+                // bandwidth-triggered rules (pause/start/limit/notify) for real.
+                //
+                // Runs on a dedicated OS thread with its own current-thread tokio
+                // runtime instead of `spawn_blocking` + `block_on`, so a tick can
+                // never occupy (and exhaust) a blocking-thread-pool worker.
+                let scheduler_state = state.clone();
+                std::thread::spawn(move || {
+                    let rt = match tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                    {
+                        Ok(rt) => rt,
+                        Err(e) => {
+                            log::error!("Failed to create scheduler runtime: {e}");
+                            return;
+                        }
+                    };
+                    rt.block_on(async move {
+                        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
+                        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                        loop {
+                            ticker.tick().await;
+                            let state = scheduler_state.clone();
+                            // Spawn the tick as a task so a panic is captured by
+                            // the JoinHandle instead of killing the scheduler
+                            // thread (tokio logs task panics and keeps going).
+                            let handle = tokio::task::spawn(async move {
+                                crate::daemon::routes::run_scheduler_tick(&state).await;
+                            });
+                            if let Err(join_err) = handle.await {
+                                let msg = match join_err.try_into_panic() {
+                                    Ok(panic) => {
+                                        if let Some(s) = panic.downcast_ref::<&str>() {
+                                            (*s).to_owned()
+                                        } else if let Some(s) = panic.downcast_ref::<String>() {
+                                            s.clone()
+                                        } else {
+                                            "unknown".to_owned()
+                                        }
+                                    }
+                                    Err(_) => "task cancelled".to_owned(),
+                                };
+                                log::error!("Scheduler tick panicked: {msg}");
+                            }
+                        }
+                    });
+                });
 
-            start_telegram_bot(state.clone());
+                // Restore persisted scheduler rules.
+                for rule in &restored.scheduler_rules {
+                    state.scheduler.add_rule(rule.clone());
+                }
 
-            let app = crate::daemon::routes::register_routes(Router::new())
+                crate::daemon::routes::record_daemon_start();
+                restore_persisted_tasks(&state, restored);
+                persist::start_persistence_loop(state.clone());
+
+                start_telegram_bot(state.clone());
+
+                let app = crate::daemon::routes::register_routes(Router::new())
                 .route("/", get(serve_index))
                 .route("/assets/{*path}", get(serve_asset))
                 .route("/{*path}", get(serve_spa_fallback))
@@ -365,6 +454,19 @@ pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
                                     || bytes.starts_with(b"tauri://localhost")
                                     || bytes.starts_with(b"https://tauri.localhost")
                                     || bytes.starts_with(b"http://tauri.localhost");
+                                // Extension origins (chrome-extension://,
+                                // moz-extension://, safari-web-extension://) are
+                                // inherently local to the user's browser, so any
+                                // installed extension could reach the daemon.
+                                // Mitigations already in place:
+                                //  - The daemon only binds to 127.0.0.1, so no
+                                //    remote origin can access it at all.
+                                //  - /v1/pair/auto (the unauthenticated token
+                                //    bootstrap) independently verifies the peer
+                                //    is loopback (see handle_v1_pair_auto).
+                                // Residual risk: a malicious or compromised
+                                // extension on the same browser can still obtain
+                                // the token via /v1/pair/auto.
                                 let allowed_extensions = bytes.starts_with(b"chrome-extension://")
                                     || bytes.starts_with(b"moz-extension://")
                                     || bytes.starts_with(b"safari-web-extension://");
@@ -388,100 +490,117 @@ pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
                 .layer(CompressionLayer::new())
                 .layer(RequestBodyLimitLayer::new(32 * 1024 * 1024));
 
-            let addr = format!("127.0.0.1:{port}");
-            log::info!("NOVA daemon starting on {addr}");
+                let addr = format!("127.0.0.1:{port}");
+                log::info!("NOVA daemon starting on {addr}");
 
-            // Retry TCP bind a few times — ports may still be in TIME_WAIT after
-            // the old daemon was killed.
-            let mut listener: Option<tokio::net::TcpListener> = None;
-            for attempt in 0..5u32 {
-                match tokio::net::TcpListener::bind(&addr).await {
-                    Ok(l) => {
-                        listener = Some(l);
-                        break;
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "Daemon bind attempt {}/5 to {} failed: {}",
-                            attempt + 1,
-                            addr,
-                            e
-                        );
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                    }
-                }
-            }
-            let listener = if let Some(l) = listener {
-                l
-            } else {
-                log::error!("Failed to bind daemon to {addr} after 5 retries");
-                return;
-            };
-
-            // Write the bound port + PID to a file so the native messaging host
-            // and browser extension can discover it, and so we can kill only the
-            // correct process on restart (not other services on the port range).
-            let port_file = std::path::Path::new(&data_dir).join("nova-daemon.port");
-            if let Err(e) = std::fs::write(&port_file, format!("{}\n{}", port, std::process::id()))
-            {
-                log::warn!("Failed to write daemon port file: {e}");
-            }
-            let (shutdown_tx, shutdown_rx) = oneshot::channel();
-            *SHUTDOWN_TX.lock().unwrap() = Some(shutdown_tx);
-            let shutdown_state = state.clone();
-            let shutdown_signal = async move {
-                let ctrl_c = tokio::signal::ctrl_c();
-                tokio::select! {
-                    _ = ctrl_c => {},
-                    _ = shutdown_rx => {},
-                }
-                log::info!("Shutdown signal received; pausing active downloads...");
-                // Lock in documented order: media_jobs, curl_jobs, task_snapshot
-                {
-                    let mut media = lock_or_err!(shutdown_state.media_jobs);
-                    for job in media.values_mut() {
-                        if let Some(pid) = job.child {
-                            crate::daemon::utils::kill_process(pid);
+                // Retry TCP bind a few times — ports may still be in TIME_WAIT after
+                // the old daemon was killed.
+                let mut listener: Option<tokio::net::TcpListener> = None;
+                for attempt in 0..5u32 {
+                    match tokio::net::TcpListener::bind(&addr).await {
+                        Ok(l) => {
+                            listener = Some(l);
+                            break;
                         }
-                        job.task.status = "paused".to_owned();
-                        job.task.engine_status = Some("shutdown".to_owned());
+                        Err(e) => {
+                            log::warn!(
+                                "Daemon bind attempt {}/5 to {} failed: {}",
+                                attempt + 1,
+                                addr,
+                                e
+                            );
+                            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        }
                     }
                 }
+                let listener = if let Some(l) = listener {
+                    l
+                } else {
+                    log::error!("Failed to bind daemon to {addr} after 5 retries");
+                    return;
+                };
+
+                // Write the bound port + PID to a file so the native messaging host
+                // and browser extension can discover it, and so we can kill only the
+                // correct process on restart (not other services on the port range).
+                let port_file = std::path::Path::new(&data_dir).join("nova-daemon.port");
+                if let Err(e) =
+                    std::fs::write(&port_file, format!("{}\n{}", port, std::process::id()))
                 {
-                    let mut curl = lock_or_err!(shutdown_state.curl_jobs);
-                    for job in curl.values_mut() {
-                        job.cancel_token
-                            .store(true, std::sync::atomic::Ordering::Release);
-                        job.task.status = "paused".to_owned();
-                        job.task.engine_status = Some("shutdown".to_owned());
+                    log::warn!("Failed to write daemon port file: {e}");
+                }
+                let (shutdown_tx, shutdown_rx) = oneshot::channel();
+                *SHUTDOWN_TX.lock().unwrap() = Some(shutdown_tx);
+                let shutdown_state = state.clone();
+                let shutdown_signal = async move {
+                    let ctrl_c = tokio::signal::ctrl_c();
+                    tokio::select! {
+                        _ = ctrl_c => {},
+                        _ = shutdown_rx => {},
                     }
-                }
-                // Signal watchdog threads to exit.
-                shutdown_state
-                    .shutdown_requested
-                    .store(true, std::sync::atomic::Ordering::Release);
-                // Join watchdog handles (they will exit on next check loop after
-                // shutdown_requested is set).
-                // Take the Vec out of the Mutex first so the lock is not held
-                // during the potentially-blocking join() calls.
-                let handles = std::mem::take(&mut *lock_or_err!(shutdown_state.watchdog_handles));
-                for h in handles {
-                    let _ = h.join();
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-                log::info!("Flushing state...");
-                crate::daemon::persist::save_now(&shutdown_state);
-                log::info!("State saved; shutting down daemon.");
-            };
-            if let Err(e) = axum::serve(listener, app)
+                    log::info!("Shutdown signal received; pausing active downloads...");
+                    // Lock in documented order: media_jobs, curl_jobs, task_snapshot
+                    {
+                        let mut media = lock_or_err!(shutdown_state.media_jobs);
+                        for job in media.values_mut() {
+                            if let Some(pid) = job.child {
+                                crate::daemon::utils::kill_process(pid);
+                            }
+                            job.task.status = "paused".to_owned();
+                            job.task.engine_status = Some("shutdown".to_owned());
+                        }
+                    }
+                    {
+                        let mut curl = lock_or_err!(shutdown_state.curl_jobs);
+                        for job in curl.values_mut() {
+                            job.cancel_token
+                                .store(true, std::sync::atomic::Ordering::Release);
+                            job.task.status = "paused".to_owned();
+                            job.task.engine_status = Some("shutdown".to_owned());
+                        }
+                    }
+                    // Signal watchdog threads to exit.
+                    shutdown_state
+                        .shutdown_requested
+                        .store(true, std::sync::atomic::Ordering::Release);
+                    // Join watchdog handles (they will exit on next check loop after
+                    // shutdown_requested is set).
+                    // Take the Vec out of the Mutex first so the lock is not held
+                    // during the potentially-blocking join() calls.
+                    let handles =
+                        std::mem::take(&mut *lock_or_err!(shutdown_state.watchdog_handles));
+                    for h in handles {
+                        let _ = h.join();
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                    log::info!("Flushing state...");
+                    crate::daemon::persist::save_now(&shutdown_state);
+                    log::info!("State saved; shutting down daemon.");
+                };
+                if let Err(e) = axum::serve(
+                    listener,
+                    app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                )
                 .with_graceful_shutdown(shutdown_signal)
                 .await
-            {
-                log::error!("Daemon server error: {e}");
-            }
-            // Remove the port file on clean shutdown.
-            let _ = std::fs::remove_file(std::path::Path::new(&data_dir).join("nova-daemon.port"));
-        });
+                {
+                    log::error!("Daemon server error: {e}");
+                }
+                // Remove the port file on clean shutdown.
+                let _ =
+                    std::fs::remove_file(std::path::Path::new(&data_dir).join("nova-daemon.port"));
+            });
+        }));
+        if let Err(panic) = result {
+            let msg = if let Some(s) = panic.downcast_ref::<&str>() {
+                s.to_string()
+            } else if let Some(s) = panic.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown".to_owned()
+            };
+            log::error!("Daemon thread panicked: {msg}");
+        }
     });
 }
 
@@ -543,7 +662,7 @@ fn restore_persisted_tasks(
                 } else {
                     task.description.clone()
                 };
-            let _args = restored
+            let args = restored
                 .curl_args
                 .get(&task.id)
                 .cloned()
@@ -585,9 +704,13 @@ fn restore_persisted_tasks(
                             run_generation: Arc::new(AtomicU64::new(0)),
                             start_time: Instant::now(),
                             segment_prev_bytes: Vec::new(),
+                            args,
                         },
                     );
                 }
+            } else {
+                // Ensure `args` is used even for completed tasks to satisfy the compiler
+                let _ = args;
             }
         } else {
             task.status = "error".to_owned();
@@ -597,6 +720,16 @@ fn restore_persisted_tasks(
                     .to_owned(),
             );
             task.speed_bytes_per_sec = 0;
+        }
+
+        if task.status != "completed" && task.status != "error" {
+            state.priority_queue.enqueue(QueueEntry {
+                task_id: task.id.clone(),
+                priority: DownloadPriority::Normal,
+                added_at: Instant::now(),
+                size_bytes: task.size_bytes,
+                bandwidth_kbps: Arc::new(AtomicU64::new(0)),
+            });
         }
 
         if let Ok(mut snapshot) = state.task_snapshot.lock() {

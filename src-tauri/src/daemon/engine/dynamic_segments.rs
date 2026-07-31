@@ -58,7 +58,7 @@ impl DynamicSegmentScheduler {
         if total_size == 0 {
             return vec![SegmentState::new(0, 0, 0)];
         }
-        let conns = connections.max(1).min(total_size as u32);
+        let conns = connections.max(1);
         let per_seg = total_size / u64::from(conns);
         let mut segs = Vec::with_capacity(conns as usize);
         for i in 0..conns {

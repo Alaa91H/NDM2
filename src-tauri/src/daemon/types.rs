@@ -267,4 +267,6 @@ pub struct CurlJob {
     pub start_time: Instant,
     /// Previous per-segment downloaded bytes, used to compute segment speed.
     pub segment_prev_bytes: Vec<u64>,
+    /// Curl command-line arguments for this job, persisted across restarts.
+    pub args: Vec<String>,
 }

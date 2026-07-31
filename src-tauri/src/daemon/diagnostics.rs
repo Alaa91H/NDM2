@@ -140,6 +140,13 @@ fn test_ssl_cert(host: &str, port: u16) -> serde_json::Value {
             "durationMs": start.elapsed().as_millis() as u64
         });
     }
+    if port != 443 {
+        return serde_json::json!({
+            "host": host,
+            "error": "SSL certificate check is only supported on port 443",
+            "durationMs": start.elapsed().as_millis() as u64
+        });
+    }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         let output = std::process::Command::new("openssl")

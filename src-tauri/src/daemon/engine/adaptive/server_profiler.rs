@@ -4,12 +4,12 @@
     clippy::manual_clamp,
     clippy::too_many_arguments
 )]
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use super::AdaptiveThresholds;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ProtocolVersion {
     #[default]
     Unknown,
@@ -56,9 +56,9 @@ pub struct ServerProfile {
     pub handshake_time_us: u64,
     pub initial_ttfb_us: u64,
 
-    pub rtt_samples: Vec<u64>,
+    pub rtt_samples: VecDeque<u64>,
     pub ttfb_samples: Vec<u64>,
-    pub throughput_samples: Vec<u64>,
+    pub throughput_samples: VecDeque<u64>,
     pub median_rtt_us: u64,
     pub p95_rtt_us: u64,
     pub throughput_ceiling: u64,
@@ -147,9 +147,14 @@ impl ServerProfile {
 
     fn update_statistics(&mut self) {
         if !self.rtt_samples.is_empty() {
-            let mut sorted = self.rtt_samples.clone();
+            const MAX_SAMPLES: usize = 100;
+            let mut buf = [0u64; MAX_SAMPLES];
+            let len = self.rtt_samples.len().min(MAX_SAMPLES);
+            for (i, &v) in self.rtt_samples.iter().take(len).enumerate() {
+                buf[i] = v;
+            }
+            let sorted = &mut buf[..len];
             sorted.sort_unstable();
-            let len = sorted.len();
             self.median_rtt_us = sorted[len / 2];
             let p95_idx = ((len as f64) * 0.95) as usize;
             self.p95_rtt_us = sorted[p95_idx.min(len - 1)];
@@ -214,6 +219,7 @@ impl ServerProfiler {
         host: &str,
         protocol: ProtocolVersion,
         supports_range: bool,
+        supports_resume: bool,
         tls_version: Option<String>,
         alpn: Option<String>,
         server_header: Option<String>,
@@ -228,7 +234,11 @@ impl ServerProfiler {
         } else {
             TriState::No
         };
-        profile.supports_resume = profile.supports_range.clone();
+        profile.supports_resume = if supports_resume {
+            TriState::Yes
+        } else {
+            TriState::No
+        };
         profile.tls_version = tls_version;
         profile.alpn_protocol = alpn;
         profile.server_software = server_header;
@@ -236,7 +246,7 @@ impl ServerProfiler {
         profile.handshake_time_us = handshake_us;
         profile.initial_ttfb_us = ttfb_us;
         if initial_rtt_us > 0 {
-            profile.rtt_samples.push(initial_rtt_us);
+            profile.rtt_samples.push_back(initial_rtt_us);
         }
         if ttfb_us > 0 {
             profile.ttfb_samples.push(ttfb_us);
@@ -257,15 +267,15 @@ impl ServerProfiler {
     ) {
         let profile = self.get_or_create(host);
         if rtt_us > 0 {
-            profile.rtt_samples.push(rtt_us);
+            profile.rtt_samples.push_back(rtt_us);
             if profile.rtt_samples.len() > 100 {
-                profile.rtt_samples.remove(0);
+                profile.rtt_samples.pop_front();
             }
         }
         if speed > 0 {
-            profile.throughput_samples.push(speed);
+            profile.throughput_samples.push_back(speed);
             if profile.throughput_samples.len() > 100 {
-                profile.throughput_samples.remove(0);
+                profile.throughput_samples.pop_front();
             }
         }
         profile.total_probes += 1;
@@ -366,6 +376,7 @@ mod tests {
             "cdn.example.com",
             ProtocolVersion::Http2,
             true,
+            true,
             Some("TLSv1.3".to_string()),
             Some("h2".to_string()),
             Some("nginx".to_string()),
@@ -376,6 +387,7 @@ mod tests {
         let prof = p.get("cdn.example.com").unwrap();
         assert_eq!(prof.protocol, ProtocolVersion::Http2);
         assert_eq!(prof.supports_range, TriState::Yes);
+        assert_eq!(prof.supports_resume, TriState::Yes);
         assert_eq!(prof.tls_version.as_deref(), Some("TLSv1.3"));
         assert_eq!(prof.alpn_protocol.as_deref(), Some("h2"));
         assert_eq!(prof.server_software.as_deref(), Some("nginx"));
@@ -390,6 +402,7 @@ mod tests {
         p.seed_from_preflight(
             "h",
             ProtocolVersion::Http11,
+            true,
             true,
             None,
             None,
@@ -413,6 +426,7 @@ mod tests {
             "h",
             ProtocolVersion::Http11,
             true,
+            true,
             None,
             None,
             None,
@@ -432,6 +446,7 @@ mod tests {
         p.seed_from_preflight(
             "h",
             ProtocolVersion::Http11,
+            true,
             true,
             None,
             None,
@@ -454,6 +469,7 @@ mod tests {
             "h",
             ProtocolVersion::Http11,
             true,
+            true,
             None,
             None,
             None,
@@ -474,6 +490,7 @@ mod tests {
         p.seed_from_preflight(
             "h",
             ProtocolVersion::Http11,
+            true,
             true,
             None,
             None,
@@ -574,6 +591,7 @@ mod tests {
             "h",
             ProtocolVersion::Http11,
             true,
+            true,
             None,
             None,
             None,
@@ -603,6 +621,7 @@ mod tests {
         p.seed_from_preflight(
             "h",
             ProtocolVersion::Http11,
+            true,
             true,
             None,
             None,

@@ -36,7 +36,7 @@ pub struct TaskEngineTracker {
     pub adaptive: AdaptiveConnectionManager,
     pub segments: Option<DynamicSegmentScheduler>,
     pub retry_state: RetryState,
-    pub adaptive_engine: Option<AdaptiveEngine>,
+    pub adaptive_engine: Mutex<Option<AdaptiveEngine>>,
 }
 
 const ENGINE_CACHE_TTL_SECS: u64 = 120;
@@ -67,6 +67,9 @@ pub struct AppState {
     pub ffmpeg_bin: String,
     pub telegram_last_update_id: Mutex<i64>,
     pub engine_capabilities_cache: RwLock<Option<(Arc<serde_json::Value>, Instant)>>,
+    /// Serializes the subprocess probe in `engine_capabilities()` so concurrent
+    /// requests cannot each spawn redundant yt-dlp/ffmpeg probes.
+    pub engine_capabilities_probe: Mutex<()>,
     pub task_generation: AtomicU64,
     pub task_list_cache: RwLock<Option<(u64, Arc<Vec<Task>>)>>,
     pub event_bus: EventBus,
@@ -111,6 +114,26 @@ impl AppState {
     }
 
     pub fn engine_capabilities(&self) -> Arc<serde_json::Value> {
+        // Fast path: serve a still-fresh cached value without taking the
+        // probe mutex.
+        if let Ok(cache) = self.engine_capabilities_cache.read() {
+            if let Some((ref value, ref ts)) = *cache {
+                if ts.elapsed().as_secs() < ENGINE_CACHE_TTL_SECS {
+                    return value.clone();
+                }
+            }
+        }
+        // Serialize the read-check-probe-write sequence so concurrent callers
+        // do not each spawn redundant subprocess probes (TOC/TOU race).
+        let _guard = match self.engine_capabilities_probe.lock() {
+            Ok(guard) => guard,
+            Err(poison) => {
+                log::warn!("engine_capabilities probe mutex poisoned, recovering");
+                poison.into_inner()
+            }
+        };
+        // Re-check under the probe lock — another request may have refreshed
+        // the cache while we waited.
         if let Ok(cache) = self.engine_capabilities_cache.read() {
             if let Some((ref value, ref ts)) = *cache {
                 if ts.elapsed().as_secs() < ENGINE_CACHE_TTL_SECS {

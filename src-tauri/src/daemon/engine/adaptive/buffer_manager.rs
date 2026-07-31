@@ -92,7 +92,7 @@ impl BufferManager {
         let memory_factor = self.memory_pressure.mul_add(-0.7, 1.0);
 
         let adjusted = base * speed_factor * conn_factor * memory_factor;
-        (adjusted as usize).clamp(MIN_WRITE_BUFFER, MAX_WRITE_BUFFER)
+        (adjusted.max(0.0) as usize).clamp(MIN_WRITE_BUFFER, MAX_WRITE_BUFFER)
     }
 
     fn compute_read_buffer(&self) -> usize {
@@ -109,7 +109,7 @@ impl BufferManager {
 
         let memory_factor = self.memory_pressure.mul_add(-0.5, 1.0);
         let adjusted = base * speed_factor * memory_factor;
-        (adjusted as usize).clamp(MIN_READ_BUFFER, MAX_READ_BUFFER)
+        (adjusted.max(0.0) as usize).clamp(MIN_READ_BUFFER, MAX_READ_BUFFER)
     }
 
     fn compute_flush_interval(&self) -> u64 {

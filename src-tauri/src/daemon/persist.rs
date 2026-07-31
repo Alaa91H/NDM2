@@ -63,13 +63,17 @@ fn build_snapshot(state: &AppState) -> PersistedState {
     // preventing AB-BA deadlock with transfer.rs (which locks download_stats → curl_jobs).
     let (media_args, curl_args, tasks, telegram_last_update_id) = {
         let media_jobs = lock_or_err!(state.media_jobs);
+        let curl_jobs = lock_or_err!(state.curl_jobs);
         let snapshot = lock_or_err!(state.task_snapshot);
 
         let media_args: HashMap<String, Vec<String>> = media_jobs
             .iter()
             .map(|(id, job)| (id.clone(), job.args.clone()))
             .collect();
-        let curl_args: HashMap<String, Vec<String>> = HashMap::new();
+        let curl_args: HashMap<String, Vec<String>> = curl_jobs
+            .iter()
+            .map(|(id, job)| (id.clone(), job.args.clone()))
+            .collect();
         let tasks: Vec<Task> = snapshot.values().cloned().collect();
         let telegram_last_update_id = *lock_or_err!(state.telegram_last_update_id);
         (media_args, curl_args, tasks, telegram_last_update_id)
@@ -140,14 +144,15 @@ pub fn save_now(state: &AppState) {
 ///
 /// Uses an adaptive checkpoint interval:
 ///   - **60 s** baseline when the system is idle (no active downloads).
-///   - **5 s** when one or more downloads are running, so crash recovery
-///     loses at most 5 s of progress.
+///   - **10 s** when one or more downloads are running, so crash recovery
+///     loses at most 10 s of progress — long enough to keep rapid progress
+///     updates from amplifying SSD writes.
 ///   - The dirty flag still gates actual writes — the interval only controls
 ///     how often we *check*.
 pub fn start_persistence_loop(state: SharedState) {
     tokio::spawn(async move {
         const BASELINE_SECS: u64 = 60;
-        const ACTIVE_SECS: u64 = 5;
+        const ACTIVE_SECS: u64 = 10;
 
         loop {
             let has_active = {
@@ -241,6 +246,7 @@ mod tests {
             ffmpeg_bin: String::new(),
             telegram_last_update_id: Mutex::new(0),
             engine_capabilities_cache: RwLock::new(None),
+            engine_capabilities_probe: std::sync::Mutex::new(()),
             task_generation: AtomicU64::new(0),
             task_list_cache: RwLock::new(None),
             event_bus: crate::daemon::engine::event_bus::EventBus::new_with_capacity(100),
@@ -331,6 +337,10 @@ mod tests {
                 run_generation: Arc::new(AtomicU64::new(0)),
                 start_time: Instant::now(),
                 segment_prev_bytes: Vec::new(),
+                args: vec![
+                    "--location".to_string(),
+                    "https://example.com/c1".to_string(),
+                ],
             },
         );
 

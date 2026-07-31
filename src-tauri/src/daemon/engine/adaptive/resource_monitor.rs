@@ -33,6 +33,10 @@ pub struct ResourceMonitor {
     cpu_count: u32,
     available_memory_mb: u64,
     snapshot: ResourceSnapshot,
+    prev_disk_bytes_written: u64,
+    prev_idle_ticks: u64,
+    prev_total_ticks: u64,
+    has_prev_ticks: bool,
 }
 
 impl ResourceMonitor {
@@ -47,6 +51,10 @@ impl ResourceMonitor {
                 cpu_count,
                 ..Default::default()
             },
+            prev_disk_bytes_written: 0,
+            prev_idle_ticks: 0,
+            prev_total_ticks: 0,
+            has_prev_ticks: false,
         }
     }
 
@@ -55,16 +63,19 @@ impl ResourceMonitor {
         if now.duration_since(self.last_sample) < self.sample_interval {
             return &self.snapshot;
         }
+        let prev_time = self.last_sample;
         self.last_sample = now;
 
         self.sample_memory();
+
+        let (disk_write_mbps, disk_active) = self.sample_disk_io(now, prev_time);
 
         self.snapshot = ResourceSnapshot {
             cpu_count: self.cpu_count,
             cpu_usage_pct: self.estimate_cpu_usage(),
             available_memory_mb: self.available_memory_mb,
-            disk_write_mbps: 0,
-            disk_active: false,
+            disk_write_mbps,
+            disk_active,
         };
         &self.snapshot
     }
@@ -109,7 +120,7 @@ impl ResourceMonitor {
         self.snapshot.clone()
     }
 
-    fn estimate_cpu_usage(&self) -> f32 {
+    fn estimate_cpu_usage(&mut self) -> f32 {
         #[cfg(target_os = "windows")]
         {
             self.estimate_cpu_usage_windows()
@@ -121,7 +132,7 @@ impl ResourceMonitor {
     }
 
     #[cfg(target_os = "windows")]
-    fn estimate_cpu_usage_windows(&self) -> f32 {
+    fn estimate_cpu_usage_windows(&mut self) -> f32 {
         #[repr(C)]
         struct FileTime {
             dw_low_date_time: u32,
@@ -176,21 +187,14 @@ impl ResourceMonitor {
             return 0.0;
         }
 
-        static PREV: std::sync::OnceLock<std::sync::Mutex<(u64, u64)>> = std::sync::OnceLock::new();
-        let prev = PREV.get_or_init(|| std::sync::Mutex::new((0, 0)));
-        let (prev_idle, prev_total) = match prev.lock() {
-            Ok(mut guard) => {
-                let v = *guard;
-                *guard = (idle_ticks, total);
-                v
-            }
-            Err(poisoned) => {
-                let mut guard = poisoned.into_inner();
-                let v = *guard;
-                *guard = (idle_ticks, total);
-                v
-            }
+        let (prev_idle, prev_total) = if self.has_prev_ticks {
+            (self.prev_idle_ticks, self.prev_total_ticks)
+        } else {
+            (idle_ticks, total)
         };
+        self.prev_idle_ticks = idle_ticks;
+        self.prev_total_ticks = total;
+        self.has_prev_ticks = true;
 
         let d_idle = idle_ticks.saturating_sub(prev_idle);
         let d_total = total.saturating_sub(prev_total);
@@ -259,6 +263,73 @@ impl ResourceMonitor {
     #[cfg(not(target_os = "windows"))]
     fn sample_memory_fallback(&mut self) {
         self.available_memory_mb = 2048;
+    }
+
+    fn sample_disk_io(&mut self, now: Instant, prev_time: Instant) -> (u64, bool) {
+        #[cfg(target_os = "windows")]
+        {
+            self.sample_disk_io_windows(now, prev_time)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            (0, false)
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn sample_disk_io_windows(&mut self, now: Instant, prev_time: Instant) -> (u64, bool) {
+        #[repr(C)]
+        struct IoCounters {
+            read_operation_count: u64,
+            write_operation_count: u64,
+            other_operation_count: u64,
+            read_transfer_count: u64,
+            write_transfer_count: u64,
+            other_transfer_count: u64,
+        }
+
+        extern "system" {
+            fn GetCurrentProcess() -> *mut std::ffi::c_void;
+            fn GetProcessIoCounters(
+                h_process: *mut std::ffi::c_void,
+                lp_io_counters: *mut IoCounters,
+            ) -> i32;
+        }
+
+        let mut counters = IoCounters {
+            read_operation_count: 0,
+            write_operation_count: 0,
+            other_operation_count: 0,
+            read_transfer_count: 0,
+            write_transfer_count: 0,
+            other_transfer_count: 0,
+        };
+
+        let success = unsafe {
+            let h = GetCurrentProcess();
+            GetProcessIoCounters(h, &mut counters)
+        };
+
+        if success == 0 {
+            return (0, false);
+        }
+
+        let current_bytes = counters.write_transfer_count;
+        let prev_bytes = self.prev_disk_bytes_written;
+        self.prev_disk_bytes_written = current_bytes;
+
+        if prev_bytes == 0 || current_bytes < prev_bytes {
+            return (0, current_bytes > 0);
+        }
+
+        let delta_bytes = current_bytes - prev_bytes;
+        let delta_secs = now.duration_since(prev_time).as_secs_f64();
+        if delta_secs <= 0.0 {
+            return (0, delta_bytes > 0);
+        }
+
+        let mbps = (delta_bytes as f64 / (1024.0 * 1024.0) / delta_secs) as u64;
+        (mbps, delta_bytes > 0)
     }
 }
 

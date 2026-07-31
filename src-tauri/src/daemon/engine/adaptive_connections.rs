@@ -35,32 +35,6 @@ impl Default for AdaptiveConfig {
     }
 }
 
-impl AdaptiveConfig {
-    pub fn aggressive() -> Self {
-        let base = Self::default();
-        Self {
-            min_connections: 2,
-            max_connections: (base.max_connections * 3 / 2).min(48),
-            speed_high_threshold: base.speed_high_threshold * 2,
-            speed_low_threshold: base.speed_low_threshold / 2,
-            stall_threshold: Duration::from_secs(3),
-            eval_interval: Duration::from_millis(1500),
-        }
-    }
-
-    pub fn conservative() -> Self {
-        let base = Self::default();
-        Self {
-            min_connections: 1,
-            max_connections: (base.max_connections / 2).max(4),
-            speed_high_threshold: base.speed_high_threshold / 2,
-            speed_low_threshold: base.speed_low_threshold * 2,
-            stall_threshold: Duration::from_secs(10),
-            eval_interval: Duration::from_secs(5),
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct AdaptiveConnectionManager {
     pub current_connections: Arc<AtomicU32>,
