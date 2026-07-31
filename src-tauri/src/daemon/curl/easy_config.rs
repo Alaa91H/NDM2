@@ -1,5 +1,5 @@
 use std::fs::{File, OpenOptions};
-use std::io::Write;
+use std::io::{Seek, SeekFrom, Write};
 use std::os::raw::c_long;
 use std::path::Path;
 use std::sync::atomic::Ordering;
@@ -1189,18 +1189,28 @@ pub fn create_easy_for_range_ext(
                 .map_err(|e| format!("Could not create segment folder: {e}"))?;
         }
     }
-    let file = OpenOptions::new()
+    let mut file = OpenOptions::new()
         .create(true)
-        .append(true)
+        .write(true)
         .open(path)
         .map_err(|e| format!("Could not open segment output file: {e}"))?;
     if let Some(size) = preallocate_bytes {
         let current = file.metadata().map_or(0, |m| m.len());
         if current == 0 && size > 0 {
+            // set_len needs FILE_WRITE_DATA access; opening with .append(true)
+            // alone would yield FILE_APPEND_DATA and make SetEndOfFile fail with
+            // "Access is denied (os error 5)" on Windows, killing every download
+            // at the preallocation step.
             file.set_len(size).map_err(|e| {
                 format!("Could not preallocate segment file (disk may be full): {e}")
             })?;
         }
+    } else if file.metadata().map_or(0, |m| m.len()) > 0 {
+        // Resume path: keep writing after the existing bytes. Without O_APPEND
+        // the cursor starts at 0, so seek to the current end explicitly.
+        let _ = file.seek(SeekFrom::End(0)).map_err(|e| {
+            format!("Could not position segment file for resume: {e}")
+        })?;
     }
     let mut easy = Easy2::new(SegmentWriter {
         file,
