@@ -52,6 +52,7 @@ fn validate_file_path(path: &str) -> Result<PathBuf, String> {
 }
 
 mod daemon;
+pub mod logging;
 pub mod native_host;
 pub(crate) use daemon::utils::hide_command_window;
 pub use native_host::{is_native_messaging_launch, run_native_messaging_host};
@@ -660,11 +661,6 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(
-            tauri_plugin_log::Builder::default()
-                .level(log::LevelFilter::Info)
-                .build(),
-        )
         .setup(|app| {
             kill_old_daemon();
             let default_port = requested_daemon_port();

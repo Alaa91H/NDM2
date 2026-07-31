@@ -652,6 +652,14 @@ impl AdaptiveEngine {
             self.current_connections = target;
         }
 
+        log::trace!(
+            "adaptive evaluate: conns={} target={} actions={} reason={}",
+            self.current_connections,
+            target,
+            decision.actions.len(),
+            decision.reason
+        );
+
         self.last_decision = decision.clone();
         decision
     }

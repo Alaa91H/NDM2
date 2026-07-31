@@ -164,6 +164,7 @@ pub fn get_task(state: &SharedState, id: &str) -> Option<Task> {
 }
 
 pub async fn pause_task(state: &SharedState, id: &str) -> Result<Task, String> {
+    log::debug!("pause_task requested for {id}");
     {
         let mut jobs = lock_or_err!(state.media_jobs);
         if let Some(job) = jobs.get_mut(id) {
@@ -178,6 +179,7 @@ pub async fn pause_task(state: &SharedState, id: &str) -> Result<Task, String> {
             drop(jobs);
             lock_or_err!(state.task_snapshot).insert(id.to_owned(), task.clone());
             state.mark_dirty();
+            log::info!("Task {id} paused (yt-dlp)");
             return Ok(task);
         }
     }
@@ -198,6 +200,7 @@ pub async fn pause_task(state: &SharedState, id: &str) -> Result<Task, String> {
             drop(jobs);
             lock_or_err!(state.task_snapshot).insert(id.to_owned(), task.clone());
             state.mark_dirty();
+            log::info!("Task {id} pause requested (libcurl worker stopping)");
             return Ok(task);
         }
     }
@@ -210,6 +213,7 @@ pub async fn pause_task(state: &SharedState, id: &str) -> Result<Task, String> {
 }
 
 pub async fn resume_task(state: &SharedState, id: &str) -> Result<Task, String> {
+    log::debug!("resume_task requested for {id}");
     {
         let mut jobs = lock_or_err!(state.media_jobs);
         if let Some(job) = jobs.get_mut(id) {
@@ -221,6 +225,7 @@ pub async fn resume_task(state: &SharedState, id: &str) -> Result<Task, String> 
             drop(jobs);
             if needs_start {
                 crate::daemon::ytdlp::start_ytdlp_process(state, id);
+                log::info!("Task {id} resuming (yt-dlp)");
             }
             state.mark_dirty();
             let jobs = lock_or_err!(state.media_jobs);
@@ -519,6 +524,7 @@ pub async fn redownload_task(state: &SharedState, id: &str) -> Result<Task, Stri
 }
 
 pub async fn delete_task(state: &SharedState, id: &str, delete_files: bool) -> Result<(), String> {
+    log::debug!("delete_task requested for {id} (delete_files={delete_files})");
     {
         let entry = {
             let mut jobs = lock_or_err!(state.media_jobs);
@@ -551,6 +557,7 @@ pub async fn delete_task(state: &SharedState, id: &str, delete_files: bool) -> R
             }
             lock_or_err!(state.task_snapshot).remove(id);
             state.mark_dirty();
+            log::info!("Task {id} deleted (yt-dlp, delete_files={delete_files})");
             return Ok(());
         }
     }
@@ -587,6 +594,7 @@ pub async fn delete_task(state: &SharedState, id: &str, delete_files: bool) -> R
                 remove_stale_parts_for(&path);
             }
             state.mark_dirty();
+            log::info!("Task {id} deleted (libcurl, delete_files={delete_files})");
             return Ok(());
         }
     }

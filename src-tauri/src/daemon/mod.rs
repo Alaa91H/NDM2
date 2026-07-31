@@ -61,6 +61,67 @@ pub fn shared_api_token() -> String {
     API_TOKEN.get_or_init(generate_api_token).clone()
 }
 
+/// Path used for request/response log lines, with the SSE `token` query
+/// parameter redacted so the shared API token never lands in the log file.
+fn loggable_path(uri: &axum::http::Uri) -> String {
+    let path = uri.path();
+    let Some(query) = uri.query() else {
+        return path.to_owned();
+    };
+    if !query.contains("token=") {
+        return format!("{path}?{query}");
+    }
+    let redacted: Vec<String> = query
+        .split('&')
+        .map(|pair| {
+            if let Some((key, _value)) = pair.split_once('=') {
+                if key == "token" {
+                    "token=***".to_owned()
+                } else {
+                    pair.to_owned()
+                }
+            } else {
+                pair.to_owned()
+            }
+        })
+        .collect();
+    format!("{path}?{}", redacted.join("&"))
+}
+
+/// Outermost middleware: logs every HTTP request/response with method, path
+/// (token-redacted), status, and duration, so any daemon interaction can be
+/// traced precisely.
+async fn request_log_middleware(
+    request: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::http::Response<axum::body::Body> {
+    let method = request.method().clone();
+    let path = loggable_path(request.uri());
+    let started = std::time::Instant::now();
+    log::trace!("HTTP -> {method} {path}");
+    let response = next.run(request).await;
+    let status = response.status();
+    let elapsed = started.elapsed();
+    let noisy = path == "/api/health" || path.starts_with("/v1/ping");
+    let level = if status.is_server_error() {
+        log::Level::Error
+    } else if status.is_client_error() || elapsed.as_millis() >= 1000 {
+        log::Level::Warn
+    } else if noisy {
+        log::Level::Trace
+    } else {
+        log::Level::Debug
+    };
+    log::log!(
+        level,
+        "HTTP <- {} {} ({:?})",
+        status.as_u16(),
+        path,
+        elapsed
+    );
+    response
+}
+
 /// Middleware that enforces Bearer token authentication on API routes.
 /// Exempt paths: /api/health, /api/engines/capabilities, /v1/pair/auto,
 /// / (SPA index), /assets/*, and SPA fallback.
@@ -488,7 +549,8 @@ pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
                         ]),
                 )
                 .layer(CompressionLayer::new())
-                .layer(RequestBodyLimitLayer::new(32 * 1024 * 1024));
+                .layer(RequestBodyLimitLayer::new(32 * 1024 * 1024))
+                .layer(axum::middleware::from_fn(request_log_middleware));
 
                 let addr = format!("127.0.0.1:{port}");
                 log::info!("NOVA daemon starting on {addr}");

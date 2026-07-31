@@ -21,13 +21,13 @@ serde = { version = "1", features = ["derive"] }
 log = "0.4"
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-clipboard-manager = "2"
-tauri-plugin-log = "2"
+flexi_logger = "0.31"
 tauri-plugin-shell = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 tokio = { version = "1", features = ["rt", "macros", "time", "net", "sync", "io-util", "signal"] }
-axum = { version = "0.8", features = ["macros"] }
+axum = { version = "0.8", features = ["macros", "query"] }
 tower-http = { version = "0.6", features = ["cors", "fs", "compression-gzip", "limit"] }
 reqwest = { version = ">=0.12.0, <0.13", features = ["json", "blocking", "multipart", "stream"] }
 tokio-util = { version = "0.7", features = ["codec", "rt"] }

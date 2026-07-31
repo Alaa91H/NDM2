@@ -5,6 +5,7 @@ pub mod downloads;
 pub mod engine;
 pub mod extension;
 pub mod external_tools;
+pub mod logs;
 pub mod probes;
 pub mod telegram_routes;
 
@@ -25,6 +26,7 @@ pub fn register_routes(router: Router<SharedState>) -> Router<SharedState> {
     let router = probes::register_routes(router);
     let router = dns_routes::register_routes(router);
     let router = telegram_routes::register_routes(router);
+    let router = logs::register_routes(router);
     diagnostics::register_routes(router)
 }
 

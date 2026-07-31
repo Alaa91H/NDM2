@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 fn main() {
+    nova_lib::logging::init_default();
     install_panic_hook();
 
     if nova_lib::is_native_messaging_launch() {

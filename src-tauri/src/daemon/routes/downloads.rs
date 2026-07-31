@@ -363,6 +363,11 @@ pub async fn handle_create_download(
     match result {
         Ok(task) => {
             let task_id = task.id.clone();
+            log::debug!(
+                "Created download task {task_id} (engine={}, name={})",
+                task.engine,
+                task.name
+            );
             // Merge probe-discovered Link mirrors (RFC 6249) with rule-engine mirrors.
             let mut all_mirrors = rule_mirrors;
             if let Some(opts) = body.direct_options.as_ref() {

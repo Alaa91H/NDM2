@@ -162,6 +162,10 @@ impl SmartScheduler {
         if let Ok(mut active) = self.active_rules.lock() {
             *active = triggered_ids;
         }
+        log::trace!(
+            "scheduler evaluate: active={active_count} queued={queued_count} total={total_count} bandwidth={current_bandwidth_kbps}kBps actions={}",
+            actions.len()
+        );
         actions
     }
 

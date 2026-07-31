@@ -75,6 +75,7 @@ impl BandwidthManager {
 
     pub fn allowed_speed_for_task(&self, task_id: &str) -> u64 {
         if self.global_paused.load(Ordering::Relaxed) {
+            log::trace!("bandwidth: task {task_id} allowed 0 (global paused)");
             return 0;
         }
         let global = self.effective_global_limit();
@@ -83,12 +84,16 @@ impl BandwidthManager {
             .lock()
             .ok()
             .and_then(|limits| limits.get(task_id).copied());
-        match (global, per_task) {
+        let allowed = match (global, per_task) {
             (0, Some(t)) => t,
             (0, None) => 0,
             (g, Some(t)) => t.min(g),
             (g, None) => g,
-        }
+        };
+        log::trace!(
+            "bandwidth: task {task_id} allowed {allowed} kBps (global={global}, per_task={per_task:?})"
+        );
+        allowed
     }
 
     pub fn set_global_limit(&self, kbps: u64) {
