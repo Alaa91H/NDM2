@@ -33,9 +33,13 @@ pub struct ResourceMonitor {
     cpu_count: u32,
     available_memory_mb: u64,
     snapshot: ResourceSnapshot,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     prev_disk_bytes_written: u64,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     prev_idle_ticks: u64,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     prev_total_ticks: u64,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     has_prev_ticks: bool,
 }
 
