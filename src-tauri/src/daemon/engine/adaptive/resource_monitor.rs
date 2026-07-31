@@ -269,6 +269,7 @@ impl ResourceMonitor {
         self.available_memory_mb = 2048;
     }
 
+    #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
     fn sample_disk_io(&mut self, now: Instant, prev_time: Instant) -> (u64, bool) {
         #[cfg(target_os = "windows")]
         {
