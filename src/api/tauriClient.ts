@@ -268,6 +268,26 @@ export const tauriClient = {
     }
   },
 
+  /** The OS user's Desktop folder; empty string outside Tauri. */
+  async getDesktopDir(): Promise<string> {
+    try {
+      return (await invoke('get_desktop_dir')) as string;
+    } catch {
+      return '';
+    }
+  },
+
+  /** Write a text file to an absolute path chosen via the native save dialog. */
+  async saveTextFile(filePath: string, content: string): Promise<boolean> {
+    try {
+      await invoke('write_text_file', { path: filePath, content });
+      return true;
+    } catch (e) {
+      logger.warn('tauriClient', 'saveTextFile failed', e);
+      return false;
+    }
+  },
+
   async triggerNativeNotification(title: string, body: string): Promise<boolean> {
     if ('Notification' in window) {
       if (typeof Notification !== 'undefined') {
@@ -325,11 +345,14 @@ export const tauriClient = {
     });
   },
 
-  async showSaveFilePicker(fileName: string): Promise<string | null> {
+  async showSaveFilePicker(
+    defaultPath: string,
+    filters?: Array<{ name: string; extensions: string[] }>,
+  ): Promise<string | null> {
     try {
       const result = await invoke('plugin:dialog|save', {
-        defaultPath: fileName,
-        filters: [{ name: 'All Files', extensions: ['*'] }],
+        defaultPath,
+        filters: filters && filters.length > 0 ? filters : [{ name: 'All Files', extensions: ['*'] }],
       });
       if (result && typeof result === 'string') return result;
     } catch {

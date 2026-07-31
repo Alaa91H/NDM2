@@ -251,7 +251,7 @@ export const SettingsDialog: React.FC = () => {
           {activeTab === 'external_tools' && <ExternalToolsSettings onAddToast={addToast} />}
 
           {activeTab === 'logging' && (
-            <LoggingSettings settings={localSettings} updateSetting={updateLocalSetting} />
+            <LoggingSettings settings={localSettings} updateSetting={updateLocalSetting} onAddToast={addToast} />
           )}
           {activeTab === 'backup' && (
             <BackupResetSettings

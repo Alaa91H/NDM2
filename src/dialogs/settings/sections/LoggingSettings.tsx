@@ -3,17 +3,29 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import type { AppSettings } from '../../../types/desktop-ui.types';
 import { FormRow, Switch } from '../../../components/primitives';
 import { ScrollText, Download, FileText, RefreshCw } from 'lucide-react';
-import { logger, formatLogTimestamp, levelColor, levelBadgeBg, type LogLevel } from '../../../utils/logger';
+import {
+  logger,
+  formatLogTimestamp,
+  levelColor,
+  levelBadgeBg,
+  downloadAsFile,
+  exportLogsAsJson,
+  exportLogsAsText,
+  type LogLevel,
+} from '../../../utils/logger';
 import { useI18n } from '../../../store/selectors';
+import { tauriClient } from '../../../api/tauriClient';
 
 interface Props {
   settings: AppSettings;
   updateSetting: (section: keyof AppSettings, key: string, value: unknown) => void;
+  onAddToast: (type: 'success' | 'error' | 'info' | 'warning', title: string, msg: string) => void;
 }
 
 export const LoggingSettings: React.FC<Props> = ({
   settings,
   updateSetting,
+  onAddToast,
 }) => {
   const t = useI18n();
   const [logs, setLogs] = useState(() => logger.getBufferSlice(undefined, undefined, 300));
@@ -69,55 +81,48 @@ export const LoggingSettings: React.FC<Props> = ({
     });
   };
 
+  // Save the log content through the native save dialog (defaulting to the
+  // desktop), writing via the Rust command when running inside Tauri, and
+  // falling back to a browser download in dev/browser mode.
+  const saveLogFile = async (
+    content: string,
+    filename: string,
+    mimeType: string,
+    filters: Array<{ name: string; extensions: string[] }>,
+  ) => {
+    try {
+      const desktopDir = await tauriClient.getDesktopDir();
+      if (desktopDir) {
+        const sep = desktopDir.includes('\\') ? '\\' : '/';
+        const chosen = await tauriClient.showSaveFilePicker(`${desktopDir}${sep}${filename}`, filters);
+        if (!chosen) return;
+        const ok = await tauriClient.saveTextFile(chosen, content);
+        if (ok) {
+          onAddToast('success', t('settings_logging_saved_title'), t('settings_logging_saved_msg'));
+        } else {
+          onAddToast('error', t('settings_logging_save_error'), t('settings_logging_save_error_msg'));
+        }
+        return;
+      }
+    } catch {
+      /* fall through to browser download */
+    }
+    downloadAsFile(content, filename, mimeType);
+    onAddToast('success', t('settings_logging_saved_title'), t('settings_logging_saved_msg'));
+  };
+
   const handleExportLogs = () => {
     const data = logger.getBufferSlice(filterLevel || undefined, filterSource || undefined, 5000);
-    const exportData = {
-      exportedAt: new Date().toISOString(),
-      application: 'NOVA Download Manager',
-      totalEntries: data.length,
-      filters: { level: filterLevel || 'all', source: filterSource || 'all' },
-      entries: data.map((e) => ({
-        timestamp: new Date(e.timestamp).toISOString(),
-        level: e.level,
-        source: e.source,
-        message: e.message,
-        data: e.data,
-      })),
-    };
-    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `nova_logs_${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')}.json`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    const content = exportLogsAsJson(data, { level: filterLevel || 'all', source: filterSource || 'all' });
+    const filename = `nova_logs_${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')}.json`;
+    void saveLogFile(content, filename, 'application/json', [{ name: 'JSON', extensions: ['json'] }]);
   };
 
   const handleExportTextLogs = () => {
     const data = logger.getBufferSlice(filterLevel || undefined, filterSource || undefined, 5000);
-    const lines = [
-      `NOVA Download Manager - Application Logs`,
-      `Exported: ${new Date().toISOString()}`,
-      `Total entries: ${String(data.length)}`,
-      `Filter: level=${filterLevel || 'all'}, source=${filterSource || 'all'}`,
-      '',
-      '='.repeat(120),
-      '',
-      ...data.map((e) =>
-        `[${formatLogTimestamp(e.timestamp)}] [${e.level.toUpperCase().padEnd(5)}] [${e.source}] ${e.message}`
-      ),
-    ];
-    const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `nova_logs_${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')}.txt`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    const content = exportLogsAsText(data, { level: filterLevel || 'all', source: filterSource || 'all' });
+    const filename = `nova_logs_${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')}.txt`;
+    void saveLogFile(content, filename, 'text/plain', [{ name: 'Text', extensions: ['txt'] }]);
   };
 
   const TRUNCATE_LENGTH = 120;

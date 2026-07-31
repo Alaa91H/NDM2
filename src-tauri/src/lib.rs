@@ -155,6 +155,14 @@ fn get_downloads_dir(app: tauri::AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn get_desktop_dir(app: tauri::AppHandle) -> Result<String, String> {
+    app.path()
+        .desktop_dir()
+        .map(|p| p.display().to_string())
+        .map_err(|e| format!("Could not resolve desktop directory: {e}"))
+}
+
+#[tauri::command]
 fn get_browser_extension_paths(app: tauri::AppHandle) -> BrowserExtensionPaths {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let dev_path = manifest_dir
@@ -504,6 +512,52 @@ fn save_config(app: tauri::AppHandle, settings: String) -> Result<(), String> {
         .map_err(|e| format!("Failed to atomically replace config: {e}"))
 }
 
+/// Write a text file to a user-selected location (e.g. exported log files).
+/// The path is picked through the native save dialog, so it is treated as a
+/// trusted destination, but we still guard against empty/relative targets.
+#[tauri::command]
+fn write_text_file(path: String, content: String) -> Result<(), String> {
+    const MAX_FILE_SIZE: usize = 64 * 1024 * 1024;
+    if path.trim().is_empty() {
+        return Err("File path is required.".to_owned());
+    }
+    if content.len() > MAX_FILE_SIZE {
+        return Err(format!(
+            "File content ({} bytes) exceeds limit ({} bytes)",
+            content.len(),
+            MAX_FILE_SIZE
+        ));
+    }
+    let target = std::path::PathBuf::from(&path);
+    if !target.is_absolute() {
+        return Err("File path must be absolute.".to_owned());
+    }
+    let parent = target
+        .parent()
+        .ok_or_else(|| "File path has no parent directory.".to_owned())?;
+    if !parent.is_dir() {
+        return Err(format!(
+            "Destination folder does not exist: {}",
+            parent.display()
+        ));
+    }
+    let file_name = target
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    if file_name.trim().is_empty() {
+        return Err("File path has no file name.".to_owned());
+    }
+    let tmp_path = parent.join(format!(".{file_name}.tmp"));
+    std::fs::write(&tmp_path, &content).map_err(|e| format!("Failed to write log file: {e}"))?;
+    if std::fs::rename(&tmp_path, &target).is_err() {
+        // Cross-device or locked destination fallback: overwrite in place.
+        let _ = std::fs::remove_file(&tmp_path);
+        std::fs::write(&target, &content).map_err(|e| format!("Failed to write log file: {e}"))?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn restart_daemon(
     app: tauri::AppHandle,
@@ -755,6 +809,7 @@ pub fn run() {
             get_daemon_url,
             get_daemon_token,
             get_downloads_dir,
+            get_desktop_dir,
             get_browser_extension_paths,
             open_extension_folder,
             open_file,
@@ -767,6 +822,7 @@ pub fn run() {
             validate_source_address,
             detect_vpn_interface,
             save_config,
+            write_text_file,
             restart_daemon
         ])
         .run(tauri::generate_context!())

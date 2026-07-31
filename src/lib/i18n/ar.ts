@@ -1244,4 +1244,8 @@ set_tab_direct_download: 'Direct Download',
   'settings_logging_autoscroll': 'Auto-scroll',
   'settings_logging_buffer': 'Buffer',
   'settings_logging_empty': 'No log entries yet. Logs appear when the application performs actions.',
+  'settings_logging_saved_title': 'تم حفظ السجلات',
+  'settings_logging_saved_msg': 'تم حفظ سجلات التطبيق في الموقع المحدد.',
+  'settings_logging_save_error': 'فشل الحفظ',
+  'settings_logging_save_error_msg': 'تعذر حفظ ملف السجل في الموقع المحدد.',
 };
