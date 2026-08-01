@@ -24,6 +24,10 @@ impl DownloadPriority {
         }
     }
 
+    /// Map a raw priority id to a `DownloadPriority`. Out-of-range values
+    /// (L17) fall back to `Normal` — deliberately lenient so a new client
+    /// sending an unknown id degrades gracefully instead of erroring, and
+    /// the fallback is pinned by `from_u32_out_of_range_defaults_to_normal`.
     pub const fn from_u32(v: u32) -> Self {
         match v {
             0 => Self::Critical,

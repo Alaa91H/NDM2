@@ -64,6 +64,17 @@ pub(super) struct DirectDownloadPlan {
     pub(super) preflight_supports_range: bool,
 }
 
+impl DirectDownloadPlan {
+    /// Clone with a different `url` — the only field that changes across
+    /// preflight redirect/meta-refresh hops (M10). Avoids cloning the whole
+    /// plan (config, mirrors, validator) for every hop.
+    pub(super) fn clone_with_url(&self, url: String) -> Self {
+        let mut plan = self.clone();
+        plan.url = url;
+        plan
+    }
+}
+
 #[derive(Default, Clone)]
 pub(super) struct ResponseCapture {
     pub(super) status_code: u16,

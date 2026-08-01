@@ -69,7 +69,19 @@ fn build_decision_context(
         }
     };
 
-    let attempted_segments = plan.connections;
+    // M13: report the ACTUAL segment geometry, not plan.connections — the
+    // two can differ when bandwidth-aware clamping reduces the connection
+    // count at dispatch time. Fall back to plan.connections when the tracker
+    // has no segment info (single-connection / unknown-size path).
+    let attempted_segments = if let Ok(trackers) = state.engine_trackers.read() {
+        trackers
+            .get(id)
+            .and_then(|t| t.segments.as_ref())
+            .map(|seg| seg.segments().len() as u32)
+            .unwrap_or(plan.connections)
+    } else {
+        plan.connections
+    };
     let mut completed_segments = 0u32;
     let mut failed_segments = 0u32;
     if let Ok(trackers) = state.engine_trackers.read() {
@@ -369,8 +381,8 @@ fn resolve_effective_target(plan: &DirectDownloadPlan) -> (String, bool, Preflig
     let mut preflight = PreflightData::default();
 
     for _hop in 0..=MAX_META_REFRESH_HOPS {
-        let mut hop_plan = plan.clone();
-        hop_plan.url = current.clone();
+        // M10: only the URL changes per hop — avoid cloning the whole plan.
+        let hop_plan = plan.clone_with_url(current.clone());
 
         let mut easy = Easy2::new(HtmlHeadCapture::default());
         if apply_easy_options(&mut easy, &hop_plan, Some((0, 0))).is_err() {

@@ -559,12 +559,15 @@ impl AdaptiveEngine {
             decision.reason.push_str("[speed-declining] ");
         }
 
+        // M22: evaluate the segment plan exactly once per tick, then use it
+        // on either path below (the old code called evaluate() twice).
+        let seg_plan = self.segment_ctrl.evaluate(&snapshot.connections);
+
         if !self.convergence.should_adjust(&AdaptiveThresholds {
             eval_interval_ms: self.tick_interval.as_millis() as u64,
             ..AdaptiveThresholds::default()
         }) && target == self.current_connections
         {
-            let seg_plan = self.segment_ctrl.evaluate(&snapshot.connections);
             if let Some(plan) = seg_plan {
                 self.segment_ctrl.apply_plan(&plan);
                 decision.actions.push(match plan {
@@ -609,7 +612,6 @@ impl AdaptiveEngine {
             ));
         }
 
-        let seg_plan = self.segment_ctrl.evaluate(&snapshot.connections);
         if let Some(plan) = seg_plan {
             self.segment_ctrl.apply_plan(&plan);
             decision.actions.push(match plan {
