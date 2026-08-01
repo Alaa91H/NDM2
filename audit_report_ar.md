@@ -1,441 +1,302 @@
-# تقرير التدقيق المجهري الشامل لمشروع NOVA
+# تقرير التدقيق المجهري الشامل لمشروع NOVA — الإصدار المحدث
 
-**التاريخ:** 29 يوليو 2026  
-**النطاق:** 80+ ملف Rust عبر 19 وحدة  
-**الأسطر المفحوصة:** ~15,000+ سطر
+**التاريخ:** 31 يوليو 2026  
+**النطاق:** 60+ ملف Rust عبر الوحدات التالية: `daemon/engine/` (23 ملفًا + `adaptive/`)، `daemon/curl/` (8 ملفات)، `daemon/routes/` (9 ملفات)، `daemon/resource_intelligence/` (7 ملفات)، `daemon/external_tools/`، بالإضافة إلى `mod.rs`, `state.rs`, `types.rs`, `utils.rs`, `direct.rs`, `persist.rs`, `ytdlp.rs`, `telegram.rs`, `native_host.rs`.  
+**الأسطر المفحوصة:** ~20,000+ سطر (قراءة كاملة وليس بحثًا سطحيًا).  
+**الطريقة:** فحص سطري مقابل الحقيقة الفعلية للكود الحالي عند `HEAD = 0767363`؛ إعادة التحقق من كل ادعاء ورد في تقرير التدقيق السابق (29 يوليو 2026)؛ اختبارات تجريبية على Windows 10 للأجزاء الحرجة (تخصيص مساحة القرص).  
+**الملاحظة:** هذا التقرير يصحح تقرير 29 يوليو ويحل محله؛ ادعاءات التقرير القديم التي لم تعد صحيحة في النسخة الحالية مُدرجة في قسم «تصحيحات لتقرير سابق».
 
 ---
 
 ## جدول المحتويات
-1. [نظرة عامة على البنية](#نظرة-عامة-على-البنية)
-2. [الكود الميت (Dead Code)](#الكود-الميت-dead-code)
-3. [مشاكل تزامن وسباق (Concurrency)](#مشاكل-تزامن-وسباق-concurrency)
-4. [مشاكل إدارة الذاكرة](#مشاكل-إدارة-الذاكرة)
-5. [مشاكل أداء](#مشاكل-أداء)
-6. [مشاكل أمان الشبكة](#مشاكل-أمان-الشبكة)
-7. [مشاكل libcurl (FFI الخام)](#مشاكل-libcurl-ffi-الخام)
-8. [مشاكل معمارية](#مشاكل-معمارية)
-9. [تضخم الكود والازدواجية](#تضخم-الكود-والازدواجية)
-10. [خرائط التدفق](#خرائط-التدفق)
-11. [قائمة الأولويات للتصليح](#قائمة-الأولويات-للتصليح)
+1. [الملخص التنفيذي](#الملخص-التنفيذي)
+2. [ملخص النتائج حسب الخطورة](#ملخص-النتائج-حسب-الخطورة)
+3. [مشاكل أمان الشبكة (SSRF)](#مشاكل-أمان-الشبكة-ssrf)
+4. [مشاكل الصحة والاستمرارية (Correctness)](#مشاكل-الصحة-والاستمرارية-correctness)
+5. [مشاكل التزامن](#مشاكل-التزامن)
+6. [مشاكل إدارة الذاكرة وlibcurl FFI](#مشاكل-إدارة-الذاكرة-وlibcurl-ffi)
+7. [مشاكل الأداء](#مشاكل-الأداء)
+8. [الكود الميت (المُصحح)](#الكود-الميت-المصحح)
+9. [مشاكل معمارية](#مشاكل-معمارية)
+10. [نقاط القوة المؤكدة](#نقاط-القوة-المؤكدة)
+11. [تصحيحات لتقرير سابق](#تصحيحات-لتقرير-سابق)
+12. [قائمة الأولويات للتصليح](#قائمة-الأولويات-للتصليح)
+13. [الملخص الإحصائي والحكم النهائي](#الملخص-الإحصائي-والحكم-النهائي)
 
 ---
 
-## نظرة عامة على البنية
+## الملخص التنفيذي
 
-```
-nova-tauri/
-├── src/
-│   ├── main.rs                          # نقطة الدخول
-│   ├── lib.rs                           # تكوين Tauri، مسح المنافذ
-│   ├── native_host.rs                   # تواصل مع إضافة المتصفح
-│   └── daemon/
-│       ├── mod.rs                       # إعداد الخادم، التوجيه
-│       ├── state.rs                     # AppState (25+ نظام فرعي)
-│       ├── types.rs                     # الأنواع الأساسية
-│       ├── persist.rs                   # حفظ/تحميل الحالة
-│       ├── utils.rs                     # أدوات مساعدة
-│       ├── direct.rs                    # محلل URL المباشر (libcurl FFI)
-│       ├── diagnostics.rs              # تشخيص E2E
-│       ├── engine_capabilities.rs       # قدرات المحرك
-│       ├── telegram.rs                  # بوت تلغرام
-│       ├── ytdlp.rs                     # مدير عملية yt-dlp
-│       ├── static_files.rs             # خدمة الملفات الثابتة
-│       ├── curl/                       # 7 ملفات - دورة حياة التحميل
-│       ├── engine/                     # 19 ملفًا - محرك التحميل
-│       ├── adaptive/                   # 9 ملفات - التكيفي
-│       ├── resource_intelligence/      # 8 ملفات - استخبار الموارد
-│       ├── routes/                     # 9 ملفات - نقاط API
-│       └── external_tools/             # 10 ملفات - إدارة الأدوات الخارجية
-```
+نوفا هو مدير تحميل مبني على Tauri + Rust مع محرك تحميل داخلي يعتمد على libcurl عبر FFI خام (easy + multi)، وخادم HTTP محلي على `127.0.0.1` عبر axum، وإضافة متصفح. أُعيدت هندسة المحرك بشكل كبير مقارنةً بالتدقيق السابق: وحدة `daemon/adaptive/` القديمة حُذفت بالكامل، وتم توصيل `AdaptiveEngine` و `ResourceIntelligenceEngine` و `SelfHealer` و `PolicyEngine` بالتدفق الفعلي للتحميل.
+
+**الخلاصة العامة:** البنية الحالية سليمة بشكل ملحوظ في طبقات الدفاع الأساسية (تقييد المخططات، فحص SSRF عند الإنشاء، ترتيب الأقفال، اندماج الأجزاء). لم يُرصد أي خلل حرج (Critical) في النسخة الحالية. الرصد الأهم هو **ثغرة SSRF عبر إعادة التوجيه (redirect) وخدمات المرايا (mirrors)** في مسار التحميل الفعلي، حيث لا يُعاد التحقق من الهدف بعد أي redirect أو عند التحويل إلى mirror، ولا من سلسلة redirects الخاصة بـ RIE.
 
 ---
 
-## الكود الميت (Dead Code)
+## ملخص النتائج حسب الخطورة
 
-### المستوى الحرج
-
-| # | الموقع | الوصف | التأثير |
-|---|--------|-------|---------|
-| C1 | `daemon/engine/chunk_manager.rs` | الملف بأكمله `#[allow(dead_code)]` على `struct ChunkManager` و `impl` | وحدة كاملة ~150 سطرًا غير مستخدمة |
-| C2 | `daemon/engine/die_orchestrator.rs` | الملف بأكمله `#[allow(dead_code)]` على `struct DieOrchestrator` و `impl` | وحدة كاملة لا تفعل شيئًا سوى استدعاء ChunkManager |
-| C3 | `daemon/engine/adaptive/mod.rs` | `#![allow(dead_code)]` عالمي على مستوى الملفولم يتم تضمين أي من دوال الصيانات العامة | وحدة التكيف بالكامل غير متصلة |
-| C4 | `daemon/adaptive/mod.rs` | `#![allow(dead_code)]` عالمي | 9 ملفات غير متصلة تمامًا |
-| C5 | `daemon/adaptive/segment_controller.rs` | `allow(dead_code)` على `SegmentPlan`, `SegmentController` | نظام تجزئة كامل غير مستخدم |
-| C6 | `daemon/adaptive/disk_writer.rs` | `allow(dead_code)` عالمي | كاتب قرص غير متصل |
-| C7 | `daemon/adaptive/buffer_manager.rs` | `allow(dead_code)` على معظم الدوال | مدير مخازن مؤقتة غير متصل |
-| C8 | `daemon/adaptive/convergence.rs` | `allow(dead_code)` عالمي | كاشف تقارب غير متصل |
-| C9 | `daemon/adaptive/resource_monitor.rs` | `allow(dead_code)` عالمي | مراقب موارد غير متصل |
-| C10 | `daemon/adaptive/server_profiler.rs` | `allow(dead_code)` عالمي | ملف تعريف خادم غير متصل |
-| C11 | `daemon/adaptive/protocol_adapter.rs` | `allow(dead_code)` عالمي | مهايئ بروتوكول غير متصل |
-| C12 | `daemon/engine/adaptive_connections.rs` | `allow(dead_code)` على `AdaptiveConnections` | وحدة اتصالات تكيفية غير متصلة |
-
-### المستوى المتوسط
-
-| # | الموقع | الوصف |
-|---|--------|-------|
-| M1 | `daemon/state.rs:110` | `#[allow(dead_code)]` على حقل `adaptive_engine` في `AppState` |
-| M2 | `daemon/state.rs:133` | `#[allow(dead_code)]` على حقل `unified_profile_store` |
-| M3 | `daemon/state.rs:141` | `#[allow(dead_code)]` على حقل `self_healer` في `EngineState` |
-| M4 | `daemon/state.rs` | `shared_extractor_registry` تم تضمينه ولكنه لا يُستخدم في أي مسار استخدام فعلي |
-| M5 | `daemon/routes/engine.rs` | نقاط نهاية API لـ `engine/checksum` و `engine/chunk-manager` و `engine/scheduler` بدون متصل حقيقي |
-| M6 | `daemon/engine/config.rs` | `#[allow(dead_code)]` على `BandwidthConfig::dynamic_adjustment` و `BufferConfig::adaptive` |
-| M7 | `daemon/engine/thread_pool.rs:71` | `spawn()` public ولكن لا يُستخدم (يُستخدم `#[allow(dead_code)]`) |
-| M8 | `daemon/engine/resource_manager.rs` | `update_network()` و `current_memory_pressure()` مع `#[allow(dead_code)]` |
-| M9 | `daemon/resource_intelligence/retry_intel.rs` | `retry_decisions` field في `ResourceIntelligenceEngine` مع `#[allow(dead_code)]` |
-| M10 | `daemon/resource_intelligence/strategy.rs` | `MIRRORED` و `ADAPTIVE` و `AUTHENTICATED` استراتيجيات غير متصلة |
-| M11 | `daemon/engine/extractor.rs` | `SharedExtractorRegistry` تم تضمينه ولكنه لا يُستخدم (تم تسجيل extractor واحد فقط) |
-| M12 | `daemon/external_tools/process.rs` | كامل مع `#[allow(dead_code)]` |
-
-### إجمالي الكود الميت
-- **3 ملفات كاملة مع `#![allow(dead_code)]` عام**: `adaptive/mod.rs` و `adaptive/segment_controller.rs` و `adaptive/server_profiler.rs` و `adaptive/protocol_adapter.rs` و `adaptive/convergence.rs` و `adaptive/resource_monitor.rs` و `adaptive/disk_writer.rs`
-- **وحدتان كاملتان غير متصلتين**: `chunk_manager.rs` و `die_orchestrator.rs`
-- **9+ دوال وهياكل مع `#[allow(dead_code)]` موضعي**
-- **تقدير: ~40% من قاعدة كود المحرك غير مستخدم فعليًا**
+| المعرف | الخطورة | الموقع | الملخص |
+|--------|---------|--------|--------|
+| SEC-1 | عالية | `curl/transfer.rs:299-453,1273-1281` + `routes/downloads.rs:731-735` | الهدف بعد إعادة التوجيه لا يُعاد التحقق منه (SSRF) |
+| SEC-2 | متوسطة | `routes/downloads.rs:757-764` + `curl/transfer.rs:1494-1520` | حقن مرايا من رأس `Link` دون فحص SSRF، والتحويل إليها في failover دون فحص |
+| COR-1 | متوسطة | `curl/easy_config.rs:1197-1201` | تخصيص مساحة القرص لا يعمل فعليًا على NTFS (اختبار تجريبي مؤكد) |
+| SEC-3 | منخفضة | `curl/task_api.rs:405` | تحديث URL يستخدم الفحص غير المثبت DNS (TOCTOU) |
+| SEC-4 | منخفضة | `ytdlp.rs:949`, `routes/probes.rs:315/618/720` | فحوصات yt-dlp والبروبات غير مثبتة DNS |
+| COR-2 | منخفضة | `direct.rs:359` vs `engine/retry.rs:6` | نوعا `RetryPolicy` منفصلان مع منطق مختلف |
+| COR-3 | منخفضة | `direct.rs:425-426` | أي خطأ يحتوي `ssl`/`tls` يُعد عابرًا في `is_transient_error` |
+| CON-1 | منخفضة | `engine/thread_pool.rs:37-40` | ترتيب ذاكرة `Relaxed` على عدّاد العمال |
+| PERF-1 | منخفضة | `external_tools/installer.rs:208-214` | `block_in_place` + `block_on` |
+| DEAD-1 | منخفضة | `engine/chunk_manager.rs` | وحدة كاملة ميتة إنتاجيًا |
+| ARCH-1 | منخفضة | `engine/adaptive_connections.rs` + `engine/adaptive/mod.rs` | نظامان تكيفيان متوازيان يعملان معًا |
+| ARCH-2 | معلوماتية | `engine/plugin_api.rs:49` | `api_version` ثابتة بلا تحقق توافق |
 
 ---
 
-## مشاكل تزامن وسباق (Concurrency)
+## مشاكل أمان الشبكة (SSRF)
 
-### BUG-HIGH-1: تناقض ترتيب القفل (ميتة قفل محتملة)
-**الموقع:** `daemon/engine/profiles.rs:203-214`  
-**الوصف:** `active_profile()` يقفل `active_profile` ثم `profiles`. الدالة `set_active()` تقفل `active_profile` فقط. التعليق يقول "تجنب ABBA deadlock" لكن `ProfileManager` يستخدم قفلين مع ترتيب مختلف في طرق مختلفة.
+### SEC-1 — الهدف الفعلي بعد إعادة التوجيه لا يُعاد التحقق منه (عالية)
 
-### BUG-MED-1: قفل Mutex متعدد عبر `resource_manager.snapshot()`
-**الموقع:** `daemon/engine/adaptive/mod.rs:106` → `resource_monitor.rs:51`  
-**الوصف:** `sample()` يقفل `System` mutex (WinAPI). يتم الاحتفاظ بالقفل عبر استدعاءات دوال متعددة.
+**المواقع:**
+- `daemon/curl/transfer.rs:299-453` — `resolve_effective_target()` يتابع سلاسل HTTP redirects و meta-refresh (حتى 5 قفزات) بدون أي استدعاء `is_safe_target_url`.
+- `daemon/curl/transfer.rs:1273-1281` — `plan.url = effective_url` دون إعادة تحقق.
+- `daemon/routes/downloads.rs:731-735` — الهدف النهائي من سلسلة redirects الخاص بـ RIE يُكتب إلى `job.task.url` بعد فحص *المخطط* فقط (`supported_direct_url`).
+- `daemon/curl/task_api.rs:29-30` — تثبيت `--resolve host:port:ip` يغطي **host الأصل فقط**؛ أي host جديد بعد redirect يُحلّ DNS من جديد بحرية.
 
-### BUG-MED-2: Poisoned Mutex يتم تجاهله
-**الموقع:** `daemon/engine/extractor.rs:88-90`  
-**الوصف:** `shared.all()` يستخدم `.unwrap_or_default()` على mutex poisoned ← يعيد مصفوفة فارغة بصمت.
+**آلية الثغرة:** عند الإنشاء يُثبَّت host الأصل بالعنوان الخارجي (فحص صحيح). لكن إذا ردّ الخادم الخارجي بـ `302 Location: http://169.254.169.254/...` أو `http://127.0.0.1:8080/...`، فإن:
+1. محرك curl يتابع التوجيه (FOLLOWLOCATION مفعّل افتراضيًا، حد 20) ويحمّل من الهدف الداخلي ويكتب المحتوى إلى القرص؛
+2. مسار RIE (`background_resolve_and_start` → `state.rie.resolve`) يجري فحص HEAD/RANGE/GET على الهدف الداخلي بدون أي فحص SSRF في كامل وحدة `resource_intelligence/` (صفر استدعاءات `is_safe_target_url`).
 
-### BUG-MED-3: تنافس على Atomic في ThreadPool
-**الموقع:** `daemon/engine/thread_pool.rs:41-44`  
-**الوصف:** `fetch_add` مع `Relaxed` ← ترتيب الذاكرة ضعيف جدًا. لا يضمن رؤية `active_count` الصحيحة.
+**الأثر:** استخراج محتوى خدمات داخلية (بيانات تعريف السحابة، إعدادات الراوتر) إلى قرص المستخدم؛ وSSRF أعمى مع تسريب بيانات تعريفية (الحجم/etag/content-type/اسم الملف) من hosts داخلية. المسار العملي: صفحة ويب خبيثة تطلق تحميل متصفح لـ URL على خادم المهاجم يرد بـ 302 إلى عنوان داخلي؛ الإضافة تحوّل URL (الخارجي الآمن) إلى NOVA؛ الفحص المثبّت يمرّ (الخادم الأصلي خارجي) ثم تتبع NOVA التوجيه إلى الداخل.
 
-### BUG-LOW-1: Mutex مقفل عبر `.await`
-**الموقع:** `daemon/routes/external_tools.rs:42-44`  
-**الوصف:** `lock_or_err!` يمسك القفل، ثم `drop(manager)` يحرره. آمن حاليًا لكنه هش - إضافة `.await` قبله سيسبب ميتة قفل.
+**الإصلاح:** إعادة `is_safe_target_url_pinned(&effective_url)` بعد `resolve_effective_target` وقبل `run_libcurl_download`؛ ورفض أي redirect/meta-refresh إلى host داخلي؛ وإعادة الفحص المثبّت على `final_url` القادمة من RIE قبل كتابتها في `task.url`.
 
-### BUG-LOW-2: قفل Mutex في `telegram_notify`
-**الموقع:** `daemon/telegram.rs:449-454`  
-**الوصف:** يتم قفل `telegram_config` مباشرة بدلاً من استخدام `lock_or_err!`.
+### SEC-2 — حقن مرايا (mirrors) من رأس Link دون فحص، والتحويل إليها دون فحص (متوسطة)
 
----
+**المواقع:**
+- `daemon/routes/downloads.rs:757-764` — `link_mirrors` من `report.server_capabilities.link_mirrors` تُدخل في `direct_options` دون أي `is_safe_target_url`.
+- `daemon/curl/transfer.rs:1494-1520` — عند فشل التحميل تُسجَّل المرايا في `MirrorManager` ثم `plan.url = new_url` (failover) دون فحص SSRF.
+- `daemon/routes/downloads.rs:227,263-285` — المرايا القادمة من القواعد (`RuleAction::AddMirror`) تُسجَّل مباشرة دون فحص (الفحص الوحيد موجود في واجهة `/api/mirrors` فقط: `routes/engine.rs:797-800,1018-1019`).
 
-## مشاكل إدارة الذاكرة
+**الأثر:** خادم خارجي يمكنه الإعلان عن `Link: <http://127.0.0.1:...>; rel=duplicate` فيستقبلها NOVA كمرآة failover، ويحمّل منها عند فشل المصدر الأساسي دون أي تحقق من الوجهة.
 
-### BUG-HIGH-2: استخدام `unsafe` مع عدم التحقق من النتائج
-**الموقع:** `daemon/engine/resource_manager.rs:85-93`  
-**الوصف:** `unsafe { let mut status: MemoryStatusEx = mem::zeroed(); ... }` — عدم التحقق من صحة `dw_length` قبل الاستدعاء.
+**الإصلاح:** فحص كل mirror بـ `is_safe_target_url_pinned` عند الإدخال (سواء من البروب أو من القواعد) وعند الاستخدام في failover.
 
-### BUG-HIGH-3: عدم التحقق من حجم المخزن عند libcurl FFI
-**الموقع:** `daemon/curl/easy_config.rs`  
-**الوصف:** `setopt_raw_str` و `setopt_raw_ptr` تستدعي `CString::new(url).unwrap()` ← إذا احتوى الـ URL على `\0` داخلي، سينهار البرنامج.
+### SEC-3 — تحديث URL يستخدم الفحص غير المثبت DNS (منخفضة)
 
-### BUG-MED-4: `Vec::with_capacity` في `percent_decode_str` قد يكون غير دقيق
-**الموقع:** `daemon/routes/common.rs:309`  
-**الوصف:** الحجم المحجوز `bytes.len()` صحيح، ولكن الترميز إلى UTF-8 قد ينتج عنه بايتات أكثر.
+**الموقع:** `daemon/curl/task_api.rs:403-405` — `update_task_metadata()` يستخدم `is_safe_target_url(&parsed.normalized)` (غير المثبتة)، بينما مسار الإنشاء يستخدم `is_safe_target_url_pinned` (task_api.rs:30). نافذة DNS rebinding: تتحقق الدالة من العنوان، ثم يُحلّ DNS لاحقًا من جديد بواسطة libcurl.
 
-### BUG-LOW-3: `String::from_utf8_lossy` مع فقدان بيانات
-**الموقع:** متعدد - `daemon/diagnostics.rs:99`, `daemon/routes/extension.rs:619`  
-**الوصف:** استخدام `from_utf8_lossy` على خرج الأدوات الخارجية قد يفقد البيانات أو يبدلها.
+**الإصلاح:** استخدام `is_safe_target_url_pinned` في مسار التحديث أيضًا، وتحديث `resolve` entries في `direct_options`.
+
+### SEC-4 — فحوصات yt-dlp والبروبات غير مثبتة DNS (منخفضة)
+
+**المواقع:** `daemon/ytdlp.rs:949`، `daemon/routes/probes.rs:315,618,720` — كلها تستخدم النسخة غير المثبتة. طبيعة التحقق زمنية: يتم الفحص قبل أن يحلّ yt-dlp/curl DNS بنفسه. أثرها محدود لأن الخادم المنفذ للطلب النهائي يتحقق ضمنيًا عبر `validate_resolve_entry` في مسار curl، لكنها تبقى نقاط تحقق أضعف من المسار المثبت.
 
 ---
 
-## مشاكل أداء
+## مشاكل الصحة والاستمرارية (Correctness)
 
-### PERF-1: Busy-wait في `hidden_output_timed`
-**الموقع:** `daemon/routes/common.rs:48-70`  
-**الوصف:** حلقة `sleep(50ms)` تنتظر انتهاء العملية. هذه دالة محظورة (blocking) لذا لا تمنع المفاعل، لكنها تستنزف موارد النظام.
+### COR-1 — تخصيص مساحة القرص لا يعمل فعليًا على NTFS (متوسطة، اختبار تجريبي مؤكد)
 
-### PERF-2: `serde_json::from_str` متكرر على نفس البيانات
-**الموقع:** `daemon/engine/engine_capabilities.rs`  
-**الوصف:** يتم تحليل JSON لنتائج curl كل مرة بدلاً من التخزين المؤقت.
+**الموقع:** `daemon/curl/easy_config.rs:1197-1201` — عند `preallocate_bytes = Some(size)` يُستدعى `file.set_len(size)`.
 
-### PERF-3: `Duration::from_millis(50)` في حلقات التحديث
-**الموقع:** متعدد - `daemon/telegram.rs:243`, `daemon/external_tools/health.rs:125`  
-**الوصف:** حلقات استقصاء بفاصل 50ms تستهلك وحدة المعالجة بدون داع.
+**النتيجة التجريبية (Windows 10):** `File::set_len` يُترجم إلى `SetEndOfFile` على Windows الذي يمدّ الطول المنطقي فقط دون حجز كتل فعلية على NTFS. التخصيص المسبق «لا يمنع» نفاد القرص أثناء الكتابة، ووعد الميزة (منع فشل منتصف التحميل) لا يتحقق على NTFS. الكود الحالي يتعامل مع الأثر الجانبي (تضخّم الحجم الظاهري) عبر `effective_downloaded` (transfer.rs:690-721) و`f.set_len(0)` عند الخطأ (transfer.rs:864) — السلوك آمن من ناحية الفساد، لكنه لا يفي بالغرض المعلن.
 
-### PERF-4: تكرار قفل/فتح mutex في `discover_inner`
-**الموقع:** `daemon/external_tools/mod.rs:49-56`  
-**الوصف:** يتم فتح `registry` ثم فتح `resolver` بشكل منفصل بدلاً من الاحتفاظ بهما معًا.
+**الإصلاح:** على Windows استبدال بـ `SetFileValidData` (يتطلب `SeManageVolumePrivilege`) أو حذف التخصيص والاكتفاء بالتحقق من المساحة المتبقية قبل البدء.
 
-### PERF-5: `block_in_place` + `block_on` في `installer.rs`
-**الموقع:** `daemon/external_tools/installer.rs:52-53`  
-**الوصف:** استخدام `block_in_place` + `handle.block_on()` لطلبات HTTP — يمكن استخدام `reqwest::blocking` مباشرة.
+### COR-2 — نوعا `RetryPolicy` منفصلان (منخفضة)
+
+**المواقع:** `daemon/direct.rs:359` (المُستخدَم فعليًا في حلقة النقل: `transfer.rs:1241,1557` عبر `transfer_config.rs:373`) مقابل `daemon/engine/retry.rs:6` (المُستخدَم في `config.rs:91`, `profiles.rs:183`, `persist.rs:262`, `policy_engine.rs:328`).
+
+**الأثر:** منطقان مختلفان لإعادة المحاولة وتصنيف الأخطاء؛ أي إعداد في ملف التعريف يُخزَّن عبر `to_retry_policy()` قد لا يصل إلى الحلقة الفعلية بذات الدلالات. يتطلب توحيد النوعين على أساس واحد.
+
+### COR-3 — `is_transient_error` يعدّ أي خطأ يحوي `ssl`/`tls` عابرًا (منخفضة)
+
+**الموقع:** `daemon/direct.rs:425-426`. القائمة `permanent_ssl` (402-410) تستبعد بعض أخطاء الشهادات، لكن أي رسالة أخرى تحوي `ssl` أو `tls` (مثل أخطاء إصدار بروتوكول غير قابل للحل) تُعاد محاولتها. كما أن `is_permanent_error` (446-455) تُصنّف 500/501/504 دائمة بينما تُصنّف 502/503 عابرة في القائمة المقابلة — اتساق غير مضمون بين الدالتين.
 
 ---
 
-## مشاكل أمان الشبكة
+## مشاكل التزامن
 
-### SEC-1: مسار التحقق من SSRF غير مكتمل
-**الموقع:** `daemon/utils.rs`  
-**الوصف:** `is_safe_target_url` يتحقق من العناوين الخاصة ولكن قد لا يغطي جميع حالات DNS rebinding.
+### CON-1 — ترتيب ذاكرة `Relaxed` على عدّاد العمال (منخفضة)
 
-### SEC-2: كشف مسار الملف في رسائل الخطأ
-**الموقع:** `daemon/routes/downloads.rs`، `daemon/telegram.rs:516-518`  
-**الوصف:** رسائل الخطأ تكشف مسارات النظام (`path.to_string_lossy()`).
+**الموقع:** `daemon/engine/thread_pool.rs:37,40` — `fetch_add(1, Ordering::Relaxed)` / `fetch_sub(1, Ordering::Relaxed)`. الأثر معلوماتي فقط (`active_count`)، لكنه قد يُقرأ كقيمة قديمة. الإصلاح: `Acquire`/`Release`.
 
-### SEC-3: استخدام URL غير محقق في `telegram_api_url`
-**الموقع:** `daemon/telegram.rs:113-117`  
-**الوصف:** `normalize_api_base` يقوم بالتحقق، ولكن إذا فشل فإنه يعود إلى الـ URL الافتراضي بدلاً من إرجاع خطأ.
+**ملاحظات إيجابية في نفس الملف:**
+- قناة مستقلة لكل عامل (تعليق C-04) — لا تنازع على قناة استقبال واحدة (thread_pool.rs:26-30).
+- `catch_unwind` حول كل مهمة مع تسجيل الذعر (38-50) — لا يموت العامل.
+- توزيع round-robin مع إعادة محاولة إرسال عند امتلاء قناة (74-96).
 
-### SEC-4: `serde_json::from_str` في `ytdlp_probe_for_analyze` بدون حد للحجم
-**الموقع:** `daemon/routes/extension.rs:1211`  
-**الوصف:** يمكن أن يتسبب تحليل JSON خبيث في استهلاك ذاكرة غير محدود.
+### CON-2 — `active_count` و `spawn()` غير مستخدمين في الإنتاج
+
+**الموقع:** `thread_pool.rs:111` — `#[allow(dead_code)]` على `spawn()`. العمال يُدارون عبر `ResourceManager`، والدالة العامة للجدولة غير مستخدمة. لا يُعد خللًا بل كودًا ميتًا جزئيًا.
+
+### CON-3 — أقفال `ProfileManager` متسقة (تم التحقق — لا ثغرة)
+
+تم فحص الادعاء الوارد في تقرير سابق حول «ترتيب قفل غير متناسق» وثبت أنه **غير صحيح** في النسخة الحالية: `active_profile()` يقفل `active_profile` ثم `profiles` (profiles.rs:218-225)، و`set_active()` يقفل `active_profile` فقط (237)؛ لا يوجد مسار يقفل `profiles` أولًا، فلا يحدث ABBA.
+
+### CON-4 — ترتيب القفل `curl_jobs → task_snapshot` موثق ومطبق
+
+تأكد الالتزام به في: `task_api.rs:75-83` (الإنشاء)، `routes/downloads.rs:723` (التحديث الخلفي)، `transfer.rs:1306` (إعادة التسمية). لا يوجد مسار يقفل الترتيب المعاكس.
+
+### CON-5 — `event_bus` بسعة محدودة 100 حدث
+
+**الموقع:** `engine/event_bus.rs` (`EventBus::new_with_capacity(100)`)، ناشرون متعددون (persist.rs:252, mod.rs:274, routes/engine.rs:192/345/824, downloads.rs:237/277). بدون backpressure قد تُسقط أحداث تحت ضغط نشر مرتفع؛ الأثر تشغيلي (إشعارات مفقودة) وليس انهيارًا.
 
 ---
 
-## مشاكل libcurl (FFI الخام)
+## مشاكل إدارة الذاكرة وlibcurl FFI
 
-### CURL-1: `CString::new()` مع `unwrap()` ← panic على URL يحتوي NUL
-**الموقع:** `daemon/curl/easy_config.rs` — دوال `setopt_raw_str/ptr`
+| المعرف | الموقع | الوصف | الحالة |
+|--------|--------|-------|--------|
+| FFI-1 | `easy_config.rs:37-38` | `CString::new(value).map_err` — لا panic على NUL | **مُصلح** (كان panic) |
+| FFI-2 | `easy_config.rs:44-49` | فحص `CURLE_OK` مع تحرير الذاكرة عند الفشل | **مُصلح** |
+| FFI-3 | `direct.rs:70-72` | `set_url` يعالج NUL بـ `map_err` | سليم |
+| FFI-4 | `resource_manager.rs:85-93` | `unsafe` مع `MemoryStatusEx::zeroed()` — التحقق من `dw_length` قبل الاستدعاء | قائم (ينخفض لأنه يُملأ قبل الاستدعاء) |
+| FFI-5 | `easy_config.rs:39-43` | تسريب مقصود لـ `CString` لضمان عمر المؤشر — مع تحريره عند فشل libcurl | مقبول وموثق |
 
-### CURL-2: `curl_easy_setopt` يمكن أن يفشل بصمت
-**الموقع:** `daemon/curl/easy_config.rs`  
-**الوصف:** دوال `setopt_*` لا تتحقق من كود الخطأ CURLcode في معظم الحالات.
+**ملاحظة عامة:** طبقة FFI الحالية أفضل بكثير من التقرير السابق؛ كل `CString::new` في مسار easy config تمر عبر `map_err`، وكل `curl_easy_setopt` يفحص رمز الخطأ.
 
-### CURL-3: لا يوجد معالج لأخطاء `curl_multi_info_read`
-**الموقع:** `daemon/curl/multi.rs`  
-**الوصف:** قراءة رسائل الخطأ من multi handle بدون تحقق من كود CURLMsg.
+---
 
-### CURL-4: `curl_share_handle` بدون تكوين
-**الموقع:** `daemon/curl/mod.rs`  
-**الوصف:** يتم إنشاء share handle ولكن لا يتم تكوين مشاركة DNS/SSL session.
+## مشاكل الأداء
 
-### CURL-5: عدم استخدام HTTP/2 أو HTTP/3
-**الموقع:** `daemon/curl/easy_config.rs`  
-**الوصف:** لم يتم تعيين `CURLOPT_HTTP_VERSION` ← سيستخدم HTTP/1.1 افتراضيًا.
+### PERF-1 — `block_in_place` + `block_on` في التثبيت (منخفضة)
+
+**الموقع:** `external_tools/installer.rs:208-214`. الطلب عبر HTTP يُنفَّذ داخل `block_in_place(|| handle.block_on(...))` — غير محظور لكنه يشغّل عمال الـ async runtime بشكل أقل كفاءة من `reqwest::blocking`.
+
+### PERF-2 — حلقة انتظار نشطة في `hidden_output_timed`
+
+**الموقع:** `routes/common.rs:48-70` — حلقة `sleep(50ms)` تنتظر انتهاء عملية خارجية. دالة محظورة (لا تمنع المفاعل) لكنها تستهلك دورة فحص؛ الأثر منخفض.
+
+### PERF-3 — تصميم جيد يستحق الذكر
+
+- SSE بمعدل 250ms مع التزامية كاملة (SSE heartbeat 10s، إعادة مزامنة كاملة كل 60 ثانية) — downloads.rs:55-142.
+- `preflight_resolved` يمنع ازدواج الفحص (RIE ثم curl) — transfer.rs:323-334.
+- استعلام القدرات في `/api/health` عبر `spawn_blocking` — downloads.rs:33.
+- `MAX_TASKS = 10_000` يمنع نمو غير محدود — task_api.rs:15,78.
+
+---
+
+## الكود الميت (المُصحح)
+
+الادعاء الوارد في التقرير السابق بأن «~40% من قاعدة الكود ميت وكل الأنظمة التكيفية غير متصلة» **لم يعد صحيحًا**. الواقع الحالي (بعد الفحص السطري):
+
+| المعرف | الموقع | الوصف | الحالة |
+|--------|--------|-------|--------|
+| DEAD-1 | `engine/chunk_manager.rs` | `ChunkManager` + `SlidingWindow` + `recommend_chunk_size` + `update_remaining_bytes` — لا مستهلك في الإنتاج (بحث شامل: لا استدعاء خارج الاختبارات) | ميت تمامًا |
+| DEAD-2 | `engine/self_healing.rs` | 10 مواضع `allow(dead_code)` (حقول/دوال) — لكن `SelfHealer` نفسه موصول (transfer.rs:1443-1479) | جزئي |
+| DEAD-3 | `engine/resource_manager.rs` | `allow(dead_code)` عند 51,57,77,93 | جزئي |
+| DEAD-4 | `engine/retry.rs:80` | حقل واحد | جزئي |
+| DEAD-5 | `engine/event_bus.rs:364` | دالة واحدة | جزئي |
+| DEAD-6 | `resource_intelligence/mod.rs:166` | `minimal_resolve` | جزئي |
+| DEAD-7 | `external_tools/` | `types.rs:28,226-316` (8 مواضع)، `registry.rs:8`، `mod.rs:304,310`، `health.rs:10,176`، `capabilities.rs:86-124` (4 مواضع) | جزئي |
+
+**الملاحظات التصحيحية:**
+- `engine/adaptive/resource_monitor.rs:36-42` تستخدم `cfg_attr(not(target_os = "windows"), allow(dead_code))` — هذا ليس كودًا ميتًا، بل حقول Windows-only مُعلَّمة لأجل builds غير Windows. **سليم**.
+- وحدة `engine/adaptive/` موصولة بالكامل: `AdaptiveEngine` في `state.rs:39`، إنشاؤه في `transfer.rs:984`، وتحديث تقدم الأجزاء في `transfer.rs:1134-1141` عبر `segment_ctrl.update_progress`.
+- `AdaptiveConnectionManager` موصول: `tracker.adaptive.report_speed` في `transfer.rs:493` وإنشاء عند `transfer.rs:1029`.
+- `checksum.rs` موصول: واجهات تحقق في `routes/engine.rs:728-746` وفحص SHA-256 بعد الاكتمال في `transfer.rs:1381-1384`.
+- `scheduler.rs` موصول عبر مؤشر ترابط المجدول في `daemon/mod.rs` مع تقييد `power_commands_enabled` على إجراءات Shutdown/Sleep.
 
 ---
 
 ## مشاكل معمارية
 
-### ARCH-1: وحدتان تكيفيتان منفصلتان غير متصلتين
-- `daemon/engine/adaptive/` و `daemon/adaptive/` — نسختان منفصلتان من نظام التحميل التكيفي، كلتاهما `#[allow(dead_code)]`
-- لا يوجد كود يربط أيًا منهما بمحرك التحميل الفعلي
+### ARCH-1 — نظامان تكيفيان متوازيان يعملان معًا (منخفضة)
 
-### ARCH-2: ازدواجية تامة بين `engine/adaptive/` و `adaptive/`
-- كلا الوحدتين تحتويان على ملفات متطابقة وظيفيًا:
-  - `segment_controller.rs` في كليهما
-  - `buffer_manager.rs` في engine/adaptive فقط
-  - `disk_writer.rs` في engine/adaptive فقط
-  - `convergence.rs` في engine/adaptive فقط
-  - إلخ.
+- `engine/adaptive_connections.rs::AdaptiveConnectionManager` (عدّادات ذرية، يضبط الاتصالات الكلية) و`engine/adaptive/mod.rs::AdaptiveEngine` (SegmentController عبر `segment_ctrl.update_progress`) كلاهما نشط في نفس حلقة التحميل. الحدود بين مسؤولية كل منهما غير موثقة؛ خطر تضارب القرارات (أحدهما يرفع الاتصالات والآخر يخفضها).
 
-### ARCH-3: `EngineState` ← `AppState` هرمية أحادية
-- معظم الأنظمة (`SharedState`) تعيش في `Arc<Mutex<...>>` واحدة → قفل واحد يمنع النظام بأكمله
-- لا يوجد تقسيم إلى أقفال دقيقة (fine-grained locks)
+### ARCH-2 — مخزنان منفصلان لملفات تعريف الخوادم (منخفضة)
 
-### ARCH-4: جهازي استراتيجية منفصلين
-- `resource_intelligence/strategy.rs` يحلل الاستراتيجية الموصى بها
-- `engine/adaptive_connections.rs` يحسب الاتصالات التكيفية
-- `policy_engine.rs` يتخذ القرارات النهائية
-- لا يوجد تنسيق بين الثلاثة
+- `resource_intelligence/stability.rs::ServerProfileStore` (داخل `state.rie`) مقابل `engine/adaptive/profile_store.rs::UnifiedProfileStore` (داخل `DieOrchestrator`). قراءة واحدة لمسار التحميل تقرأ الأول (transfer.rs:87-102) بينما يسجّل الثاني (record_preflight/record_telemetry). لا يوجد تبادل بين المخزنين رغم تطابق الغرض.
 
-### ARCH-5: `PluginApi` مع `api_version` ثابتة
-**الموقع:** `daemon/engine/plugin_api.rs:49`  
-**الوصف:** نسخة API مثبتة كسلسلة نصية (`"1.0.0"`) — لا يوجد تحقق فعلي من التوافق.
+### ARCH-3 — `RetryPolicy` مكرر
+
+انظر COR-2 — نوعان بنفس الاسم بمنطق مختلف.
+
+### ARCH-4 — `api_version` ثابتة (معلوماتية)
+
+**الموقع:** `engine/plugin_api.rs:49,190` — `api_version: "1.0.0"` مثبتة نصيًا بلا تحقق توافق فعلي عند التحميل.
+
+### ARCH-5 — `DynamicSegmentScheduler::new` مع `_max_segments` محجوز وغير مستخدم
+
+**الموقع:** `engine/dynamic_segments.rs` — المعامل الثالث لا يُستخدم (محجوز للمستقبل). إشارة إلى إعادة تصميم متوقعة لنظام التجزئة.
 
 ---
 
-## تضخم الكود والازدواجية
+## نقاط القوة المؤكدة
 
-### DUP-1: ملفان `segment_controller.rs`
-- `daemon/engine/adaptive/segment_controller.rs` (347 سطرًا)
-- `daemon/adaptive/segment_controller.rs` (~300 سطر)
-- كود متطابق وظيفيًا مع `#[allow(dead_code)]` على كليهما
-
-### DUP-2: `hidden_command` و `hidden_output` مكرران
-- `daemon/routes/common.rs:20-30` — `hidden_command()` و `hidden_output()`
-- `daemon/external_tools/process.rs:24-29` — نفس النمط
-
-### DUP-3: `hex_pair_to_byte` محدد محليًا
-**الموقع:** `daemon/routes/common.rs:348-358`  
-**الوصف:** يوجد `hex_pair_to_byte` محلي في `common.rs` بدلاً من مكتبة قياسية (`hex` crate).
+| المعرف | الموقع | الوصف |
+|--------|--------|-------|
+| POS-1 | `direct.rs:136-183` | `DirectUrl::parse` يرفض أي مخطط خارج (http/https/ftp/ftps/sftp/scp)، ويرفض أي URL يبدأ بـ `-` (حماية من حقن flags). |
+| POS-2 | `utils.rs:35-94,155-193` + `task_api.rs:30` | طبقة SSRF ثلاثية: فحص، فحص مثبّت DNS (يرجع IP + resolve entry)، وفحص entries الخاصة بـ `--resolve/--connect-to`. |
+| POS-3 | `utils.rs:696` + `resource_intelligence/mod.rs:188-194` + `curl/args.rs:96` | فحص URLs الخاصة بالبروكسيات قبل استخدامها ورفضها عند عدم الأمان. |
+| POS-4 | `direct.rs:295-355` | `merge_parts`: فحص حجم كل جزء قبل النسخ، ملف مؤقت باسم عشوائي (لا تعارض)، `sync_all` للملف والمجلد، `rename` آمن، والتحقق النهائي من الحجم، مع تنظيف الأجزاء. |
+| POS-5 | `direct.rs:432-456` | `is_permanent_error` يستثني تحديات Cloudflare/anti-bot (403) من التصنيف الدائم؛ و`ssrf blocked` يُعد دائمًا (لا إعادة محاولة). |
+| POS-6 | `transfer.rs:323-334` | تخطي الفحص المسبق عند نجاح RIE — يمنع ازدواج الفحص ويحافظ على حالة الجلسة. |
+| POS-7 | `transfer.rs:1246` | `learned_host_ceiling == Some(1)` يعطل التجزئة فورًا للـ hosts التي فشلت معها — تكيف ذكي بلا hosts مبرمجة. |
+| POS-8 | `engine/scheduler.rs:59,71-79` | إجراءات Shutdown/Sleep مقيدة بـ `power_commands_enabled` (افتراضيًا معطلة). |
+| POS-9 | `task_api.rs:15,78` | سقف `MAX_TASKS = 10_000` مع إدخال ذري بين قفلين. |
+| POS-10 | `transfer.rs:1381-1384` + `routes/engine.rs:728-746` | تحقق SHA-256 بعد الاكتمال وواجهات تحقق يدوية مع كشف تلقائي للخوارزمية. |
+| POS-11 | `engine/metadata_cache.rs` | TTL 3600s وحد أقصى 2048 مدخلًا — منع نمو غير محدود للذاكرة. |
+| POS-12 | `daemon/mod.rs:445-462` | حارس يمنع النواة الأصلية من الوصول إلى أي عنوان غير loopback عند بدء التشغيل. |
 
 ---
 
-## خرائط التدفق
+## تصحيحات لتقرير سابق
 
-### خريطة تدفق تنفيذ الخادم
-
-```
-main.rs
-  └─ panic_hook()
-  └─ config file → EngineConfig (OnceLock)
-  └─ lib.rs::run()
-       ├─ port_scan() → find_available_port()
-       ├─ daemon::setup_server()
-       │    ├─ AppState::new()
-       │    │    ├─ BandwidthManager, MetadataCache, ExtractorRegistry
-       │    │    ├─ ExternalToolManager (ffmpeg + yt-dlp)
-       │    │    ├─ ProfileManager (4 builtins)
-       │    │    ├─ ResourceIntelligenceEngine
-       │    │    ├─ DownloadRuleEngine
-       │    │    └─ PluginApi
-       │    ├─ register_routes()
-       │    │    ├─ /api/downloads/* (CRUD)
-       │    │    ├─ /api/engine/* (capabilities, mirrors, rules)
-       │    │    ├─ /api/probes/* (HEAD/GET probes)
-       │    │    ├─ /api/diagnostics
-       │    │    ├─ /api/dns/ping-all
-       │    │    ├─ /api/telegram/*
-       │    │    ├─ /api/external-tools/*
-       │    │    ├─ /api/browser-extension/*
-       │    │    ├─ /v1/* (protocol v1 for extension)
-       │    │    └─ /* (SPA fallback)
-       │    ├─ start_telegram_bot() [blocking thread]
-       │    └─ scheduler loop [blocking thread]
-       └─ axum::serve() on found port
-```
-
-### خريطة تدفق التحميل (Download Lifecycle)
-
-```
-HTTP POST /api/downloads
-  │
-  ├─ download_body 검증
-  ├─ extractor_registry.validate() → curl / yt-dlp
-  │
-  ├─ [curl] create_curl_task()
-  │    ├─ DirectDownloadPlan (url, segments, config)
-  │    ├─ CurlMultiGuard 생성 (multi handle)
-  │    ├─ CurlTransferConfig (proxy, TLS, speed)
-  │    ├─ curl_multi_add_handle() for each segment
-  │    ├─ event_bus → "download.added"
-  │    └─ Task struct { status: "downloading", ... }
-  │
-  ├─ transfer loop (CurlMultiGuard::poll)
-  │    ├─ curl_multi_perform()
-  │    ├─ curl_multi_info_read() → completed/failed
-  │    ├─ progress callback → downloaded_bytes
-  │    ├─ disk_writer (direct I/O — no buffering)
-  │    ├─ retry loop (max_retries, backoff, jitter)
-  │    └─ event_bus → "download.progress"
-  │
-  └─ [complete]
-       ├─ checksum verify (SHA256/SHA1/MD5)
-       ├─ merge segments (if segmented)
-       ├─ event_bus → "download.completed"
-       └─ task.status = "completed"
-
-Hooks:
-  ├─ Pause: curl_multi_pause → task.status = "paused"
-  ├─ Resume: curl_multi_resume → task.status = "downloading"
-  └─ Cancel: curl_multi_remove_handle → task.status = "cancelled"
-```
-
-### خريطة تبعيات الوحدات
-
-```
-  main.rs
-    └─ lib.rs
-         ├─ daemon/mod.rs
-         │    ├─ state.rs ──────────────────────────────┐
-         │    ├─ types.rs ←─────────────────────────────┤
-         │    ├─ utils.rs ←─────────────────────────────┤
-         │    ├─ direct.rs → libcurl FFI                │
-         │    ├─ diagnostics.rs                         │
-         │    ├─ engine_capabilities.rs                 │
-         │    ├─ telegram.rs → curl module              │
-         │    ├─ ytdlp.rs                               │
-         │    ├─ persist.rs                             │
-         │    ├─ curl/ ─────────────────────────────────┤
-         │    │    ├─ easy_config.rs → raw libcurl FFI  │
-         │    │    ├─ transfer_config.rs                 │
-         │    │    ├─ transfer.rs                        │
-         │    │    ├─ multi.rs                           │
-         │    │    ├─ task_api.rs                        │
-         │    │    └─ args.rs                            │
-         │    ├─ engine/ ───────────────────────────────┤
-         │    │    ├─ config.rs (OnceLock)               │
-         │    │    ├─ bandwidth.rs                       │
-         │    │    ├─ scheduler.rs                       │
-         │    │    ├─ event_bus.rs                       │
-         │    │    ├─ {chunk_manager, die_orchestrator}  │
-         │    │    │    ← DEAD CODE                      │
-         │    │    ├─ {rules, profiles, extractor}       │
-         │    │    ├─ {retry, priority_queue, checksum}  │
-         │    │    ├─ {mirror, self_healing}             │
-         │    │    └─ adaptive/ ← DEAD CODE             │
-         │    ├─ adaptive/ ← DUPLICATE DEAD CODE        │
-         │    │    └─ profile_store.rs                   │
-         │    ├─ resource_intelligence/ ────────────────┤
-         │    │    ├─ mod.rs (3-stage pipeline)          │
-         │    │    └─ url_intel.rs                       │
-         │    ├─ routes/ ───────────────────────────────┤
-         │    │    ├─ downloads.rs (CRUD + SSE)          │
-         │    │    ├─ engine.rs (capabilities)           │
-         │    │    ├─ probes.rs (HEAD/GET)               │
-         │    │    ├─ diagnostics.rs                     │
-         │    │    ├─ extension.rs (v1 protocol)         │
-         │    │    └─ external_tools (API endpoints)     │
-         │    └─ external_tools/ ────────────────────────┤
-         │         ├─ mod.rs (ExternalToolManager)        │
-         │         ├─ discovery.rs, health.rs             │
-         │         ├─ installer.rs, registry.rs           │
-         │         └─ tools/{ffmpeg, yt_dlp}.rs          │
-         └─ native_host.rs
-```
+| الادعاء السابق | الموقع المدّعى | الحكم في النسخة الحالية |
+|----------------|----------------|--------------------------|
+| «~40% من قاعدة الكود ميت؛ الأنظمة التكيفية والاستخبارية غير متصلة» | تقرير 29 يوليو | **خطأ.** `AdaptiveEngine`, `AdaptiveConnectionManager`, `SelfHealer`, `PolicyEngine`, `RIE`, `scheduler`, `checksum` كلها موصولة بالتدفق الفعلي. |
+| «`daemon/adaptive/` و `disk_writer.rs` نسخة مكررة» | ARCH-2/DUP-1 | **انتهى.** المجلد حُذف؛ توجد فقط `engine/adaptive/` بلا `disk_writer.rs`. |
+| «ترتيب قفل غير متناسق في ProfileManager (ميتة قفل محتملة)» | BUG-HIGH-1 | **خطأ.** الترتيب موحد `active_profile → profiles` وموثق (profiles.rs:234-236). |
+| «`CString::new(url).unwrap()` → panic» | CURL-1 | **مُصلح.** `map_err` (easy_config.rs:37-38). |
+| «`setopt_*` لا يفحص CURLcode» | CURL-2 | **مُصلح.** فحص `CURLE_OK` + تحرير عند الفشل (easy_config.rs:44-49). |
+| «`adaptive_engine` حقل allow(dead_code)» | state.rs:110 | **خطأ.** مستخدم في الإنشاء والتحديث (transfer.rs:984,1134-1141). |
 
 ---
 
 ## قائمة الأولويات للتصليح
 
-### فوري (P0) — يمنع التشغيل أو يسبب أعطالًا
+### عالية (P0)
 
 | # | الموقع | المشكلة | الإجراء |
 |---|--------|---------|---------|
-| P0-1 | `easy_config.rs` | `CString::new(url).unwrap()` ← panic على NUL bytes | استبدال بـ `CString::new(url).map_err()` |
-| P0-2 | `resource_manager.rs:85` | `unsafe` بدون تحقق من قيم الهيكل | إضافة تحقق من `dw_length` ودالة آمنة |
-| P0-3 | `profiles.rs:203-214` | ترتيب قفل غير متناسق | توحيد ترتيب الأقفال عبر ProfileManager بأكمله |
+| P0-1 | `transfer.rs` + `downloads.rs:731-735` | الهدف بعد redirect و`final_url` القادمة من RIE لا يُعاد فحصهما | `is_safe_target_url_pinned` قبل الالتزام بالنقل |
+| P0-2 | `downloads.rs:757-764` + `transfer.rs:1494-1520` | مرايا Link/Rule غير مفحصه وتُستخدم في failover | فحص كل mirror عند الإدخال وعند الاستخدام |
 
-### عالي (P1) — يسبب مشاكل في الإنتاج
-
-| # | الموقع | المشكلة | الإجراء |
-|---|--------|---------|---------|
-| P1-1 | `adaptive/*.rs` + `engine/adaptive/*.rs` | 18 ملف كود ميت مكرر | حذف النسخة المكررة (`adaptive/`)، توصيل `engine/adaptive/` بالتدفق الفعلي OR حذف الكل |
-| P1-2 | `chunk_manager.rs`, `die_orchestrator.rs` | ~300 سطر كود ميت | حذف الملفين بالكامل |
-| P1-3 | `curl/easy_config.rs` | `setopt_*` بدون تحقق من CURLcode | إضافة معالجة أخطاء |
-| P1-4 | `curl/multi.rs` | `curl_multi_info_read` بدون تحقق | إضافة معالجة رسائل الخطأ |
-| P1-5 | `routes/extension.rs:1211` | JSON parse بدون حد للحجم | استخدام `serde_json::from_reader` مع حد |
-
-### متوسط (P2) — يحسن الاستقرار والأداء
+### متوسطة (P1)
 
 | # | الموقع | المشكلة | الإجراء |
 |---|--------|---------|---------|
-| P2-1 | `engine/mod.rs` | وحدة التكيف (adaptive) غير متصلة بالتدفق | ربط AdaptiveEngine مع CurlMultiGuard |
-| P2-2 | `routes/common.rs:48-70` | Busy-wait في `hidden_output_timed` | استبدال بـ `std::sync::mpsc` + child wait |
-| P2-3 | `thread_pool.rs:41` | Atomic `Relaxed` | استخدام `Acquire`/`Release` لضمان الرؤية |
-| P2-4 | `external_tools/installer.rs` | `block_in_place` + `block_on` | استخدام `reqwest::blocking` مباشرة |
-| P2-5 | `telegram.rs:449-454` | قفل مباشر لـ Mutex | استخدام `lock_or_err!` |
-| P2-6 | `rules.rs:75-77` | `regex::Regex::new(pattern).ok()` يفشل بصمت | تسجيل تحذير عند فشل compile الـ regex |
+| P1-1 | `easy_config.rs:1197-1201` | تخصيص القرص لا يعمل على NTFS | `SetFileValidData` بصلاحية، أو فحص المساحة بدلًا من «التخصيص» |
+| P1-2 | `direct.rs:359` / `engine/retry.rs:6` | نوعا RetryPolicy منفصلان | توحيد النوع وتغذية الحلقة الفعلية من ملفات التعريف |
+| P1-3 | `task_api.rs:405` | فحص غير مثبت في تحديث URL | استخدام النسخة المثبتة وتحديث resolve entries |
 
-### منخفض (P3) — تحسينات نظافة الكود
+### منخفضة (P2)
 
 | # | الموقع | المشكلة | الإجراء |
 |---|--------|---------|---------|
-| P3-1 | `routes/common.rs:348` | `hex_pair_to_byte` مكرر | استيراد من crate `hex` |
-| P3-2 | `types.rs:226-244` | `InstallProgress` و `InstallPhase` و `ToolSource` و `PlatformPattern` مع `#[allow(dead_code)]` | حذف أو توصيل |
-| P3-3 | `resource_intelligence/retry_intel.rs` | `retry_decisions` غير مستخدم | حذف الحقل |
-| P3-4 | `engine_capabilities.rs` | تخزين مؤقت للنتائج | إضافة `OnceLock` أو `MetadataCache` |
-| P3-5 | `diagnostics.rs:134-211` | `test_ssl_cert` لا يعمل على Windows بشكل موثوق | تحسين أو إزالة |
+| P2-1 | `thread_pool.rs:37-40` | `Relaxed` على العدّاد | `Acquire`/`Release` |
+| P2-2 | `direct.rs:425-426` | `ssl`/`tls` في `is_transient_error` | تضييق القائمة إلى أنماط قابلة للاسترداد فعليًا |
+| P2-3 | `chunk_manager.rs` | وحدة ميتة إنتاجيًا | حذفها أو نقلها لاختبارات فقط |
+| P2-4 | `external_tools/installer.rs:208-214` | `block_in_place`+`block_on` | `reqwest::blocking` |
+| P2-5 | `engine/adaptive_connections.rs` vs `engine/adaptive/mod.rs` | نظامان تكيفيان | توثيق الحدود أو الدمج |
+| P2-6 | `plugin_api.rs:49` | `api_version` ثابتة | تحقق فعلي من التوافق |
 
 ---
 
-## ملخص إحصائي
+## الملخص الإحصائي والحكم النهائي
 
-| الفئة | العدد | الخطورة |
-|-------|-------|---------|
-| كود ميت (ملفات كاملة) | 3 وحدات (~18 ملف) | عالية — يضلل المطورين ويصعب الصيانة |
-| كود ميت (دوال/حقول) | 25+ | متوسطة |
-| مشاكل تزامن | 5 | 1 عالية، 2 متوسطة، 2 منخفضة |
-| مشاكل libcurl FFI | 5 | 2 عالية، 3 متوسطة |
-| مشاكل أمان | 4 | متوسطة |
-| مشاكل أداء | 5 | متوسطة |
-| ازدواجية | 3 | متوسطة |
-| مشاكل معمارية | 5 | عالية |
+| الفئة | العدد | الخطورة الغالبة |
+|-------|-------|------------------|
+| SSRF (توجيه/مرايا) | 2 | عالية/متوسطة |
+| صحة (preallocation, retry) | 3 | متوسطة/منخفضة |
+| تزامن | 2 | منخفضة |
+| أداء | 2 | منخفضة |
+| كود ميت | 1 ملف كامل + 6 جزئي | منخفضة |
+| معمارية | 5 | منخفضة/معلوماتية |
+| خلل حرج (Critical) | 0 | — |
+| خلل عالٍ | 1 | — |
 
-**التقدير الإجمالي:** ~40% من قاعدة الكود إما كود ميت أو مكرر. النظام يعمل حاليًا عبر curl module + yt-dlp module فقط — جميع الأنظمة التكيفية والاستخبارية غير متصلة.
+**الحكم النهائي:** النسخة الحالية من المحرك متصلة فعليًا (خلافًا لتقرير يوليو) وتلتزم بضوابط أمنية جيدة عند الإنشاء. الثغرة الوحيدة ذات الأثر الواقعي هي غياب إعادة التحقق من الوجهة بعد إعادة التوجيه وعند المرايا — يجب معالجتها قبل اعتبار طبقة أمان الشبكة مكتملة. بقية الملاحظات تحسينية ولا تمنع التشغيل.
