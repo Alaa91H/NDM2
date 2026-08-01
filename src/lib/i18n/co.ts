@@ -1240,4 +1240,8 @@ export const co: Record<string, string> = {
   'settings_logging_autoscroll': 'Auto-scroll',
   'settings_logging_buffer': 'Buffer',
   'settings_logging_empty': 'No log entries yet. Logs appear when the application performs actions.',
+  'settings_logging_saved_title': 'Logs Saved',
+  'settings_logging_saved_msg': 'Application logs were saved to the selected location.',
+  'settings_logging_save_error': 'Save Failed',
+  'settings_logging_save_error_msg': 'Could not save the log file to the selected location.',
 };
