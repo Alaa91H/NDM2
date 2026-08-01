@@ -969,7 +969,9 @@ async function request<T>(path: string, init?: RequestInit, timeoutMs = 2500): P
   logger.debug('NovaClient', `${method} ${path}`);
   const doFetch = async (abortSignal?: AbortSignal): Promise<T> => {
     const controller = new AbortController();
-    const timer = window.setTimeout(() => {
+    // Use globalThis so request() also works in non-browser environments
+    // (Node/workers) — window is undefined there.
+    const timer = globalThis.setTimeout(() => {
       controller.abort();
     }, timeoutMs);
 
@@ -1007,7 +1009,7 @@ async function request<T>(path: string, init?: RequestInit, timeoutMs = 2500): P
       }
       return (await response.json()) as T;
     } finally {
-      window.clearTimeout(timer);
+      globalThis.clearTimeout(timer);
       detachExternalAbort?.();
     }
   };

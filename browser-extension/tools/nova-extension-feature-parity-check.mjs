@@ -1,4 +1,5 @@
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 
 const failures = [];
 const read = (path) => readFileSync(path, 'utf8');
@@ -10,6 +11,22 @@ const requireIncludes = (path, needle, label = needle) => {
   const body = requireFile(path);
   if (!body.includes(needle)) failures.push(`${path}: missing ${label}`);
 };
+
+// Phase 7: locale files must not contain U+FFFD replacement characters —
+// they indicate mojibake from a broken encoding (e.g. pl.ts historically had
+// `wysy�,a�?` instead of `wysyłać`). pl.ts is fixed; remaining locales are
+// tracked as a documented follow-up, so this is a warning, not a failure.
+const localeDir = 'src/i18n/locales';
+if (existsSync(localeDir)) {
+  for (const file of readdirSync(localeDir).filter((f) => f.endsWith('.ts'))) {
+    const body = read(join(localeDir, file));
+    if (body.includes('\uFFFD')) {
+      console.warn(
+        `[locale-encoding] ${join(localeDir, file)}: contains U+FFFD replacement characters (broken encoding) — tracked in REPAIR_COVERAGE`,
+      );
+    }
+  }
+}
 
 requireIncludes('src/profiles/aggressive-capture-profile.ts', 'aggressive', 'aggressive capture profile');
 requireIncludes('src/content/page-tap-main.ts', 'patchFetch', 'fetch interception');

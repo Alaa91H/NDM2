@@ -165,6 +165,24 @@ describe('novaClient request (REPAIR 0.3)', () => {
     expect(message).toContain('Aborted');
     vi.useRealTimers();
   });
+
+  it('works without window (non-browser environment)', async () => {
+    // Phase 7: request() must not touch `window` — it should work in Node,
+    // workers, or any non-browser host.
+    const windowRef = globalThis.window;
+    delete (globalThis as Record<string, unknown>).window;
+    try {
+      const fetchMock = vi.fn().mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ status: 'connected' }),
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const result = await novaClient.health();
+      expect(result).toEqual({ status: 'connected' });
+    } finally {
+      (globalThis as Record<string, unknown>).window = windowRef;
+    }
+  });
 });
 
 describe('novaClient streamDownloads delta merge (REPAIR 0.3)', () => {

@@ -25,6 +25,16 @@ export const bridgeStore = create<BridgeState>()((set) => ({
     set({ ...b, isDegradedMode: b.status === 'degraded' });
   },
   setIsDegradedMode: (d) => {
-    set({ isDegradedMode: d });
+    // Keep status and the derived flag in sync: turning degraded mode on
+    // sets status='degraded'; turning it off only restores 'connected' if the
+    // status was degraded (never clobber a real 'disconnected').
+    set((state) => ({
+      isDegradedMode: d,
+      status: d
+        ? 'degraded'
+        : state.status === 'degraded'
+          ? 'connected'
+          : state.status,
+    }));
   },
 }));

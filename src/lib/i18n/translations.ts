@@ -285,8 +285,21 @@ export async function loadLanguage(lang: string): Promise<void> {
   const code = normalizeLanguage(lang);
   if (cache[code]) return;
   const module = await loaders[code]();
-  const dict = Object.values(module).find((value) => value && typeof value === 'object');
-  if (dict) cache[code] = dict as Record<string, string>;
+  // Pick the dictionary explicitly: prefer the named export matching the
+  // locale (e.g. `export const ar = {...}`), then `default`, then any plain
+  // object — but never the module namespace itself (`__esModule`).
+  const dict =
+    (module as Record<string, unknown>)[code] ??
+    (module as Record<string, unknown>).default ??
+    Object.values(module).find(
+      (value) =>
+        value &&
+        typeof value === 'object' &&
+        !Object.prototype.hasOwnProperty.call(value, '__esModule'),
+    );
+  if (dict && typeof dict === 'object') {
+    cache[code] = dict as Record<string, string>;
+  }
 }
 
 export function getTranslation(lang: string, key: string, params?: Record<string, string | number>): string {
