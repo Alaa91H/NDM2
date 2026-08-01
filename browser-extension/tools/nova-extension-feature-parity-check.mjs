@@ -12,17 +12,25 @@ const requireIncludes = (path, needle, label = needle) => {
   if (!body.includes(needle)) failures.push(`${path}: missing ${label}`);
 };
 
-// Phase 7: locale files must not contain U+FFFD replacement characters —
-// they indicate mojibake from a broken encoding (e.g. pl.ts historically had
-// `wysy�,a�?` instead of `wysyłać`). pl.ts is fixed; remaining locales are
-// tracked as a documented follow-up, so this is a warning, not a failure.
+// Phase 7/round-2: locale files must not contain U+FFFD replacement
+// characters — they indicate mojibake from a broken encoding. All
+// Latin-script locales are repaired; any regression FAILS the check.
+// Non-Latin scripts (bn, fa, th) collapsed beyond recovery and need
+// re-translation — tracked as a warning until that lands.
 const localeDir = 'src/i18n/locales';
+const NON_LATIN_REPAIR_PENDING = new Set(['bn', 'fa', 'th']);
 if (existsSync(localeDir)) {
   for (const file of readdirSync(localeDir).filter((f) => f.endsWith('.ts'))) {
     const body = read(join(localeDir, file));
-    if (body.includes('\uFFFD')) {
+    if (!body.includes('\uFFFD')) continue;
+    const lang = file.replace(/\.ts$/, '');
+    if (NON_LATIN_REPAIR_PENDING.has(lang)) {
       console.warn(
-        `[locale-encoding] ${join(localeDir, file)}: contains U+FFFD replacement characters (broken encoding) — tracked in REPAIR_COVERAGE`,
+        `[locale-encoding] ${join(localeDir, file)}: ${lang} still contains U+FFFD — manual re-translation tracked in REPAIR_COVERAGE`,
+      );
+    } else {
+      failures.push(
+        `${join(localeDir, file)}: contains U+FFFD replacement characters (broken encoding)`,
       );
     }
   }
