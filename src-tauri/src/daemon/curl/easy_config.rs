@@ -181,6 +181,30 @@ impl Handler for SegmentWriter {
                     cap.content_encoded = true;
                 }
             }
+            "content-length" => {
+                if let Ok(size) = value.parse::<u64>() {
+                    if let Ok(mut cap) = self.progress.capture.lock() {
+                        if cap.content_length.is_none() {
+                            cap.content_length = Some(size);
+                        }
+                    }
+                }
+            }
+            "content-range" => {
+                // e.g. "bytes 0-1023/2048" or "bytes */2048"; the total after
+                // the slash is the true object size. On a 206 partial response
+                // the Content-Length only describes the current chunk, so the
+                // Content-Range total must take precedence whenever present.
+                if let Some(total) = value
+                    .rsplit('/')
+                    .next()
+                    .and_then(|t| t.trim().parse::<u64>().ok())
+                {
+                    if let Ok(mut cap) = self.progress.capture.lock() {
+                        cap.content_length = Some(total);
+                    }
+                }
+            }
             "last-modified" => {
                 if let Ok(mut cap) = self.progress.capture.lock() {
                     if cap.validator.is_none() {
@@ -1233,4 +1257,84 @@ fn reject_unsafe_protocols(value: &str, field: &str) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::daemon::curl::ResponseCapture;
+    use std::sync::{Arc, Mutex};
+
+    fn segment_writer() -> SegmentWriter {
+        let dir = std::env::temp_dir().join(format!("nova_easy_cfg_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(dir.join("hdr.bin"))
+            .unwrap();
+        let progress = SegmentProgress {
+            downloaded: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            abort: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            retry_after: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            capture: Arc::new(Mutex::new(ResponseCapture::default())),
+            streaming_digest_out: Arc::new(Mutex::new(None)),
+        };
+        SegmentWriter {
+            file,
+            progress,
+            streaming_hasher: None,
+        }
+    }
+
+    fn captured(w: &SegmentWriter) -> ResponseCapture {
+        w.progress.capture.lock().unwrap().clone()
+    }
+
+    #[test]
+    fn header_callback_captures_content_length_for_unknown_size_transfers() {
+        let mut w = segment_writer();
+        assert!(w.header(b"HTTP/1.1 200 OK\r\n"));
+        assert!(w.header(b"Content-Length: 10485760\r\n"));
+        assert!(w.header(b"Connection: close\r\n"));
+        let cap = captured(&w);
+        assert_eq!(cap.content_length, Some(10 * 1024 * 1024));
+        assert!(!cap.content_encoded);
+    }
+
+    #[test]
+    fn header_callback_captures_content_range_total() {
+        let mut w = segment_writer();
+        assert!(w.header(b"HTTP/1.1 206 Partial Content\r\n"));
+        assert!(w.header(b"Content-Range: bytes 0-1023/2048\r\n"));
+        assert!(w.header(b"Content-Length: 1024\r\n"));
+        // 206 responses: the Content-Length is the segment size, so the total
+        // from Content-Range must win.
+        let cap = captured(&w);
+        assert_eq!(cap.content_length, Some(2048));
+    }
+
+    #[test]
+    fn header_callback_marks_content_encoded_transfers() {
+        let mut w = segment_writer();
+        assert!(w.header(b"HTTP/1.1 200 OK\r\n"));
+        assert!(w.header(b"Content-Encoding: gzip\r\n"));
+        assert!(w.header(b"Content-Length: 512\r\n"));
+        let cap = captured(&w);
+        assert!(cap.content_encoded);
+        // Content-Length is the compressed size; the transfer must not expose
+        // it as the total for progress purposes when encoding is active.
+        assert_eq!(cap.content_length, Some(512));
+    }
+
+    #[test]
+    fn header_callback_ignores_malformed_content_length() {
+        let mut w = segment_writer();
+        assert!(w.header(b"HTTP/1.1 200 OK\r\n"));
+        assert!(w.header(b"Content-Length: not-a-number\r\n"));
+        assert!(w.header(b"Content-Range: bytes 0-9/*\r\n"));
+        let cap = captured(&w);
+        assert_eq!(cap.content_length, None);
+    }
 }

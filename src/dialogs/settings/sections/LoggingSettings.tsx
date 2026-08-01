@@ -256,7 +256,8 @@ export const LoggingSettings: React.FC<Props> = ({
 
   // Save the log content through the native save dialog (defaulting to the
   // desktop), writing via the Rust command when running inside Tauri, and
-  // falling back to a browser download in dev/browser mode.
+  // falling back to a browser download when the native dialog is unavailable
+  // or yields no selection — so the export buttons never silently no-op.
   const saveLogFile = async (
     content: string,
     filename: string,
@@ -268,14 +269,17 @@ export const LoggingSettings: React.FC<Props> = ({
       if (desktopDir) {
         const sep = desktopDir.includes('\\') ? '\\' : '/';
         const chosen = await tauriClient.showSaveFilePicker(`${desktopDir}${sep}${filename}`, filters);
-        if (!chosen) return;
-        const ok = await tauriClient.saveTextFile(chosen, content);
-        if (ok) {
-          onAddToast('success', t('settings_logging_saved_title'), t('settings_logging_saved_msg'));
-        } else {
-          onAddToast('error', t('settings_logging_save_error'), t('settings_logging_save_error_msg'));
+        if (chosen) {
+          const ok = await tauriClient.saveTextFile(chosen, content);
+          if (ok) {
+            onAddToast('success', t('settings_logging_saved_title'), t('settings_logging_saved_msg'));
+          } else {
+            onAddToast('error', t('settings_logging_save_error'), t('settings_logging_save_error_msg'));
+          }
+          return;
         }
-        return;
+        // Native dialog returned no selection (cancelled or unavailable).
+        // Fall through to the browser download so the export always completes.
       }
     } catch {
       /* fall through to browser download */

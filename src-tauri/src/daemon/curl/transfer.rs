@@ -731,6 +731,12 @@ fn run_single_libcurl(
     let mut last_progress_time = Instant::now();
     let downloaded_for_tick = downloaded_counter.clone();
     let cancel_for_tick = cancel.clone();
+    // The total size may be unknown (0) at dispatch time (fast-path downloads
+    // whose background size probe failed). Learn it from the server's
+    // Content-Length / Content-Range headers as soon as they arrive, so the
+    // UI can show a real progress percentage instead of staying at 0% until
+    // the whole transfer completes and then jumping to 100%.
+    let mut effective_total = plan.total_size;
     let mut tick = || {
         let counter_bytes = downloaded_for_tick.load(Ordering::Relaxed);
         let disk_bytes = FileWriter::current_size(&plan.output_path).unwrap_or(0);
@@ -755,6 +761,19 @@ fn run_single_libcurl(
         let speed_u64 = speed as u64;
         state.bandwidth_manager.report_speed(id, speed_u64);
 
+        if effective_total == 0 {
+            if let Ok(cap) = capture.lock() {
+                if !cap.content_encoded {
+                    if let Some(discovered) = cap.content_length {
+                        effective_total = discovered;
+                        log::info!(
+                            "Task {id}: discovered total size from response headers: {discovered} bytes"
+                        );
+                    }
+                }
+            }
+        }
+
         // Blocking lock: a try_lock spin would delay progress ticks and the
         // in-loop stall detector under contention.
         let mut jobs = match state.curl_jobs.lock() {
@@ -764,12 +783,19 @@ fn run_single_libcurl(
         {
             if let Some(job) = jobs.get_mut(id) {
                 job.task.downloaded_bytes = effective_downloaded;
-                job.task.size_bytes = plan.total_size;
+                // Prefer the header-discovered total; if the response is still
+                // being read, keep any size the async background probe already
+                // stored instead of resetting the UI back to 0%.
+                job.task.size_bytes = if effective_total > 0 {
+                    effective_total
+                } else {
+                    job.task.size_bytes
+                };
                 job.task.speed_bytes_per_sec = speed_u64;
                 job.task.elapsed_seconds = job.start_time.elapsed().as_secs();
                 job.task.time_left_seconds =
-                    if speed > 0.0 && plan.total_size > effective_downloaded {
-                        ((plan.total_size - effective_downloaded) as f64 / speed).ceil() as u64
+                    if speed > 0.0 && effective_total > effective_downloaded {
+                        ((effective_total - effective_downloaded) as f64 / speed).ceil() as u64
                     } else {
                         0
                     };
@@ -2376,6 +2402,78 @@ mod tests {
         assert!(
             saw_intermediate,
             "no intermediate progress observed (downloaded stuck at 0, then jump to 100%)"
+        );
+        let written = std::fs::read(&out).unwrap();
+        assert_eq!(written, payload, "output content mismatch");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unknown_size_download_learns_total_from_content_length_for_live_progress() {
+        let payload: Vec<u8> = (0..(4 * 1024 * 1024)).map(|i| (i % 257) as u8).collect();
+        let addr = spawn_range_server(std::sync::Arc::new(payload.clone()));
+        let url = format!("http://{addr}/unknown.bin");
+        let dir = std::env::temp_dir().join(format!("nova_test_unknown_{}", std::process::id()));
+        let out = dir.join("unknown.bin");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let state = std::sync::Arc::new(crate::daemon::persist::tests::test_state(
+            &dir.to_string_lossy(),
+        ));
+        let id = "unknown-size-progress-test";
+        // The reported bug: task created with an unknown total size (0). The
+        // UI computed progress as downloaded/0 = 0%, then jumped to 100% only
+        // when mark_curl_task_finished finally filled size_bytes. The transfer
+        // must instead learn Content-Length during the response and expose a
+        // real intermediate percentage.
+        let body = download_body(&url, "unknown.bin", 0, 1);
+        let job = task_from_body(
+            &body,
+            id,
+            "unknown.bin".to_string(),
+            &out,
+            std::collections::HashMap::new(),
+            Vec::new(),
+        );
+        {
+            let mut jobs = state.curl_jobs.lock().unwrap();
+            jobs.insert(id.to_string(), job);
+        }
+        state.mark_dirty();
+
+        let st = state.clone();
+        std::thread::spawn(move || start_curl_process(&st, id));
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut saw_intermediate = false;
+        loop {
+            let (status, downloaded, size) = {
+                let jobs = state.curl_jobs.lock().unwrap();
+                let Some(j) = jobs.get(id) else { break };
+                (
+                    j.task.status.clone(),
+                    j.task.downloaded_bytes,
+                    j.task.size_bytes,
+                )
+            };
+            if downloaded > 0 && downloaded < size {
+                saw_intermediate = true;
+            }
+            if status == "completed" || status == "error" {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timeout status={status} downloaded={downloaded} size={size}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        let task = run_task_to_completion(&state, id, std::time::Duration::from_secs(30));
+        assert_eq!(task.size_bytes, payload.len() as u64);
+        assert!(
+            saw_intermediate,
+            "no intermediate progress: size_bytes stayed 0 during transfer (0% then 100% bug)"
         );
         let written = std::fs::read(&out).unwrap();
         assert_eq!(written, payload, "output content mismatch");

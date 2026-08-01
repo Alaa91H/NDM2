@@ -78,6 +78,11 @@ pub(super) struct ResponseCapture {
     /// HTTP version from the first response status line (e.g., "1.1", "2").
     /// Captured by the header callback and read back by the adaptive engine.
     pub(super) http_version: Option<String>,
+    /// Total body size discovered from the response `Content-Length` header,
+    /// or the `*/total` part of a `Content-Range` header. Lets the UI show a
+    /// live progress percentage even when the download started with an
+    /// unknown size (`size_bytes == 0`).
+    pub(super) content_length: Option<u64>,
 }
 
 pub(super) struct SegmentProgress {
