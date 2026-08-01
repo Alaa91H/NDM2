@@ -176,15 +176,10 @@ pub fn send_telegram_msg_blocking_with_api(
         .is_ok_and(|r| r.status().is_success())
 }
 
-pub fn start_telegram_bot(state: SharedState) {
+/// Run the Telegram polling loop on a std thread, reusing the daemon's
+/// Tokio runtime via its `Handle` (M3) instead of creating a second runtime.
+pub fn start_telegram_bot(state: SharedState, runtime_handle: tokio::runtime::Handle) {
     std::thread::spawn(move || {
-        let rt = match tokio::runtime::Runtime::new() {
-            Ok(rt) => rt,
-            Err(e) => {
-                log::error!("Failed to create tokio runtime for telegram bot: {e}");
-                return;
-            }
-        };
         let client = reqwest::blocking::Client::new();
         while !state
             .shutdown_requested
@@ -234,7 +229,12 @@ pub fn start_telegram_bot(state: SharedState) {
                                             continue;
                                         }
                                         handle_telegram_command(
-                                            &state, &api_base, &token, from_chat, text, &rt,
+                                            &state,
+                                            &api_base,
+                                            &token,
+                                            from_chat,
+                                            text,
+                                            &runtime_handle,
                                         );
                                     }
                                 }
@@ -254,7 +254,7 @@ fn handle_telegram_command(
     token: &str,
     chat_id: i64,
     text: &str,
-    rt: &tokio::runtime::Runtime,
+    rt: &tokio::runtime::Handle,
 ) {
     let text = text.trim();
     if text.starts_with('/') {

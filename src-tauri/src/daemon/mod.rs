@@ -493,7 +493,7 @@ pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
                 restore_persisted_tasks(&state, restored);
                 persist::start_persistence_loop(state.clone());
 
-                start_telegram_bot(state.clone());
+                start_telegram_bot(state.clone(), rt.handle().clone());
 
                 let app = crate::daemon::routes::register_routes(Router::new())
                 .route("/", get(serve_index))

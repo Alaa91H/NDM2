@@ -758,6 +758,9 @@ fn run_single_libcurl(
     // UI can show a real progress percentage instead of staying at 0% until
     // the whole transfer completes and then jumping to 100%.
     let mut effective_total = plan.total_size;
+    // Log a failed live rate-cap push only once per distinct failure (the
+    // handle may be mid-transfer; repeated per-tick logs would spam).
+    let rate_failure_logged = std::cell::Cell::new(false);
     let mut tick = || {
         // Live rate-limit refresh (M6): push bandwidth changes into the
         // running easy handle on the next tick instead of at handle build.
@@ -772,8 +775,19 @@ fn run_single_libcurl(
         };
         if new_rate != last_applied_rate {
             let raw = handles[0].raw();
-            let _ = crate::daemon::curl::easy_config::set_live_rate(raw, new_rate);
-            last_applied_rate = new_rate;
+            match crate::daemon::curl::easy_config::set_live_rate(raw, new_rate) {
+                Ok(()) => {
+                    rate_failure_logged.set(false);
+                    last_applied_rate = new_rate;
+                }
+                Err(e) => {
+                    if !rate_failure_logged.replace(true) {
+                        log::warn!(
+                            "Task {id}: could not apply live rate limit ({new_rate:?}): {e}"
+                        );
+                    }
+                }
+            }
         }
         let counter_bytes = downloaded_for_tick.load(Ordering::Relaxed);
         let disk_bytes = FileWriter::current_size(&plan.output_path).unwrap_or(0);
@@ -1307,6 +1321,8 @@ fn run_segmented_libcurl(
     // to at most one rebuild per 10s to prevent oscillation.
     let pending_rebuild = std::cell::Cell::new(false);
     let last_rebuild_at = std::cell::Cell::new(std::time::Instant::now());
+    // Log a failed live rate-cap push only once (see single-path tick).
+    let seg_rate_failure_logged = std::cell::Cell::new(false);
     let mut tick = || {
         // Live rate refresh: apply the current per-segment cap to every live
         // handle so limit changes take effect immediately (M6).
@@ -1318,11 +1334,21 @@ fn run_segmented_libcurl(
             crate::daemon::engine::bandwidth::RateLimit::Paused => last_segment_rate,
         };
         if new_seg_rate != last_segment_rate {
+            let mut all_ok = true;
             for handle in handles_cell.borrow().iter() {
                 let raw = handle.raw();
-                let _ = crate::daemon::curl::easy_config::set_live_rate(raw, new_seg_rate);
+                if crate::daemon::curl::easy_config::set_live_rate(raw, new_seg_rate).is_err() {
+                    all_ok = false;
+                }
             }
-            last_segment_rate = new_seg_rate;
+            if all_ok {
+                seg_rate_failure_logged.set(false);
+                last_segment_rate = new_seg_rate;
+            } else if !seg_rate_failure_logged.replace(true) {
+                log::warn!(
+                    "Task {id}: could not apply live per-segment rate limit ({new_seg_rate:?})"
+                );
+            }
         }
         let now = Instant::now();
         let last_tick = last_tick_cell.get();

@@ -7,6 +7,12 @@ use serde_json::{json, Value};
 use crate::daemon::types::MediaDownloadOptions;
 use crate::daemon::utils::hide_command_window;
 
+/// High-level direct-option keys the UI can set. Several overlap semantically
+/// with the raw CLI flags in `CANDIDATE_CURL_RAW_OPTIONS` (L18) — e.g.
+/// `rateLimitKbs`/`rate`/`speedLimitBytes` ↔ `--limit-rate`,
+/// `lowSpeedLimitBytes`/`speedTimeSec` ↔ `--speed-limit`/`--speed-time`,
+/// `maxRedirs` ↔ `--max-redirs`. The raw table is the source of truth for
+/// what libcurl itself supports; this table gates the friendly keys.
 const CURL_DIRECT_OPTION_KEYS: &[&str] = &[
     "proxy",
     "preProxy",

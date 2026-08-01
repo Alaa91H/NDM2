@@ -581,27 +581,21 @@ pub struct TaskTrace {
     pub last_ms: u64,
 }
 
-/// Snapshot of the ring buffer for trace reconstruction. Taking a snapshot
-/// under the lock avoids holding the mutex while callers filter it.
-fn ring_snapshot() -> Vec<LogEntry> {
-    state()
-        .map(|s| {
-            let guard = s
-                .ring
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            guard.iter().cloned().collect()
-        })
-        .unwrap_or_default()
-}
-
-/// Aggregate a snapshot into per-task summaries, newest-last-seen first.
-/// Only tasks with at least one record are returned.
+/// Aggregate the ring buffer into per-task summaries, newest-last-seen first.
+/// Only tasks with at least one record are returned. Reads the buffer under
+/// the lock and aggregates by reference — no full-buffer clone (round 2).
 pub fn task_summaries() -> Vec<TaskSummary> {
-    task_summaries_from(&ring_snapshot())
+    let Some(s) = state() else {
+        return Vec::new();
+    };
+    let guard = s
+        .ring
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    task_summaries_from(&guard)
 }
 
-fn task_summaries_from(entries: &[LogEntry]) -> Vec<TaskSummary> {
+fn task_summaries_from(entries: &VecDeque<LogEntry>) -> Vec<TaskSummary> {
     let mut by_task: std::collections::BTreeMap<&str, TaskSummary> = Default::default();
     for entry in entries {
         let Some(task_id) = entry
@@ -663,12 +657,31 @@ fn task_summaries_from(entries: &[LogEntry]) -> Vec<TaskSummary> {
 /// Matches records that either carry a `task=<id>` context pair or use the
 /// `Task <id>:` message prefix (covers records emitted on threads without
 /// scoped context). Returns the most recent `limit` matching records
-/// (oldest first), plus a structured error-path/phase summary.
+/// (oldest first), plus a structured error-path/phase summary. Reads under
+/// the lock — no full-buffer clone (round 2).
 pub fn task_trace(task_id: &str, limit: usize) -> TaskTrace {
-    task_trace_from(&ring_snapshot(), task_id, limit)
+    let Some(s) = state() else {
+        return TaskTrace {
+            task_id: task_id.to_owned(),
+            entries: Vec::new(),
+            error_path: None,
+            errors: Vec::new(),
+            phases: Vec::new(),
+            threads: Vec::new(),
+            first_ms: 0,
+            last_ms: 0,
+        };
+    };
+    let guard = s
+        .ring
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    task_trace_from(&guard, task_id, limit)
 }
 
-fn task_trace_from(entries: &[LogEntry], task_id: &str, limit: usize) -> TaskTrace {
+fn task_trace_from(entries: &VecDeque<LogEntry>, task_id: &str, limit: usize) -> TaskTrace {
+    // Only the matching records are cloned — the rest of the buffer is
+    // iterated by reference under the lock.
     let mut matched: Vec<LogEntry> = entries
         .iter()
         .filter(|entry| entry.is_for_task(task_id))
@@ -1053,7 +1066,7 @@ mod tests {
                 500,
             ),
         ];
-        let trace = task_trace_from(&entries, "t-1", 100);
+        let trace = task_trace_from(&VecDeque::from(entries), "t-1", 100);
         assert_eq!(trace.entries.len(), 4);
         assert_eq!(trace.entries.first().map(|e| e.timestamp_ms), Some(100));
         assert_eq!(trace.entries.last().map(|e| e.timestamp_ms), Some(500));
@@ -1071,7 +1084,7 @@ mod tests {
         let entries: Vec<LogEntry> = (0..10)
             .map(|i| sample_entry("DEBUG", "line", &[("task", "t-1")], i))
             .collect();
-        let trace = task_trace_from(&entries, "t-1", 3);
+        let trace = task_trace_from(&VecDeque::from(entries), "t-1", 3);
         assert_eq!(trace.entries.len(), 3);
         assert_eq!(trace.entries.first().map(|e| e.timestamp_ms), Some(7));
         assert_eq!(trace.entries.last().map(|e| e.timestamp_ms), Some(9));
@@ -1094,7 +1107,7 @@ mod tests {
             ),
             sample_entry("WARN", "Task t-2: c", &[("task", "t-2")], 150),
         ];
-        let summaries = task_summaries_from(&entries);
+        let summaries = task_summaries_from(&VecDeque::from(entries));
         assert_eq!(summaries.len(), 2);
         // t-1 last seen 200 > t-2 last seen 150, so t-1 sorts first.
         assert_eq!(summaries[0].task_id, "t-1");
