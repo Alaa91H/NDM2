@@ -202,7 +202,93 @@ const YTDLP_MEDIA_OPTION_KEYS: &[&str] = &[
     "extraArgs",
 ];
 
-const CANDIDATE_CURL_RAW_OPTIONS: &[&str] = &[];
+/// Raw libcurl options that the engine can pass through. This list mirrors the
+/// CLI flags surfaced by `linked_libcurl_flags` — the engine exposes them as
+/// `rawOptions` only when libcurl actually supports them. `rawOptions` as a
+/// top-level direct option key remains unsupported by design (no per-key
+/// passthrough exists yet), so `curl_key_supported("rawOptions")` stays false;
+/// this constant powers the honest `supportedRawOptions` advertisement.
+const CANDIDATE_CURL_RAW_OPTIONS: &[&str] = &[
+    "--proxy",
+    "--noproxy",
+    "--interface",
+    "--proxy-user",
+    "--proxy-anyauth",
+    "--proxy-cacert",
+    "--proxy-capath",
+    "--proxy-cert",
+    "--proxy-cert-type",
+    "--proxy-key",
+    "--proxy-key-type",
+    "--proxy-pass",
+    "--proxy-ciphers",
+    "--proxy-tls-max",
+    "--proxy-insecure",
+    "--preproxy",
+    "--user",
+    "--user-agent",
+    "--referer",
+    "--basic",
+    "--digest",
+    "--ntlm",
+    "--negotiate",
+    "--cacert",
+    "--capath",
+    "--cert",
+    "--cert-type",
+    "--key",
+    "--key-type",
+    "--pass",
+    "--ciphers",
+    "--tls-max",
+    "--tlsv1",
+    "--tlsv1.2",
+    "--tlsv1.3",
+    "--insecure",
+    "--resolve",
+    "--connect-timeout",
+    "--max-time",
+    "--speed-limit",
+    "--speed-time",
+    "--max-filesize",
+    "--http1.0",
+    "--http1.1",
+    "--http2",
+    "--http3",
+    "--compressed",
+    "--etag-save",
+    "--etag-compare",
+    "--retry",
+    "--retry-delay",
+    "--retry-max-time",
+    "--retry-connrefused",
+    "--location",
+    "--max-redirs",
+    "--cookie",
+    "--cookie-jar",
+    "--header",
+    "--user-agent",
+    "--range",
+    "--output",
+    "--remote-name",
+    "--ssl",
+    "--ssl-reqd",
+    "--ftp-pasv",
+    "--crlf",
+    "--ipv4",
+    "--ipv6",
+    "--dns-servers",
+    "--dns-interface",
+    "--dns-ipv4-addr",
+    "--dns-ipv6-addr",
+    "--no-keepalive",
+    "--limit-rate",
+    "--low-speed-limit",
+    "--low-speed-time",
+    "--keepalive-time",
+    "--xattr",
+    "--create-dirs",
+];
 
 fn hidden_output(command: &str, args: &[&str]) -> Option<String> {
     if command.trim().is_empty() {
@@ -1445,6 +1531,19 @@ fn parse_ffmpeg_protocols(output: &str) -> (HashSet<String>, HashSet<String>) {
     (input, output_set)
 }
 
+/// H3: whether the ffmpeg demuxer can read HLS/DASH manifests or a common
+/// container. `formats` is a set of individual tokens (from `ffmpeg -formats`),
+/// so each candidate must be checked separately — never the literal
+/// comma-joined string.
+fn hls_dash_supported(formats: &std::collections::HashSet<String>, input_protocols: &std::collections::HashSet<String>) -> bool {
+    input_protocols.contains("http")
+        && (formats.contains("hls")
+            || formats.contains("dash")
+            || ["mov", "mp4", "m4a", "3gp", "3g2", "mj2"]
+                .iter()
+                .any(|f| formats.contains(*f)))
+}
+
 pub fn ffmpeg_status(ffmpeg_bin: &str) -> Value {
     let output = hidden_output(ffmpeg_bin, &["-version"]);
     let available = output.is_some() || executable_available(ffmpeg_bin);
@@ -1501,7 +1600,12 @@ pub fn ffmpeg_status(ffmpeg_bin: &str) -> Value {
             "embedThumbnail": available && remux,
             "embedMetadata": available && remux,
             "splitChapters": available && remux,
-            "hlsDashDownload": available && input_protocols.contains("http") && (formats.contains("hls") || formats.contains("dash") || formats.contains("mov,mp4,m4a,3gp,3g2,mj2"))
+            // H3: `formats` is a set of individual tokens, so check each token
+            // of the container list rather than the literal comma-joined
+            // string (which never appears in the set). HLS/DASH download is
+            // supported whenever the demuxer can read HLS/DASH manifests or a
+            // common container.
+            "hlsDashDownload": available && hls_dash_supported(&formats, &input_protocols)
         }
     })
 }
@@ -1949,5 +2053,76 @@ mod tests {
         assert!(caps.get("tlsBackend").is_some());
         assert!(caps.get("http2").is_some());
         assert!(caps.get("compression").is_some());
+    }
+
+    #[test]
+    fn hls_dash_download_declared_when_mp4_demuxer_present() {
+        // H3 regression: formats is a set of individual tokens; the literal
+        // comma-joined container string never appears in it, so the old check
+        // could never fire. With `mp4` present the capability must be true.
+        let formats: std::collections::HashSet<String> =
+            ["mp4", "mov", "m4a", "matroska"].iter().map(|s| s.to_string()).collect();
+        let input_protocols: std::collections::HashSet<String> =
+            ["http", "https", "tcp"].iter().map(|s| s.to_string()).collect();
+        let hls_dash = hls_dash_supported(&formats, &input_protocols);
+        assert!(hls_dash, "hlsDashDownload must be true when mp4 is in formats");
+
+        // Without any HLS/DASH/container token it must be false.
+        let formats2: std::collections::HashSet<String> =
+            ["pcm_s16le", "flac"].iter().map(|s| s.to_string()).collect();
+        assert!(!hls_dash_supported(&formats2, &input_protocols));
+    }
+
+    #[test]
+    fn supported_raw_options_are_advertised_honestly() {
+        // H4 regression: the raw-option candidate list was empty, so
+        // supportedRawOptions was always empty. With the real libcurl flag
+        // list it must advertise the options libcurl actually supports.
+        let (available, _, _, _, features, flags) = linked_libcurl_model();
+        let feature_set = lower_set(&features);
+        let supported_raw: HashSet<String> = CANDIDATE_CURL_RAW_OPTIONS
+            .iter()
+            .filter(|flag| flags.contains(**flag))
+            .map(|flag| (*flag).to_owned())
+            .collect();
+        if available {
+            assert!(
+                !supported_raw.is_empty(),
+                "supportedRawOptions must be non-empty when libcurl is available"
+            );
+            // A core option we always expect (proxy) must be advertised.
+            assert!(
+                supported_raw.contains("--proxy"),
+                "--proxy must be advertised as a supported raw option"
+            );
+        }
+        // rawOptions as a direct option key stays unsupported (no passthrough).
+        let http_protos: HashSet<String> =
+            ["http", "https"].iter().map(|s| s.to_string()).collect();
+        assert!(!curl_key_supported("rawOptions", available, &http_protos, &feature_set, &flags));
+    }
+
+    #[test]
+    fn capability_claims_for_implemented_options_are_honest() {
+        // L18 regression: options that ARE implemented (skipExisting in
+        // transfer.rs, retryConnRefused in transfer_config/args) must be
+        // advertised; options with no implementation must not be claimed.
+        let (available, _, _, protocols, features, flags) = linked_libcurl_model();
+        let protocol_set = lower_set(&protocols);
+        let feature_set = lower_set(&features);
+        assert!(
+            curl_key_supported("skipExisting", available, &protocol_set, &feature_set, &flags),
+            "skipExisting is implemented and must be advertised"
+        );
+        assert!(
+            curl_key_supported("retryConnRefused", available, &protocol_set, &feature_set, &flags),
+            "retryConnRefused is implemented and must be advertised"
+        );
+        // These are advertised only when the underlying libcurl build has the
+        // feature — never unconditionally.
+        let tf = curl_key_supported("tcpFastOpen", available, &protocol_set, &feature_set, &flags);
+        if !available {
+            assert!(!tf);
+        }
     }
 }

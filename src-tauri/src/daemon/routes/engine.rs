@@ -649,7 +649,7 @@ pub async fn run_scheduler_tick(state: &SharedState) {
             SchedulerAction::Shutdown => {
                 if !state.scheduler.power_commands_enabled() {
                     log::warn!("Scheduler: shutdown blocked — power commands not enabled");
-                    return;
+                    continue;
                 }
                 log::info!("Scheduler: all downloads complete — shutting down the system");
                 #[cfg(target_os = "windows")]
@@ -674,7 +674,7 @@ pub async fn run_scheduler_tick(state: &SharedState) {
             SchedulerAction::Sleep => {
                 if !state.scheduler.power_commands_enabled() {
                     log::warn!("Scheduler: sleep blocked — power commands not enabled");
-                    return;
+                    continue;
                 }
                 log::info!("Scheduler: all downloads complete — putting system to sleep");
                 #[cfg(target_os = "windows")]
@@ -683,10 +683,17 @@ pub async fn run_scheduler_tick(state: &SharedState) {
                         .args(["powrprof.dll,SetSuspendState", "0,1,0"])
                         .spawn();
                 }
-                #[cfg(any(target_os = "linux", target_os = "macos"))]
+                #[cfg(target_os = "linux")]
                 {
                     let _ = std::process::Command::new("systemctl")
                         .arg("suspend")
+                        .spawn();
+                }
+                #[cfg(target_os = "macos")]
+                {
+                    // L3: macOS has no systemctl; pmset is the supported API.
+                    let _ = std::process::Command::new("pmset")
+                        .arg("sleepnow")
                         .spawn();
                 }
             }

@@ -2807,9 +2807,10 @@ mod tests {
     #[test]
     fn pause_actually_stalls_bytes_and_resume_completes() {
         // H1 regression: pause_all() must stop the transfer from moving bytes
-        // (the old bug turned paused into "unlimited"). A 4 MiB payload is big
-        // enough that a stalled transfer is measurable.
-        let payload: Vec<u8> = (0..(4 * 1024 * 1024)).map(|i| (i % 251) as u8).collect();
+        // (the old bug turned paused into "unlimited"). A large payload keeps
+        // the transfer running long enough to sample the stall even when the
+        // test binary shares the machine with other parallel tests.
+        let payload: Vec<u8> = (0..(16 * 1024 * 1024)).map(|i| (i % 251) as u8).collect();
         let addr = spawn_range_server(std::sync::Arc::new(payload.clone()));
         let url = format!("http://{addr}/pause.zip");
         let dir = std::env::temp_dir().join(format!("nova_test_pause_{}", std::process::id()));

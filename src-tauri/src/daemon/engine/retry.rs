@@ -238,8 +238,15 @@ mod tests {
         assert_eq!(policy.base_delay, Duration::from_millis(500));
         assert!(policy.base_delay < RetryPolicy::default().base_delay);
 
+        // With symmetric jitter the first delay sits in the ±12.5% band
+        // around 500ms rather than at the exact value.
         let d1 = policy.delay_for_attempt(1);
-        assert_duration_eq(d1, Duration::from_millis(500), "a1=500ms");
+        let lo = (500.0 * 0.875) as u128 * 1_000_000; // 437.5ms in ns
+        let hi = (500.0 * 1.125) as u128 * 1_000_000; // 562.5ms in ns
+        assert!(
+            d1.as_nanos() >= lo && d1.as_nanos() <= hi,
+            "a1={d1:?} outside 500ms±12.5%"
+        );
     }
 
     #[test]

@@ -57,6 +57,11 @@ pub struct SmartScheduler {
     rules: Arc<Mutex<Vec<SchedulerRule>>>,
     active_rules: Arc<Mutex<Vec<String>>>,
     power_commands_enabled: Arc<std::sync::atomic::AtomicBool>,
+    /// Rules that have already fired while their trigger stays satisfied.
+    /// Used to make evaluation edge-triggered: a rule fires once when its
+    /// condition becomes true, then stays silent until it goes false and
+    /// true again. Prevents Shutdown/Sleep/Notify spam every 60s tick.
+    fired_rules: Arc<Mutex<std::collections::HashSet<String>>>,
 }
 
 impl SmartScheduler {
@@ -65,6 +70,7 @@ impl SmartScheduler {
             rules: Arc::new(Mutex::new(Vec::new())),
             active_rules: Arc::new(Mutex::new(Vec::new())),
             power_commands_enabled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            fired_rules: Arc::new(Mutex::new(std::collections::HashSet::new())),
         }
     }
 
@@ -123,39 +129,59 @@ impl SmartScheduler {
         let current_minute = now.minute() as u8;
         let mut actions = Vec::new();
         let mut triggered_ids = Vec::new();
+        let mut newly_fired = std::collections::HashSet::new();
+        {
+            // Snapshot the fired set once; drop the lock before running user
+            // actions so a long rule handler cannot deadlock with add_rule.
+            let fired = match self.fired_rules.lock() {
+                Ok(g) => g.clone(),
+                Err(_) => std::collections::HashSet::new(),
+            };
+            for rule in rules.iter() {
+                if !rule.enabled {
+                    continue;
+                }
+                let triggered = match &rule.trigger {
+                    SchedulerTrigger::TimeWindow {
+                        start_hour,
+                        start_minute,
+                        end_hour,
+                        end_minute,
+                    } => {
+                        let start = u32::from(*start_hour) * 60 + u32::from(*start_minute);
+                        let end = u32::from(*end_hour) * 60 + u32::from(*end_minute);
+                        let current = u32::from(current_hour) * 60 + u32::from(current_minute);
+                        if start <= end {
+                            current >= start && current < end
+                        } else {
+                            current >= start || current < end
+                        }
+                    }
+                    SchedulerTrigger::BandwidthBelow { threshold_kbps } => {
+                        current_bandwidth_kbps < *threshold_kbps && current_bandwidth_kbps > 0
+                    }
+                    SchedulerTrigger::QueueEmpty => active_count == 0 && queued_count == 0,
+                    SchedulerTrigger::AllComplete => {
+                        active_count == 0 && queued_count == 0 && total_count > 0
+                    }
+                };
 
-        for rule in rules.iter() {
-            if !rule.enabled {
-                continue;
-            }
-            let triggered = match &rule.trigger {
-                SchedulerTrigger::TimeWindow {
-                    start_hour,
-                    start_minute,
-                    end_hour,
-                    end_minute,
-                } => {
-                    let start = u32::from(*start_hour) * 60 + u32::from(*start_minute);
-                    let end = u32::from(*end_hour) * 60 + u32::from(*end_minute);
-                    let current = u32::from(current_hour) * 60 + u32::from(current_minute);
-                    if start <= end {
-                        current >= start && current < end
-                    } else {
-                        current >= start || current < end
+                if triggered {
+                    triggered_ids.push(rule.id.clone());
+                    // Edge-trigger: emit the action only the first time the
+                    // rule's condition holds (H2). Once fired, stay silent
+                    // until the condition clears and re-triggers.
+                    if !fired.contains(&rule.id) {
+                        newly_fired.insert(rule.id.clone());
+                        actions.push(rule.action.clone());
                     }
                 }
-                SchedulerTrigger::BandwidthBelow { threshold_kbps } => {
-                    current_bandwidth_kbps < *threshold_kbps && current_bandwidth_kbps > 0
-                }
-                SchedulerTrigger::QueueEmpty => active_count == 0 && queued_count == 0,
-                SchedulerTrigger::AllComplete => {
-                    active_count == 0 && queued_count == 0 && total_count > 0
-                }
-            };
-
-            if triggered {
-                triggered_ids.push(rule.id.clone());
-                actions.push(rule.action.clone());
+            }
+            if let Ok(mut fired) = self.fired_rules.lock() {
+                // Rules that are no longer triggered are reset so they can
+                // fire again when the condition returns.
+                fired.retain(|id| triggered_ids.iter().any(|t| t == id));
+                fired.extend(newly_fired);
             }
         }
         drop(rules);
@@ -449,5 +475,49 @@ mod tests {
         ));
         let actions = sched.evaluate(3000, 0, 0, 0);
         assert_eq!(actions.len(), 2);
+    }
+
+    #[test]
+    fn rules_are_edge_triggered_not_level_triggered() {
+        // H2 regression: Shutdown/Sleep/Notify must fire ONCE while the
+        // condition holds, not on every 60s tick.
+        let sched = SmartScheduler::new();
+        sched.add_rule(make_rule(
+            "shutdown-on-idle",
+            SchedulerTrigger::AllComplete,
+            SchedulerAction::Shutdown,
+        ));
+        sched.add_rule(make_rule(
+            "notify-on-idle",
+            SchedulerTrigger::QueueEmpty,
+            SchedulerAction::Notify {
+                message: "idle".into(),
+            },
+        ));
+
+        // First evaluation: both fire.
+        let first = sched.evaluate(1000, 0, 0, 3);
+        assert_eq!(first.len(), 2, "first evaluation must fire both rules");
+
+        // Condition still holds: nothing may fire again.
+        let second = sched.evaluate(1000, 0, 0, 3);
+        assert!(
+            second.is_empty(),
+            "edge-triggered rules must not re-fire while condition holds"
+        );
+        let third = sched.evaluate(1000, 0, 0, 3);
+        assert!(third.is_empty(), "still silent on third evaluation");
+
+        // Condition clears (a download starts)…
+        let cleared = sched.evaluate(1000, 1, 0, 3);
+        assert!(cleared.is_empty(), "condition false → no actions");
+
+        // …and returns: rules fire exactly once more.
+        let refired = sched.evaluate(1000, 0, 0, 3);
+        assert_eq!(
+            refired.len(),
+            2,
+            "rules must fire again after the condition clears"
+        );
     }
 }

@@ -190,7 +190,8 @@ impl PriorityBandwidthQueue {
         if active == 0 {
             return total_bw;
         }
-        total_bw / u64::from(active.max(1))
+        // M28: `active` is already > 0 here, so no .max(1) needed.
+        total_bw / u64::from(active)
     }
 
     fn min_bandwidth_for_priority(priority: &DownloadPriority, total: u64) -> u64 {

@@ -73,7 +73,20 @@ impl DownloadRuleEngine {
         let mut compiled_conditions = Vec::new();
         for cond in &rule.conditions {
             let regex = match cond {
-                RuleCondition::UrlMatches { pattern } => Regex::new(pattern).ok(),
+                RuleCondition::UrlMatches { pattern } => match Regex::new(pattern) {
+                    Ok(re) => Some(re),
+                    // L8: an invalid regex must never be silently inert —
+                    // reject the rule so the caller knows the condition is
+                    // broken instead of watching it never match.
+                    Err(e) => {
+                        log::error!(
+                            "rules: rejecting rule '{}' — invalid UrlMatches regex {:?}: {e}",
+                            rule.id,
+                            pattern
+                        );
+                        return;
+                    }
+                },
                 _ => None,
             };
             compiled_conditions.push(CompiledCondition {
@@ -135,9 +148,12 @@ impl DownloadRuleEngine {
                 RuleCondition::UrlContains { text } => url.contains(text.as_str()),
                 RuleCondition::UrlExtension { extensions } => {
                     let lower = url.to_lowercase();
-                    extensions
-                        .iter()
-                        .any(|ext| lower.ends_with(&format!(".{ext}")))
+                    // L8: normalize the configured extension to lowercase too,
+                    // so ["MP4"] matches a .mp4 URL.
+                    extensions.iter().any(|ext| {
+                        let ext = ext.to_lowercase();
+                        lower.ends_with(&format!(".{ext}"))
+                    })
                 }
                 RuleCondition::FileSizeAbove { bytes } => size_bytes.is_some_and(|s| s > *bytes),
                 RuleCondition::FileSizeBelow { bytes } => size_bytes.is_some_and(|s| s < *bytes),
@@ -146,9 +162,10 @@ impl DownloadRuleEngine {
                     hostname.to_lowercase().contains(&text.to_lowercase())
                 }
                 RuleCondition::HeaderContains { header, value } => {
-                    let value_lower = value.to_lowercase();
+                    // M30: exact, case-insensitive value match — not a
+                    // substring search, which could match unrelated headers.
                     headers.iter().any(|(k, v)| {
-                        k.eq_ignore_ascii_case(header) && v.to_lowercase().contains(&value_lower)
+                        k.eq_ignore_ascii_case(header) && v.eq_ignore_ascii_case(value)
                     })
                 }
             });
@@ -466,7 +483,7 @@ mod tests {
             0,
             vec![RuleCondition::HeaderContains {
                 header: "Content-Type".to_string(),
-                value: "video".to_string(),
+                value: "video/mp4".to_string(),
             }],
             reject_action("header"),
         ));
@@ -719,5 +736,82 @@ mod tests {
         assert!(engine
             .evaluate("https://x.com/filemp4", "x.com", None)
             .is_empty());
+    }
+
+    #[test]
+    fn url_extension_matches_uppercase_configured_extension() {
+        // L8 regression: a configured extension in uppercase ("MP4") must
+        // still match a lowercase .mp4 URL.
+        let engine = DownloadRuleEngine::new();
+        engine.add_rule(make_rule(
+            "r1",
+            0,
+            vec![RuleCondition::UrlExtension {
+                extensions: vec!["MP4".to_string()],
+            }],
+            reject_action("ext"),
+        ));
+        let results = engine.evaluate("https://x.com/file.mp4", "x.com", None);
+        assert_eq!(results.len(), 1, "uppercase configured extension must match");
+    }
+
+    #[test]
+    fn header_contains_requires_exact_case_insensitive_value() {
+        // M30 regression: HeaderContains is an exact, case-insensitive value
+        // match, not a substring search.
+        let engine = DownloadRuleEngine::new();
+        engine.add_rule(make_rule(
+            "r1",
+            0,
+            vec![RuleCondition::HeaderContains {
+                header: "Content-Type".to_string(),
+                value: "application/json".to_string(),
+            }],
+            reject_action("hdr"),
+        ));
+
+        // Exact match (different case) fires.
+        let headers = vec![(
+            "content-type".to_string(),
+            "Application/JSON".to_string(),
+        )];
+        assert_eq!(
+            engine
+                .evaluate_with_headers("https://x.com/f", "x.com", None, &headers)
+                .len(),
+            1,
+            "case-insensitive exact value must match"
+        );
+
+        // Substring (prefix) must NOT match.
+        let headers2 = vec![(
+            "Content-Type".to_string(),
+            "application/json; charset=utf-8".to_string(),
+        )];
+        assert!(
+            engine
+                .evaluate_with_headers("https://x.com/f", "x.com", None, &headers2)
+                .is_empty(),
+            "substring value must not match exact HeaderContains"
+        );
+    }
+
+    #[test]
+    fn invalid_regex_rule_is_rejected_not_silent() {
+        // L8 regression: an invalid UrlMatches regex must not be added as a
+        // silently-never-matching rule.
+        let engine = DownloadRuleEngine::new();
+        engine.add_rule(make_rule(
+            "bad-regex",
+            0,
+            vec![RuleCondition::UrlMatches {
+                pattern: "[unclosed".to_string(),
+            }],
+            reject_action("regex"),
+        ));
+        assert!(
+            engine.rules().is_empty(),
+            "rule with invalid regex must be rejected"
+        );
     }
 }

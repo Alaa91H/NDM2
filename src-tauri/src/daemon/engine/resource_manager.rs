@@ -67,9 +67,11 @@ impl ResourceManager {
         crate::daemon::engine::sysinfo::total_physical_memory_bytes() / (1024 * 1024)
     }
 
+    /// Per-connection disk write budget in **bytes/second** (not MB/s — the
+    /// two units were previously conflated, H18). Assumes a 100 MB/s disk.
     fn detect_disk_budget(connections: u32) -> u64 {
-        let total_mbps = 100 * 1024 * 1024;
-        total_mbps / u64::from(connections).max(1)
+        let total_bps = 100 * 1024 * 1024;
+        total_bps / u64::from(connections).max(1)
     }
 }
 
@@ -183,5 +185,48 @@ mod tests {
             max_threads: 4,
         };
         assert!(!ok.is_memory_pressured());
+    }
+
+    #[test]
+    fn disk_budget_is_bytes_per_second_per_connection() {
+        // H18 regression: the disk budget is bytes/second, not MB/s. With the
+        // default 100 MB/s assumption and 4 connections, each gets 25 MB/s.
+        let budget = ResourceManager::detect_disk_budget(4);
+        assert_eq!(budget, 25 * 1024 * 1024);
+        // And it scales down with more connections.
+        let budget8 = ResourceManager::detect_disk_budget(8);
+        assert_eq!(budget8, budget / 2);
+    }
+
+    #[test]
+    fn is_disk_bottlenecked_uses_mbps_consistently() {
+        let slow = UnifiedSnapshot {
+            memory_pressure: 0.0,
+            cpu_count: 1,
+            cpu_usage_pct: 0.0,
+            available_memory_mb: 1000,
+            total_memory_mb: 1000,
+            disk_write_mbps: 3,
+            disk_budget_per_connection: 0,
+            write_buffer: 256 * 1024,
+            read_buffer: 128 * 1024,
+            flush_interval_ms: 100,
+            active_threads: 0,
+            max_threads: 4,
+        };
+        assert!(slow.is_disk_bottlenecked(), "3 MB/s is disk-bottlenecked");
+
+        let fast = UnifiedSnapshot {
+            disk_write_mbps: 50,
+            ..slow.clone()
+        };
+        assert!(!fast.is_disk_bottlenecked(), "50 MB/s is not bottlenecked");
+
+        // Zero (unknown) is not treated as bottlenecked.
+        let unknown = UnifiedSnapshot {
+            disk_write_mbps: 0,
+            ..slow.clone()
+        };
+        assert!(!unknown.is_disk_bottlenecked());
     }
 }
