@@ -46,7 +46,6 @@ pub struct SelfHealer {
     total_recoveries: u32,
     max_recoveries_per_minute: u32,
     recovery_window: Duration,
-    recovery_window_start: Instant,
 }
 
 impl SelfHealer {
@@ -61,7 +60,6 @@ impl SelfHealer {
             total_recoveries: 0,
             max_recoveries_per_minute: 20,
             recovery_window: Duration::from_secs(60),
-            recovery_window_start: Instant::now(),
         }
     }
 

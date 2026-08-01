@@ -16,10 +16,18 @@ pub struct ThreadPool {
 impl ThreadPool {
     pub fn new() -> Self {
         let cfg = global_config();
-        Self::with_size(cfg.worker_threads)
+        Self::with_size(cfg.worker_threads).unwrap_or_else(|e| {
+            log::error!("thread_pool: {e}; falling back to 1 worker");
+            Self::with_size(1).expect("1-worker pool must succeed")
+        })
     }
 
-    pub fn with_size(size: u32) -> Self {
+    /// Create a pool with `size` workers. Rejects 0 — a zero-worker pool
+    /// would deadlock the dispatcher on `% 0` (M2).
+    pub fn with_size(size: u32) -> Result<Self, String> {
+        if size == 0 {
+            return Err("ThreadPool::with_size(0) rejected: would divide by zero".into());
+        }
         let active_count = Arc::new(AtomicU32::new(0));
         let mut worker_handles = Vec::with_capacity(size as usize);
 
@@ -99,13 +107,13 @@ impl ThreadPool {
             })
             .unwrap();
 
-        Self {
+        Ok(Self {
             tx: Some(public_tx),
             worker_handles,
             dispatcher_handle: Some(dispatcher_handle),
             active_count,
             max_size: size,
-        }
+        })
     }
 
     #[allow(dead_code)]
@@ -160,15 +168,22 @@ mod tests {
 
     #[test]
     fn new_creates_pool() {
-        let pool = ThreadPool::with_size(2);
+        let pool = ThreadPool::with_size(2).unwrap();
         assert_eq!(pool.max_size(), 2);
         assert_eq!(pool.active_count(), 0);
         pool.shutdown();
     }
 
     #[test]
+    fn zero_size_pool_is_rejected() {
+        // M2 regression: with_size(0) must return Err (the dispatcher would
+        // divide by zero), not panic or deadlock.
+        assert!(ThreadPool::with_size(0).is_err());
+    }
+
+    #[test]
     fn spawn_executes_task() {
-        let pool = ThreadPool::with_size(2);
+        let pool = ThreadPool::with_size(2).unwrap();
         let counter = Arc::new(AtomicUsize::new(0));
         let c = counter.clone();
         pool.spawn(move || {
@@ -181,7 +196,7 @@ mod tests {
 
     #[test]
     fn multiple_tasks_execute() {
-        let pool = ThreadPool::with_size(4);
+        let pool = ThreadPool::with_size(4).unwrap();
         let counter = Arc::new(AtomicUsize::new(0));
         for _ in 0..100 {
             let c = counter.clone();
@@ -196,7 +211,7 @@ mod tests {
 
     #[test]
     fn active_count_tracks_workers() {
-        let pool = ThreadPool::with_size(4);
+        let pool = ThreadPool::with_size(4).unwrap();
         let barrier = Arc::new(std::sync::Barrier::new(4));
         for _ in 0..4 {
             let b = barrier.clone();

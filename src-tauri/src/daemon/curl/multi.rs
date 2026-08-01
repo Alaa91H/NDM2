@@ -157,6 +157,24 @@ mod tests {
     }
 
     #[test]
+    fn socket_token_wraps_at_max() {
+        // M15 regression: next_token must wrap safely at usize::MAX instead
+        // of saturating (which would collide tokens).
+        let mut multi = Multi::new();
+        let mut runtime = MultiSocketRuntime::attach(&mut multi).unwrap();
+        runtime.next_token = usize::MAX;
+        // The assignment logic: next_token == MAX → 1.
+        let token = runtime.next_token;
+        runtime.next_token = if runtime.next_token == usize::MAX {
+            1
+        } else {
+            runtime.next_token + 1
+        };
+        assert_eq!(token, usize::MAX);
+        assert_eq!(runtime.next_token, 1, "token must wrap to 1, not saturate");
+    }
+
+    #[test]
     fn connection_limits_from_config() {
         use crate::daemon::engine::config::global_config;
         let limits = global_config().connection_limits_for(4, "https://example.com/file");

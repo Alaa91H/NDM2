@@ -54,7 +54,16 @@ impl MirrorManager {
 
     pub fn add_mirror(&self, mirror: MirrorSource) {
         if let Ok(mut state) = self.mirrors.lock() {
-            state.mirrors.push(mirror);
+            // M7: upsert by url — a duplicate URL must never be re-added
+            // (the old code grew the list unboundedly on repeated failover).
+            if let Some(existing) = state.mirrors.iter_mut().find(|m| m.url == mirror.url) {
+                existing.priority = mirror.priority;
+                existing.region = mirror.region.clone();
+                existing.bandwidth_estimate = mirror.bandwidth_estimate;
+                existing.healthy = existing.healthy || mirror.healthy;
+            } else {
+                state.mirrors.push(mirror);
+            }
             state.mirrors.sort_by_key(|m| m.priority);
         }
     }
@@ -99,28 +108,43 @@ impl MirrorManager {
             Ok(g) => g,
             Err(_) => return None,
         };
-        if let Some(m) = state.mirrors.iter_mut().find(|m| m.url == url) {
-            m.healthy = false;
-        }
-        if let Some(idx) = state.mirrors.iter().position(|m| m.url == url) {
-            if let Some(new_idx) = state
-                .mirrors
-                .iter()
-                .enumerate()
-                .filter(|(i, m)| *i != idx && m.healthy)
-                .min_by_key(|(_, m)| m.priority)
-                .map(|(i, _)| i)
-            {
-                state.active_mirror = Some(new_idx);
-                *last = Instant::now();
-                return state
-                    .mirrors
-                    .get(new_idx)
-                    .map(|m| m.url.clone())
-                    .or_else(|| state.mirrors.first().map(|m| m.url.clone()))
-                    .unwrap_or_default()
-                    .into();
+        // M7: mark EVERY copy of the dead URL unhealthy — the old code only
+        // marked the first match, leaving a duplicate healthy copy that the
+        // failover could then select as the "new" mirror.
+        let mut any_marked = false;
+        for m in state.mirrors.iter_mut() {
+            if m.url == url {
+                m.healthy = false;
+                any_marked = true;
             }
+        }
+        if !any_marked {
+            return None;
+        }
+        let dead_indices: Vec<usize> = state
+            .mirrors
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| m.url == url)
+            .map(|(i, _)| i)
+            .collect();
+        if let Some(new_idx) = state
+            .mirrors
+            .iter()
+            .enumerate()
+            .filter(|(i, m)| !dead_indices.contains(i) && m.healthy)
+            .min_by_key(|(_, m)| m.priority)
+            .map(|(i, _)| i)
+        {
+            state.active_mirror = Some(new_idx);
+            *last = Instant::now();
+            return state
+                .mirrors
+                .get(new_idx)
+                .map(|m| m.url.clone())
+                .or_else(|| state.mirrors.first().map(|m| m.url.clone()))
+                .unwrap_or_default()
+                .into();
         }
         None
     }
@@ -345,5 +369,36 @@ mod tests {
 
         let result = mgr.report_failure("https://primary.example.com", "error");
         assert_eq!(result.as_deref(), Some("https://a.example.com"));
+    }
+
+    #[test]
+    fn add_mirror_deduplicates_by_url() {
+        // M7 regression: adding the same URL twice must not duplicate it.
+        let mgr = MirrorManager::new("https://primary.example.com");
+        mgr.add_mirror(mirror("https://m.example.com", 5));
+        mgr.add_mirror(mirror("https://m.example.com", 5));
+        mgr.add_mirror(mirror("https://m.example.com", 5));
+        assert_eq!(mgr.mirrors().len(), 2, "duplicate urls must be upserted");
+    }
+
+    #[test]
+    fn report_failure_marks_all_copies_unhealthy() {
+        // M7 regression: every copy of the dead URL must be marked unhealthy
+        // so failover cannot select a duplicate healthy copy. (With the
+        // upsert fix duplicates no longer accumulate, but the marking logic
+        // must still handle legacy states that already contain duplicates.)
+        let mgr = MirrorManager::new("https://primary.example.com");
+        mgr.add_mirror(mirror("https://backup.example.com", 1));
+        // Force a legacy duplicated state directly (bypassing the upsert).
+        {
+            let mut state = mgr.mirrors.lock().unwrap();
+            state.mirrors.push(mirror("https://backup.example.com", 1));
+            state.mirrors.sort_by_key(|m| m.priority);
+        }
+
+        let result = mgr.report_failure("https://backup.example.com", "error");
+        // Must skip both copies of backup; the lowest healthy priority left
+        // is the primary (priority 0).
+        assert_eq!(result.as_deref(), Some("https://primary.example.com"));
     }
 }

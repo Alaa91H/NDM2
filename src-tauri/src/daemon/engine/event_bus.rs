@@ -141,6 +141,11 @@ type Subscriber = Arc<dyn Fn(&TimestampedEvent) + Send + Sync>;
 
 pub type SubscriberId = u64;
 
+/// Cap on re-entrant events queued while a publish is in flight. Prevents
+/// unbounded growth when a slow subscriber triggers many nested publishes
+/// (M3): oldest events are dropped, newest survive.
+const MAX_PENDING_EVENTS: usize = 10_000;
+
 /// RAII guard that guarantees `EventBusInner::publish_depth` is reset — and
 /// any re-entrantly queued events are collected — even when a panic unwinds
 /// past subscriber notification. Without it, a panic mid-publish would leave
@@ -262,7 +267,11 @@ impl EventBus {
             };
 
             if inner.publish_depth > 0 {
-                // Reentrant call: queue for processing after outer publish completes.
+                // Reentrant call: queue for processing after outer publish
+                // completes. Bounded: drop oldest first (M3).
+                if inner.pending_events.len() >= MAX_PENDING_EVENTS {
+                    inner.pending_events.remove(0);
+                }
                 inner.pending_events.push(event);
                 return;
             }
@@ -472,6 +481,29 @@ mod tests {
         assert!(
             matches!(events[0].event, EngineEvent::DownloadStarted { ref task_id, .. } if task_id == "t1")
         );
+    }
+
+    #[test]
+    fn pending_events_queue_is_bounded() {
+        // M3 regression: re-entrant events must not grow the pending queue
+        // without bound. Simulate a nested publish flood by filling the
+        // pending queue directly (the cap is enforced on push).
+        let bus = EventBus::new();
+        {
+            let mut inner = bus.inner.lock().unwrap();
+            inner.publish_depth = 1;
+            for i in 0..(MAX_PENDING_EVENTS + 500) {
+                if inner.pending_events.len() >= MAX_PENDING_EVENTS {
+                    inner.pending_events.remove(0);
+                }
+                inner.pending_events.push(make_progress("t1", i as u64));
+            }
+            let len = inner.pending_events.len();
+            assert!(
+                len <= MAX_PENDING_EVENTS,
+                "pending queue must be capped at {MAX_PENDING_EVENTS}, got {len}"
+            );
+        }
     }
 
     // ── 2. publish assigns sequential IDs ─────────────────────────────

@@ -323,7 +323,15 @@ pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
                         .pool_max_idle_per_host(4)
                         .connect_timeout(std::time::Duration::from_secs(15))
                         .build()
-                        .unwrap_or_else(|_| HttpClient::new()),
+                        .unwrap_or_else(|_| {
+                            // M4: the fallback client must also have timeouts
+                            // (a bare HttpClient::new() could hang forever).
+                            HttpClient::builder()
+                                .connect_timeout(std::time::Duration::from_secs(15))
+                                .timeout(std::time::Duration::from_secs(60))
+                                .build()
+                                .unwrap_or_else(|_| HttpClient::new())
+                        }),
                     resource_dir,
                     data_dir: data_dir.clone(),
                     ytdlp_bin,
