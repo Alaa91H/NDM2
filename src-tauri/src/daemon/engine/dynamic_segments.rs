@@ -83,6 +83,38 @@ impl DynamicSegmentScheduler {
         }
     }
 
+    /// Replace the entire segment geometry with the adaptive engine's current
+    /// view (phase 5). Keeps per-segment downloaded/speed when an id matches.
+    pub fn replace_segments(&self, segments: &[(u32, u64, u64, u64, u64, bool)]) {
+        if let Ok(mut current) = self.segments.lock() {
+            let mut next: Vec<SegmentState> = segments
+                .iter()
+                .map(|(id, start, end, downloaded, speed, active)| {
+                    let state = SegmentState::new(*id, *start, *end);
+                    state.downloaded.store(*downloaded, Ordering::Relaxed);
+                    state.speed.store(*speed, Ordering::Relaxed);
+                    state.active.store(*active, Ordering::Relaxed);
+                    state
+                })
+                .collect();
+            // Preserve live progress for ids that survive the reshape.
+            for state in next.iter_mut() {
+                if let Some(old) = current.iter().find(|s| s.id == state.id) {
+                    state.downloaded.store(
+                        old.downloaded.load(Ordering::Relaxed),
+                        Ordering::Relaxed,
+                    );
+                    state.speed.store(old.speed.load(Ordering::Relaxed), Ordering::Relaxed);
+                    state.active.store(
+                        old.active.load(Ordering::Relaxed),
+                        Ordering::Relaxed,
+                    );
+                }
+            }
+            *current = next;
+        }
+    }
+
     pub fn segments(&self) -> Vec<SegmentSnapshot> {
         self.segments
             .lock()

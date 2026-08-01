@@ -170,6 +170,11 @@ pub struct CurlTransferConfig {
     pub mirror_priorities: Vec<u32>,
     pub rie_strategy: Option<String>,
     pub rie_connections: Option<u32>,
+    /// Enable the adaptive engine for segmented downloads (phase 5).
+    /// Defaults to true; set `direct_options["adaptive"] = false` to disable.
+    pub adaptive: bool,
+    /// Adaptive engine evaluation interval in milliseconds.
+    pub adaptive_eval_ms: Option<u64>,
 }
 
 impl Default for CurlTransferConfig {
@@ -736,6 +741,13 @@ impl From<&HashMap<String, Value>> for CurlTransferConfig {
                 .get("rieConnections")
                 .and_then(serde_json::Value::as_u64)
                 .map(|n| n as u32),
+            adaptive: map
+                .get("adaptive")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true),
+            adaptive_eval_ms: map
+                .get("adaptiveEvalMs")
+                .and_then(serde_json::Value::as_u64),
         }
     }
 }

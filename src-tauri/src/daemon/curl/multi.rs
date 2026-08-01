@@ -80,6 +80,21 @@ impl CurlMultiGuard {
         configure_multi_limits(self.multi()?, limits)
     }
 
+    /// Remove a live easy handle from the multi handle, returning the easy
+    /// handle for reuse/cleanup (phase 5: adaptive shrink).
+    pub(crate) fn remove<H: Handler>(
+        &mut self,
+        handle: Easy2Handle<H>,
+    ) -> Result<Easy2<H>, String> {
+        let multi = self
+            .multi
+            .as_mut()
+            .ok_or_else(|| "CurlMultiGuard: cannot remove handle after into_inner()".to_owned())?;
+        multi
+            .remove2(handle)
+            .map_err(|e| format!("Could not remove handle from libcurl multi: {e}"))
+    }
+
     pub(crate) fn attach_socket_runtime(&mut self) -> Result<MultiSocketRuntime, String> {
         MultiSocketRuntime::attach(self.multi()?)
     }

@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use ::curl::easy::Easy2;
+use ::curl::multi::Easy2Handle;
 
 use super::{
     apply_easy_options, create_easy_for_range_ext, drive_multi_socket, drive_multi_wait_perform,
@@ -1106,6 +1107,34 @@ fn run_segmented_libcurl(
         );
     }
 
+    // Phase 5/1.2: record the preflight into the unified profile store so the
+    // adaptive DecisionContext has real stability/throughput data.
+    {
+        if let Ok(mut die) = state.die_orchestrator.lock() {
+            let host = reqwest::Url::parse(&plan.url)
+                .ok()
+                .and_then(|u| u.host_str().map(str::to_owned))
+                .unwrap_or_else(|| "unknown".into());
+            let profile = crate::daemon::engine::adaptive::server_profiler::ServerProfile {
+                host: host.clone(),
+                protocol: match preflight.protocol.as_str() {
+                    "h2" | "h2c" => {
+                        crate::daemon::engine::adaptive::server_profiler::ProtocolVersion::Http2
+                    }
+                    "h3" => {
+                        crate::daemon::engine::adaptive::server_profiler::ProtocolVersion::Http3
+                    }
+                    _ => crate::daemon::engine::adaptive::server_profiler::ProtocolVersion::Http11,
+                },
+                initial_rtt_us: preflight.initial_rtt_us,
+                handshake_time_us: preflight.tls_handshake_us,
+                initial_ttfb_us: preflight.ttfb_us,
+                ..Default::default()
+            };
+            die.record_preflight(&host, &profile);
+        }
+    }
+
     let mut active: Vec<(ByteRange, Arc<AtomicU64>, u64)> = Vec::new();
     let mut guard = CurlMultiGuard::new();
     guard.configure_limits(
@@ -1239,16 +1268,33 @@ fn run_segmented_libcurl(
         return merge_parts(&plan.output_path, &ranges).map(|s| TransferOutcome::plain(s, None));
     }
 
-    let mut last_total: u64 = active
-        .iter()
-        .map(|(r, p, initial)| (*initial + p.load(Ordering::Relaxed)).min(part_size(r)))
-        .sum();
-    let mut last_tick = Instant::now();
-    let mut prev_seg_bytes: Vec<u64> = vec![0; active.len()];
+    // Shared state between the tick closure and the rebuild loop (phase 5).
+    // RefCell/Cell let the closure borrow immutably while the outer loop
+    // mutates through the cell after a drive pass finishes.
+    let handles_cell: std::cell::RefCell<
+        Vec<Easy2Handle<crate::daemon::curl::easy_config::SegmentWriter>>,
+    > = std::cell::RefCell::new(handles);
+    let active_cell: std::cell::RefCell<Vec<(ByteRange, Arc<AtomicU64>, u64)>> =
+        std::cell::RefCell::new(active);
+    let last_total_cell: std::cell::Cell<u64> = std::cell::Cell::new(
+        active_cell
+            .borrow()
+            .iter()
+            .map(|(r, p, initial)| (*initial + p.load(Ordering::Relaxed)).min(part_size(r)))
+            .sum(),
+    );
+    let last_tick_cell: std::cell::Cell<Instant> = std::cell::Cell::new(Instant::now());
+    let prev_seg_bytes_cell: std::cell::RefCell<Vec<u64>> =
+        std::cell::RefCell::new(vec![0; active_cell.borrow().len()]);
     // Live rate-limit tracking for the segmented path (M6).
     let bandwidth_for_segments = state.bandwidth_manager.clone();
     let segment_task_id = id.to_owned();
     let mut last_segment_rate: Option<u64> = per_segment_limit_bps.map(|v| v.max(1));
+    // Phase 5: set by the tick when the adaptive engine requests a geometry
+    // change; the outer loop rebuilds handles and resumes driving. Debounced
+    // to at most one rebuild per 10s to prevent oscillation.
+    let pending_rebuild = std::cell::Cell::new(false);
+    let last_rebuild_at = std::cell::Cell::new(std::time::Instant::now());
     let mut tick = || {
         // Live rate refresh: apply the current per-segment cap to every live
         // handle so limit changes take effect immediately (M6).
@@ -1260,14 +1306,18 @@ fn run_segmented_libcurl(
             crate::daemon::engine::bandwidth::RateLimit::Paused => last_segment_rate,
         };
         if new_seg_rate != last_segment_rate {
-            for handle in handles.iter() {
+            for handle in handles_cell.borrow().iter() {
                 let raw = handle.raw();
                 let _ = crate::daemon::curl::easy_config::set_live_rate(raw, new_seg_rate);
             }
             last_segment_rate = new_seg_rate;
         }
         let now = Instant::now();
+        let last_tick = last_tick_cell.get();
         let elapsed = now.duration_since(last_tick).as_secs_f64().max(0.001);
+        last_tick_cell.set(now);
+        let active = active_cell.borrow();
+        let mut prev_seg_bytes = prev_seg_bytes_cell.borrow_mut();
         let mut seg_downloads = Vec::with_capacity(active.len());
         let mut seg_speeds = Vec::with_capacity(active.len());
         for (i, (_range, progress, _initial)) in active.iter().enumerate() {
@@ -1285,6 +1335,8 @@ fn run_segmented_libcurl(
             seg_downloads.push(seg_downloaded);
             seg_speeds.push(seg_speed);
         }
+        drop(active);
+        drop(prev_seg_bytes);
         if let Ok(trackers) = state.engine_trackers.read() {
             if let Some(tracker) = trackers.get(id) {
                 if let Ok(mut engine_guard) = tracker.adaptive_engine.lock() {
@@ -1296,45 +1348,186 @@ fn run_segmented_libcurl(
                                 .segment_ctrl
                                 .update_progress(i as u32, downloaded, speed);
                         }
-                        // Adaptive engine evaluate() and decision application are
-                        // disabled — the decisions (target_connections, segment
-                        // split/merge/etc.) have no code path that reconfigures
-                        // the active curl multi handle's easy handles. Progress
-                        // data is still fed to segment_ctrl for future use.
+                        // Phase 5: drive the adaptive engine LIVE. When the
+                        // decision asks for a geometry change we set
+                        // pending_rebuild; the outer drive loop then rebuilds
+                        // the easy handles from the new segment plan and
+                        // resumes driving.
+                        if plan.config.adaptive {
+                            let decision = engine.evaluate(&telemetry_bus);
+                            let mut geometry_changed = false;
+                            for action in &decision.actions {
+                                match action {
+                                    crate::daemon::engine::adaptive::AdaptationAction::AdjustConnections { new_count, .. } => {
+                                        let target = (*new_count)
+                                            .clamp(1, cfg.max_connections_per_download);
+                                        let current = u32::try_from(
+                                            handles_cell.borrow().len(),
+                                        )
+                                        .unwrap_or(1)
+                                        .max(1);
+                                        if target != current {
+                                            engine
+                                                .segment_ctrl
+                                                .redistribute_for_count(target);
+                                            geometry_changed = true;
+                                        }
+                                    }
+                                    crate::daemon::engine::adaptive::AdaptationAction::SplitSegment { .. }
+                                    | crate::daemon::engine::adaptive::AdaptationAction::MergeSegments { .. }
+                                    | crate::daemon::engine::adaptive::AdaptationAction::Redistribute { .. } => {
+                                        geometry_changed = true;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            if geometry_changed {
+                                log::info!(
+                                    "Task {id}: adaptive decision — {} ({} segments → {})",
+                                    decision.reason,
+                                    handles_cell.borrow().len(),
+                                    engine.segment_ctrl.segment_count()
+                                );
+                                // Mirror the new geometry to the UI scheduler.
+                                let new_geometry: Vec<(u32, u64, u64, u64, u64, bool)> = engine
+                                    .segment_ctrl
+                                    .segments()
+                                    .iter()
+                                    .map(|s| {
+                                        (
+                                            s.id,
+                                            s.start_byte,
+                                            s.end_byte,
+                                            s.downloaded,
+                                            s.speed,
+                                            s.state
+                                                == crate::daemon::engine::adaptive::segment_controller::SegmentState::Active,
+                                        )
+                                    })
+                                    .collect();
+                                segment_scheduler.replace_segments(&new_geometry);
+                                if last_rebuild_at.get().elapsed()
+                                    >= std::time::Duration::from_secs(10)
+                                {
+                                    pending_rebuild.set(true);
+                                    last_rebuild_at.set(std::time::Instant::now());
+                                }
+                            }
+                        }
                     }
                 }
+            }
+        }
+        // Phase 5/1.2: persist per-tick telemetry into the unified profile
+        // store so the adaptive engine's DecisionContext stays warm across
+        // sessions.
+        {
+            if let Ok(mut die) = state.die_orchestrator.lock() {
+                let host = reqwest::Url::parse(&plan.url)
+                    .ok()
+                    .and_then(|u| u.host_str().map(str::to_owned))
+                    .unwrap_or_else(|| "unknown".into());
+                let agg: u64 = seg_speeds.iter().sum();
+                die.record_telemetry(&host, 0, agg, 206);
             }
         }
         update_curl_task_progress(
             state,
             id,
             plan.total_size,
-            &active,
-            &mut last_total,
-            &mut last_tick,
+            &active_cell.borrow(),
+            &mut last_total_cell.get(),
+            &mut last_tick_cell.get(),
         );
     };
-    if let Some(runtime) = socket_runtime.as_mut() {
-        drive_multi_socket(
-            guard.multi()?,
-            runtime,
-            &handles,
-            &cancel,
-            "segment",
-            &mut tick,
-            state.bandwidth_manager.paused_flag(),
-        )?;
-    } else {
-        drive_multi_wait_perform(
-            guard.multi()?,
-            &handles,
-            &cancel,
-            "segment",
-            &mut tick,
-            state.bandwidth_manager.paused_flag(),
-        )?;
+    // Phase 5 outer drive loop: drive until completion, rebuilding the easy
+    // handles whenever the adaptive engine changes the segment geometry.
+    'drive: loop {
+        let result = if let Some(runtime) = socket_runtime.as_mut() {
+            drive_multi_socket(
+                guard.multi()?,
+                runtime,
+                &handles_cell.borrow(),
+                &cancel,
+                "segment",
+                &mut tick,
+                state.bandwidth_manager.paused_flag(),
+            )
+        } else {
+            drive_multi_wait_perform(
+                guard.multi()?,
+                &handles_cell.borrow(),
+                &cancel,
+                "segment",
+                &mut tick,
+                state.bandwidth_manager.paused_flag(),
+            )
+        };
+        // If the drive loop finished because the engine requested a rebuild
+        // (not because transfers completed), rebuild and continue.
+        if !pending_rebuild.get() {
+            result?;
+            break 'drive;
+        }
+        pending_rebuild.set(false);
+        log::info!("Task {id}: rebuilding segment handles after adaptive decision");
+        // Rebuild: remove all current handles from the multi handle, then
+        // recreate from the new geometry in segment_ctrl.
+        {
+            let mut handles = handles_cell.borrow_mut();
+            let removed: Vec<_> = handles.drain(..).collect();
+            for h in removed {
+                let _ = guard.remove(h);
+            }
+        }
+        let mut active = active_cell.borrow_mut();
+        active.clear();
+        let new_geometry: Vec<(u32, u64, u64, u64)> = engine_segments_for_rebuild(state, id);
+        for (seg_id, start, end, downloaded) in new_geometry {
+            let path = plan.output_path.with_extension(format!("part{seg_id:03}"));
+            let range = ByteRange {
+                index: seg_id as usize,
+                start,
+                end,
+                path: path.clone(),
+            };
+            let progress = Arc::new(AtomicU64::new(0));
+            let seg_capture = Arc::new(Mutex::new(ResponseCapture::default()));
+            seg_captures.push(seg_capture.clone());
+            let easy = create_easy_for_range_ext(
+                plan,
+                &path,
+                SegmentProgress {
+                    downloaded: progress.clone(),
+                    abort: cancel.clone(),
+                    retry_after: retry_after.clone(),
+                    capture: seg_capture,
+                    streaming_digest_out: streaming_digest_out.clone(),
+                },
+                Some((start + downloaded, end)),
+                per_segment_limit_bps,
+            )?;
+            let handle = guard
+                .add2(easy)
+                .map_err(|e| format!("Could not add segment {seg_id}: {e}"))?;
+            handles_cell.borrow_mut().push(handle);
+            active.push((range, progress, downloaded));
+        }
+        // Recompute totals for the new geometry.
+        last_total_cell.set(
+            active
+                .iter()
+                .map(|(r, p, initial)| (*initial + p.load(Ordering::Relaxed)).min(part_size(r)))
+                .sum(),
+        );
+        last_tick_cell.set(Instant::now());
+        *prev_seg_bytes_cell.borrow_mut() = vec![0; active.len()];
+        drop(active);
+        if handles_cell.borrow().is_empty() {
+            break 'drive;
+        }
     }
-    for (idx, handle) in handles.iter().enumerate() {
+    for (idx, handle) in handles_cell.borrow().iter().enumerate() {
         let code = handle
             .response_code()
             .map_err(|e| format!("Segment {idx}: could not read HTTP response code: {e}"))?;
@@ -1369,9 +1562,9 @@ fn run_segmented_libcurl(
         state,
         id,
         plan.total_size,
-        &active,
-        &mut last_total,
-        &mut last_tick,
+        &active_cell.borrow(),
+        &mut last_total_cell.get(),
+        &mut last_tick_cell.get(),
     );
     let (captured_validator, encoded) = seg_captures
         .first()
@@ -1384,6 +1577,32 @@ fn run_segmented_libcurl(
         validator: captured_validator,
         content_encoded: encoded,
     })
+}
+
+/// Phase 5: read the adaptive engine's current segment geometry
+/// (id, start, end, downloaded) for a task. Empty when the engine is gone.
+fn engine_segments_for_rebuild(
+    state: &SharedState,
+    id: &str,
+) -> Vec<(u32, u64, u64, u64)> {
+    let Ok(trackers) = state.engine_trackers.read() else {
+        return Vec::new();
+    };
+    let Some(tracker) = trackers.get(id) else {
+        return Vec::new();
+    };
+    let Ok(engine_guard) = tracker.adaptive_engine.lock() else {
+        return Vec::new();
+    };
+    let Some(engine) = engine_guard.as_ref() else {
+        return Vec::new();
+    };
+    engine
+        .segment_ctrl
+        .segments()
+        .iter()
+        .map(|s| (s.id, s.start_byte, s.end_byte, s.downloaded))
+        .collect()
 }
 
 fn run_libcurl_download(
@@ -2945,6 +3164,55 @@ mod tests {
         assert_eq!(task.status, "completed");
         let written = std::fs::read(&out).unwrap();
         assert_eq!(written, payload, "rate-limited download is corrupt");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn adaptive_segmented_download_grows_and_completes() {
+        // Phase 5: the adaptive engine must drive real geometry growth on a
+        // segmented download and the final file must match byte-for-byte.
+        let payload: Vec<u8> = (0..(8 * 1024 * 1024)).map(|i| (i % 251) as u8).collect();
+        let addr = spawn_range_server(std::sync::Arc::new(payload.clone()));
+        let url = format!("http://{addr}/adaptive.zip");
+        let dir = std::env::temp_dir().join(format!("nova_test_adaptive_{}", std::process::id()));
+        let out = dir.join("adaptive.zip");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let state = std::sync::Arc::new(crate::daemon::persist::tests::test_state(
+            &dir.to_string_lossy(),
+        ));
+        let id = "adaptive-test";
+        let body = download_body(&url, "adaptive.zip", payload.len() as u64, 2);
+        let mut direct_options = std::collections::HashMap::new();
+        // Force a fast evaluation interval so a decision is made during the run.
+        direct_options.insert(
+            "adaptiveEvalMs".to_string(),
+            serde_json::Value::from(100u64),
+        );
+        let mut job = task_from_body(
+            &body,
+            id,
+            "adaptive.zip".to_string(),
+            &out,
+            direct_options,
+            Vec::new(),
+        );
+        // Make the segments small enough that growth is possible: 8 MiB with
+        // min_segment_bytes from config (256 KiB) allows up to 32 segments.
+        job.task.connections = 2;
+        {
+            let mut jobs = state.curl_jobs.lock().unwrap();
+            jobs.insert(id.to_string(), job);
+        }
+        state.mark_dirty();
+
+        let st = state.clone();
+        std::thread::spawn(move || start_curl_process(&st, id));
+
+        let task = run_task_to_completion(&state, id, std::time::Duration::from_secs(120));
+        assert_eq!(task.status, "completed");
+        let written = std::fs::read(&out).unwrap();
+        assert_eq!(written, payload, "adaptive download is corrupt");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
