@@ -726,6 +726,12 @@ fn run_single_libcurl(
     };
     let handle = guard.add2(easy)?;
     let handles = vec![handle];
+    // Live rate-limit tracking (M6): remember what cap is currently applied to
+    // the easy handle so the tick can push changes immediately instead of
+    // waiting for a restart. `None` = unlimited, `Some(bps)` = capped.
+    let mut last_applied_rate: Option<u64> = task_limit_bps;
+    let bandwidth_for_tick = state.bandwidth_manager.clone();
+    let task_id_for_rate = id.to_owned();
     let mut last_total = on_disk_before;
     let mut last_tick = Instant::now();
     let mut last_progress_time = Instant::now();
@@ -738,6 +744,22 @@ fn run_single_libcurl(
     // the whole transfer completes and then jumping to 100%.
     let mut effective_total = plan.total_size;
     let mut tick = || {
+        // Live rate-limit refresh (M6): push bandwidth changes into the
+        // running easy handle on the next tick instead of at handle build.
+        let new_rate = match bandwidth_for_tick.rate_limit_for(&task_id_for_rate) {
+            crate::daemon::engine::bandwidth::RateLimit::Unlimited => None,
+            crate::daemon::engine::bandwidth::RateLimit::Limit(kbps) => Some(kbps * 1024),
+            crate::daemon::engine::bandwidth::RateLimit::Paused => {
+                // Paused: handled by the drive-loop pause gate; keep the
+                // current cap so resume restores it.
+                last_applied_rate
+            }
+        };
+        if new_rate != last_applied_rate {
+            let raw = handles[0].raw();
+            let _ = crate::daemon::curl::easy_config::set_live_rate(raw, new_rate);
+            last_applied_rate = new_rate;
+        }
         let counter_bytes = downloaded_for_tick.load(Ordering::Relaxed);
         let disk_bytes = FileWriter::current_size(&plan.output_path).unwrap_or(0);
         let effective_downloaded =
@@ -815,9 +837,17 @@ fn run_single_libcurl(
             &cancel,
             "transfer",
             &mut tick,
+            state.bandwidth_manager.paused_flag(),
         )?;
     } else {
-        drive_multi_wait_perform(guard.multi()?, &handles, &cancel, "transfer", &mut tick)?;
+        drive_multi_wait_perform(
+            guard.multi()?,
+            &handles,
+            &cancel,
+            "transfer",
+            &mut tick,
+            state.bandwidth_manager.paused_flag(),
+        )?;
     }
     let response = handles[0]
         .response_code()
@@ -1213,7 +1243,27 @@ fn run_segmented_libcurl(
         .sum();
     let mut last_tick = Instant::now();
     let mut prev_seg_bytes: Vec<u64> = vec![0; active.len()];
+    // Live rate-limit tracking for the segmented path (M6).
+    let bandwidth_for_segments = state.bandwidth_manager.clone();
+    let segment_task_id = id.to_owned();
+    let mut last_segment_rate: Option<u64> = per_segment_limit_bps.map(|v| v.max(1));
     let mut tick = || {
+        // Live rate refresh: apply the current per-segment cap to every live
+        // handle so limit changes take effect immediately (M6).
+        let new_seg_rate = match bandwidth_for_segments.rate_limit_for(&segment_task_id) {
+            crate::daemon::engine::bandwidth::RateLimit::Unlimited => None,
+            crate::daemon::engine::bandwidth::RateLimit::Limit(kbps) => {
+                Some((kbps * 1024) / u64::from(effective_connections.max(1)).max(1))
+            }
+            crate::daemon::engine::bandwidth::RateLimit::Paused => last_segment_rate,
+        };
+        if new_seg_rate != last_segment_rate {
+            for handle in handles.iter() {
+                let raw = handle.raw();
+                let _ = crate::daemon::curl::easy_config::set_live_rate(raw, new_seg_rate);
+            }
+            last_segment_rate = new_seg_rate;
+        }
         let now = Instant::now();
         let elapsed = now.duration_since(last_tick).as_secs_f64().max(0.001);
         let mut seg_downloads = Vec::with_capacity(active.len());
@@ -1270,9 +1320,17 @@ fn run_segmented_libcurl(
             &cancel,
             "segment",
             &mut tick,
+            state.bandwidth_manager.paused_flag(),
         )?;
     } else {
-        drive_multi_wait_perform(guard.multi()?, &handles, &cancel, "segment", &mut tick)?;
+        drive_multi_wait_perform(
+            guard.multi()?,
+            &handles,
+            &cancel,
+            "segment",
+            &mut tick,
+            state.bandwidth_manager.paused_flag(),
+        )?;
     }
     for (idx, handle) in handles.iter().enumerate() {
         let code = handle
@@ -2743,6 +2801,127 @@ mod tests {
             job.run_generation.load(std::sync::atomic::Ordering::Acquire),
             5
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pause_actually_stalls_bytes_and_resume_completes() {
+        // H1 regression: pause_all() must stop the transfer from moving bytes
+        // (the old bug turned paused into "unlimited"). A 4 MiB payload is big
+        // enough that a stalled transfer is measurable.
+        let payload: Vec<u8> = (0..(4 * 1024 * 1024)).map(|i| (i % 251) as u8).collect();
+        let addr = spawn_range_server(std::sync::Arc::new(payload.clone()));
+        let url = format!("http://{addr}/pause.zip");
+        let dir = std::env::temp_dir().join(format!("nova_test_pause_{}", std::process::id()));
+        let out = dir.join("pause.zip");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let state = std::sync::Arc::new(crate::daemon::persist::tests::test_state(
+            &dir.to_string_lossy(),
+        ));
+        let id = "pause-test";
+        let body = download_body(&url, "pause.zip", payload.len() as u64, 1);
+        let job = task_from_body(
+            &body,
+            id,
+            "pause.zip".to_string(),
+            &out,
+            std::collections::HashMap::new(),
+            Vec::new(),
+        );
+        {
+            let mut jobs = state.curl_jobs.lock().unwrap();
+            jobs.insert(id.to_string(), job);
+        }
+        state.mark_dirty();
+
+        let st = state.clone();
+        let worker = std::thread::spawn(move || start_curl_process(&st, id));
+
+        // Wait until some bytes have been written.
+        let mut seen_any = false;
+        for _ in 0..200 {
+            let written = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
+            if written > 0 {
+                seen_any = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(seen_any, "transfer never started writing");
+
+        // Pause and sample the on-disk size over 600ms — it must not grow.
+        state.bandwidth_manager.pause_all();
+        let frozen = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        let after_pause = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
+        assert_eq!(
+            after_pause, frozen,
+            "paused transfer kept writing: before={frozen} after={after_pause}"
+        );
+
+        // Resume and let it complete.
+        state.bandwidth_manager.resume_all();
+        worker.join().unwrap();
+        let task = run_task_to_completion(&state, id, std::time::Duration::from_secs(60));
+        assert_eq!(task.status, "completed");
+        let written = std::fs::read(&out).unwrap();
+        assert_eq!(written, payload, "resumed download is corrupt");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn live_rate_limit_change_takes_effect() {
+        // M6 regression: changing the bandwidth limit mid-transfer must apply
+        // immediately to the running easy handle. A tiny limit makes the
+        // transfer crawl; a generous limit lets it finish.
+        let payload: Vec<u8> = (0..(2 * 1024 * 1024)).map(|i| (i % 253) as u8).collect();
+        let addr = spawn_range_server(std::sync::Arc::new(payload.clone()));
+        let url = format!("http://{addr}/rate.zip");
+        let dir = std::env::temp_dir().join(format!("nova_test_rate_{}", std::process::id()));
+        let out = dir.join("rate.zip");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let state = std::sync::Arc::new(crate::daemon::persist::tests::test_state(
+            &dir.to_string_lossy(),
+        ));
+        let id = "rate-test";
+        let body = download_body(&url, "rate.zip", payload.len() as u64, 1);
+        let job = task_from_body(
+            &body,
+            id,
+            "rate.zip".to_string(),
+            &out,
+            std::collections::HashMap::new(),
+            Vec::new(),
+        );
+        {
+            let mut jobs = state.curl_jobs.lock().unwrap();
+            jobs.insert(id.to_string(), job);
+        }
+        state.mark_dirty();
+
+        // Start with a modest per-task cap (64 KB/s) and record how much
+        // downloads in a fixed window — the cap must visibly throttle.
+        state.bandwidth_manager.set_task_limit(id.into(), 64);
+        let st = state.clone();
+        std::thread::spawn(move || start_curl_process(&st, id));
+
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let capped_size = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
+        // 64 KB/s over 500ms ≈ 32 KB. Allow generous slack, but the transfer
+        // must NOT have completed the full 2 MiB while capped.
+        assert!(
+            capped_size < 512 * 1024,
+            "64 KB/s cap was not applied: wrote {capped_size} bytes in 500ms"
+        );
+
+        // Remove the cap — the transfer should now speed up and finish.
+        state.bandwidth_manager.remove_task_limit(id);
+        let task = run_task_to_completion(&state, id, std::time::Duration::from_secs(60));
+        assert_eq!(task.status, "completed");
+        let written = std::fs::read(&out).unwrap();
+        assert_eq!(written, payload, "rate-limited download is corrupt");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

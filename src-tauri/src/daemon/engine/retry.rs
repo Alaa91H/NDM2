@@ -63,15 +63,25 @@ impl RetryPolicy {
         let base = self.base_delay.as_secs_f64() * self.backoff_multiplier.powf(exp);
         let capped = base.min(self.max_delay.as_secs_f64());
         if self.jitter {
-            let jitter_range = capped * 0.25;
-            // Use total elapsed and subsecond nanos for entropy to avoid
-            // thundering herd when multiple tasks retry at the same attempt.
-            let dur = std::time::SystemTime::now()
+            // Symmetric jitter: ±12.5% of the capped delay, using integer
+            // math on nanoseconds so the modulo is unbiased and never zero
+            // for a non-trivial range. This both thundering-herd mitigates
+            // (tasks at the same attempt land on different delays) and avoids
+            // the old positive-only bias that made every retry longer.
+            let capped_nanos = (capped * 1e9) as u128;
+            let half_range = capped_nanos / 8; // ±12.5% → 25% spread
+            let entropy = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default();
-            let nanos = dur.as_secs() + u64::from(dur.subsec_nanos());
-            let jitter = (nanos as f64) % jitter_range;
-            Duration::from_secs_f64((capped + jitter).max(0.1))
+                .unwrap_or_default()
+                .as_nanos();
+            if half_range > 0 {
+                let offset = (entropy % (half_range * 2 + 1)) as i128 - half_range as i128;
+                let jittered = (capped_nanos as i128 + offset).max(0) as u128;
+                let secs = jittered as f64 / 1e9;
+                Duration::from_secs_f64(secs.max(0.001))
+            } else {
+                Duration::from_secs_f64(capped)
+            }
         } else {
             Duration::from_secs_f64(capped)
         }
@@ -179,12 +189,20 @@ mod tests {
     #[test]
     fn default_policy_delays_grow_exponentially() {
         let policy = RetryPolicy::default(); // base=1s, mult=2.0, jitter=true
+        // With symmetric jitter (±12.5%) the exact values are no longer
+        // deterministic; assert the growth trend and the ±12.5% band instead.
         let d1 = policy.delay_for_attempt(1);
         let d2 = policy.delay_for_attempt(2);
         let d3 = policy.delay_for_attempt(3);
-        assert_duration_eq(d1, Duration::from_secs(1), "attempt 1");
-        assert_duration_eq(d2, Duration::from_secs(2), "attempt 2");
-        assert_duration_eq(d3, Duration::from_secs(4), "attempt 3");
+        let in_band = |d: Duration, expected_secs: f64| {
+            let lo = (expected_secs * 0.875 * 1e9) as u128;
+            let hi = (expected_secs * 1.125 * 1e9) as u128;
+            let nanos = d.as_nanos();
+            nanos >= lo && nanos <= hi
+        };
+        assert!(in_band(d1, 1.0), "a1={d1:?} outside 1s±12.5%");
+        assert!(in_band(d2, 2.0), "a2={d2:?} outside 2s±12.5%");
+        assert!(in_band(d3, 4.0), "a3={d3:?} outside 4s±12.5%");
         assert!(d2 > d1, "delays must grow");
         assert!(d3 > d2, "delays must grow");
     }
@@ -269,6 +287,44 @@ mod tests {
                 "attempt {attempt}: {d:?} exceeds max_delay + jitter"
             );
         }
+    }
+
+    #[test]
+    fn jitter_is_symmetric_and_varied() {
+        // M1/L20 regression: jitter must be non-zero, varied across samples,
+        // and symmetric around the capped delay (not positive-only).
+        let policy = RetryPolicy::default(); // jitter enabled
+        let mut samples: Vec<Duration> = (0..1000).map(|_| policy.delay_for_attempt(5)).collect();
+        samples.sort();
+        let min_d = samples[0];
+        let max_d = *samples.last().unwrap();
+        let median = samples[samples.len() / 2];
+        // Symmetry: the median of a symmetric distribution sits at the center
+        // of the observed range, and values must land on both sides of it.
+        let center_nanos = (min_d.as_nanos() + max_d.as_nanos()) / 2;
+        let spread = max_d.as_nanos().saturating_sub(min_d.as_nanos());
+        assert!(
+            spread > 0,
+            "jitter must produce varied delays (min={min_d:?}, max={max_d:?})"
+        );
+        assert!(
+            spread <= median.as_nanos() / 4,
+            "jitter spread {spread} exceeds ±12.5% of median {}",
+            median.as_nanos()
+        );
+        // The median must sit near the middle of the range (±20% of spread).
+        let median_offset = median.as_nanos().abs_diff(center_nanos);
+        assert!(
+            median_offset <= spread * 2 / 10,
+            "jitter is biased: median {median:?} far from center of [{min_d:?}, {max_d:?}]"
+        );
+        // And some samples must fall strictly below the median and some above.
+        let below = samples.iter().filter(|d| **d < median).count();
+        let above = samples.iter().filter(|d| **d > median).count();
+        assert!(
+            below > 0 && above > 0,
+            "jitter must be symmetric (below={below}, above={above})"
+        );
     }
 
     // --- RetryState tests ---

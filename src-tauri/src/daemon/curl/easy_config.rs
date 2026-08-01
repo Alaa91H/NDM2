@@ -484,7 +484,8 @@ pub fn apply_easy_options<H: Handler>(
         easy.referer(referer)
             .map_err(|e| format!("Could not configure referer: {e}"))?;
     } else if let Some(origin) = url_origin(&plan.url) {
-        let _ = easy.referer(&origin);
+        easy.referer(&origin)
+            .map_err(|e| format!("Could not configure origin referer: {e}"))?;
     }
     if let Some(cookies) = plan.config.str_("cookies") {
         easy.cookie(cookies)
@@ -627,7 +628,8 @@ pub fn apply_easy_options<H: Handler>(
         } else {
             max_default.min(3600)
         };
-        let _ = easy.timeout(Duration::from_secs(default_timeout));
+        easy.timeout(Duration::from_secs(default_timeout))
+            .map_err(|e| format!("Could not configure default timeout: {e}"))?;
     }
     if let Some(sec) = plan.config.u64_("connectTimeoutSec").filter(|v| *v > 0) {
         easy.connect_timeout(Duration::from_secs(sec))
@@ -638,14 +640,14 @@ pub fn apply_easy_options<H: Handler>(
             .map_err(|e| format!("Could not configure redirect limit: {e}"))?;
     }
     if plan.config.u64_("connectTimeoutSec").is_none() {
-        let _ = easy.connect_timeout(Duration::from_secs(30));
+        easy.connect_timeout(Duration::from_secs(30))
+            .map_err(|e| format!("Could not configure default connect timeout: {e}"))?;
     }
-    if plan.config.u64_("lowSpeedLimitBytes").is_none()
-        && plan.config.u64_("speedTimeSec").is_none()
-    {
-        let _ = easy.low_speed_limit(500);
-        let _ = easy.low_speed_time(Duration::from_secs(15));
-    }
+    // A15: no implicit low-speed abort. The old default of
+    // `low_speed_limit(500 B/s for 15s)` killed legitimate slow downloads
+    // (e.g. a capped connection or a throttled server). The low-speed abort
+    // is only applied when the user explicitly configures
+    // `lowSpeedLimitBytes`/`speedTimeSec` in the plan below.
     if let Some(user) = plan.config.str_("username") {
         easy.username(user)
             .map_err(|e| format!("Could not configure username: {e}"))?;
@@ -1232,9 +1234,23 @@ pub fn create_easy_for_range_ext(
     });
     apply_easy_options(&mut easy, plan, range)?;
     if let Some(limit) = bandwidth_limit.filter(|l| *l > 0) {
-        let _ = easy.max_recv_speed(limit);
+        easy.max_recv_speed(limit)
+            .map_err(|e| format!("Could not configure bandwidth limit: {e}"))?;
     }
     Ok(easy)
+}
+
+/// Apply (or clear) a live per-handle download cap on a raw curl handle.
+/// `None` means unlimited; `Some(0)` is treated as unlimited too because
+/// libcurl interprets 0 as "no limit". Returns the previous setting for restore.
+pub fn set_live_rate(easy: *mut curl_sys::CURL, limit: Option<u64>) -> Result<(), String> {
+    let bps = limit.unwrap_or(0);
+    let code = unsafe { curl_sys::curl_easy_setopt(easy, curl_sys::CURLOPT_MAX_RECV_SPEED_LARGE, bps) };
+    if code == curl_sys::CURLE_OK {
+        Ok(())
+    } else {
+        Err(format!("Could not set live rate limit: curl code {code}"))
+    }
 }
 
 /// Reject curl protocol lists that include schemes which could read local files
@@ -1336,5 +1352,15 @@ mod tests {
         assert!(w.header(b"Content-Range: bytes 0-9/*\r\n"));
         let cap = captured(&w);
         assert_eq!(cap.content_length, None);
+    }
+
+    #[test]
+    fn set_live_rate_rejects_null_handle() {
+        // M12: a failed easy option must surface as an Err, never be silently
+        // dropped. Passing a null raw handle makes libcurl fail immediately.
+        let result = set_live_rate(std::ptr::null_mut(), Some(1024));
+        assert!(result.is_err(), "null handle must produce an error");
+        let result = set_live_rate(std::ptr::null_mut(), None);
+        assert!(result.is_err(), "null handle must produce an error even for clear");
     }
 }

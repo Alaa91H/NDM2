@@ -812,6 +812,7 @@ mod tests {
             &cancel,
             "transfer",
             || {},
+            &AtomicBool::new(false),
         )
         .unwrap();
 

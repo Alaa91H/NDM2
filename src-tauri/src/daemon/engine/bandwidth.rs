@@ -16,6 +16,16 @@ const MAX_SPEED_HISTORY_TASKS: usize = 5_000;
 type SpeedSample = (Instant, u64);
 type SpeedHistory = HashMap<String, VecDeque<SpeedSample>>;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RateLimit {
+    /// No bandwidth cap — transfer runs as fast as the server allows.
+    Unlimited,
+    /// A hard cap in kB/s.
+    Limit(u64),
+    /// The task is paused: the transfer loop must not move bytes.
+    Paused,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct BandwidthConfig {
     pub global_limit_kbps: u64,
@@ -96,6 +106,30 @@ impl BandwidthManager {
         allowed
     }
 
+    /// Resolve the effective rate limit for a task. Unlike
+    /// `allowed_speed_for_task` (which overloads 0 as "no limit"), this
+    /// distinguishes **paused** from **unlimited** — the two must never be
+    /// conflated: a paused transfer must stall, an unlimited one must not be
+    /// throttled at all.
+    pub fn rate_limit_for(&self, task_id: &str) -> RateLimit {
+        if self.global_paused.load(Ordering::Relaxed) {
+            return RateLimit::Paused;
+        }
+        let global = self.effective_global_limit();
+        let per_task = self
+            .task_limits
+            .lock()
+            .ok()
+            .and_then(|limits| limits.get(task_id).copied());
+        match (global, per_task) {
+            // No global and no per-task cap → unlimited.
+            (0, None) => RateLimit::Unlimited,
+            (0, Some(t)) => RateLimit::Limit(t),
+            (g, Some(t)) => RateLimit::Limit(t.min(g)),
+            (g, None) => RateLimit::Limit(g),
+        }
+    }
+
     pub fn set_global_limit(&self, kbps: u64) {
         self.global_limit.store(kbps, Ordering::Relaxed);
     }
@@ -135,6 +169,12 @@ impl BandwidthManager {
 
     pub fn is_paused(&self) -> bool {
         self.global_paused.load(Ordering::Relaxed)
+    }
+
+    /// Shared reference to the pause flag, used by transfer drive loops as a
+    /// pause gate (no bytes move while it is set).
+    pub fn paused_flag(&self) -> &AtomicBool {
+        &self.global_paused
     }
 
     pub fn report_speed(&self, task_id: &str, bytes_per_sec: u64) {
@@ -256,6 +296,32 @@ mod tests {
         m.pause_all();
         assert!(m.is_paused());
         assert_eq!(m.allowed_speed_for_task("t1"), 0);
+    }
+
+    #[test]
+    fn rate_limit_paused_is_distinct_from_unlimited() {
+        // Regression for H1: pause must NEVER be represented as "0 → no limit".
+        let m = mgr_with_global(0);
+        assert_eq!(m.rate_limit_for("t1"), RateLimit::Unlimited);
+
+        m.pause_all();
+        assert_eq!(m.rate_limit_for("t1"), RateLimit::Paused);
+        // The legacy 0-overload must still return 0 for paused (kept for
+        // callers that only need the numeric form), but the enum carries the
+        // real semantics.
+        assert_eq!(m.allowed_speed_for_task("t1"), 0);
+    }
+
+    #[test]
+    fn rate_limit_global_and_per_task() {
+        let m = mgr_with_global(1000);
+        assert_eq!(m.rate_limit_for("t1"), RateLimit::Limit(1000));
+
+        m.set_task_limit("t1".into(), 500);
+        assert_eq!(m.rate_limit_for("t1"), RateLimit::Limit(500));
+
+        let m2 = mgr_with_global(0);
+        assert_eq!(m2.rate_limit_for("t1"), RateLimit::Unlimited);
     }
 
     #[test]

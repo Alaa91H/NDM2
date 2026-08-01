@@ -350,6 +350,7 @@ pub fn drive_multi_wait_perform<H, F>(
     cancel: &AtomicBool,
     label: &str,
     mut tick: F,
+    paused: &AtomicBool,
 ) -> Result<(), String>
 where
     H: Handler,
@@ -361,6 +362,14 @@ where
     while running > 0 {
         if cancel.load(Ordering::Acquire) {
             return Err("cancelled".to_owned());
+        }
+        if paused.load(Ordering::Acquire) {
+            // Pause gate: do NOT call perform/action so no bytes move while
+            // paused. Sleep briefly and keep ticking so the UI stays fresh and
+            // resume is detected promptly.
+            std::thread::sleep(Duration::from_millis(PROGRESS_INTERVAL_MS));
+            tick();
+            continue;
         }
         multi
             .wait(&mut [], Duration::from_millis(PROGRESS_INTERVAL_MS))
@@ -382,6 +391,7 @@ pub fn drive_multi_socket<H, F>(
     cancel: &AtomicBool,
     label: &str,
     mut tick: F,
+    paused: &AtomicBool,
 ) -> Result<(), String>
 where
     H: Handler,
@@ -398,27 +408,46 @@ where
 
     // Consecutive loops where libcurl reports running > 0 but zero registered
     // sockets indicate a stalled multi state (e.g. a timer-only transfer that
-    // never creates sockets). Bail out instead of sleeping forever.
-    const MAX_EMPTY_SOCKET_STALLS: u32 = 3;
+    // never creates sockets). Bail out instead of sleeping forever. The
+    // threshold is time-based (not loop-count) so a slow-but-legitimate
+    // transfer under an active rate limit is not mistaken for a stall: a
+    // capped transfer can sit with no ready sockets for seconds while it
+    // trickles data.
+    const STALL_GRACE_PERIOD: Duration = Duration::from_secs(5);
     let mut empty_socket_stalls = 0u32;
+    let mut empty_socket_since = std::time::Instant::now();
 
     while running > 0 {
         if cancel.load(Ordering::Acquire) {
             return Err("cancelled".to_owned());
         }
 
+        if paused.load(Ordering::Acquire) {
+            // Pause gate: no multi.action calls while paused, so the transfer
+            // cannot move bytes. Keep ticking so resume is picked up quickly.
+            std::thread::sleep(Duration::from_millis(PROGRESS_INTERVAL_MS));
+            runtime.drain_updates(multi)?;
+            tick();
+            continue;
+        }
+
         let timeout = runtime.wait_timeout();
         if timeout.is_zero() || runtime.sockets.is_empty() {
             if runtime.sockets.is_empty() {
+                if empty_socket_stalls == 0 {
+                    empty_socket_since = std::time::Instant::now();
+                }
                 empty_socket_stalls += 1;
-                if empty_socket_stalls >= MAX_EMPTY_SOCKET_STALLS {
+                if empty_socket_since.elapsed() > STALL_GRACE_PERIOD {
                     return Err(wrap_multi_error(
                         MultiErrorKind::Wait,
-                        "multi handle reports running transfers but no active sockets; \
-                         stalled — aborting drive loop"
+                        "multi handle reports running transfers but no active sockets \
+                         for more than the grace period; stalled — aborting drive loop"
                             .to_owned(),
                     ));
                 }
+            } else {
+                empty_socket_stalls = 0;
             }
             // Bounded sleep: never sleep longer than one progress interval, so
             // an empty-socket + running>0 state cannot block indefinitely and
