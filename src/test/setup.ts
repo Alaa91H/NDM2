@@ -1,6 +1,12 @@
 import { vi } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 
+// React 19.2.8 ships `act` only in the development build. Vitest runs with
+// NODE_ENV=production by default, which makes @testing-library/react fail
+// with "React.act is not a function". Force the development build so the
+// testing-only `act` export is available — this never affects production.
+process.env.NODE_ENV = 'development';
+
 // localStorage mock — Node 26 without --localstorage-file leaves
 // globalThis.localStorage undefined; jsdom should provide it but the
 // shim sometimes leaks.  Always install a working in-memory polyfill.

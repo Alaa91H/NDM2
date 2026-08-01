@@ -994,7 +994,7 @@ async function request<T>(path: string, init?: RequestInit, timeoutMs = 2500): P
         let message = `NOVA daemon request failed with HTTP ${String(response.status)}`;
         try {
           const payload = (await response.json()) as { error?: string } | null;
-          if (payload?.error) message = payload.error;
+          if (payload?.error) message = `${message}: ${payload.error}`;
         } catch (parseErr) {
           logger.warn('NovaClient', 'could not parse error body', parseErr);
         }
@@ -1018,7 +1018,10 @@ async function request<T>(path: string, init?: RequestInit, timeoutMs = 2500): P
     return await doFetch(retryController.signal);
   } catch (err) {
     const isIdempotent = method === 'GET' || method === 'HEAD' || method === 'OPTIONS';
-    if (isIdempotent && err instanceof Error && !err.message.includes('HTTP 4')) {
+    const statusMatch = err instanceof Error ? /HTTP (\d{3})/.exec(err.message) : null;
+    const httpStatus = statusMatch ? Number(statusMatch[1]) : 0;
+    const isClientError = httpStatus >= 400 && httpStatus < 500;
+    if (isIdempotent && err instanceof Error && !isClientError) {
       logger.warn('NovaClient', `Retrying ${method} ${path} after transient error: ${err.message}`);
       await new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, 500);
