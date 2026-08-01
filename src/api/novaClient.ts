@@ -148,6 +148,79 @@ type CreateDownloadPayload = Omit<
   startImmediately: boolean;
 };
 
+export interface BackendLogContextPair {
+  key: string;
+  value: string;
+}
+
+/** A structured log record as exposed by the daemon `/api/logs` endpoints. */
+export interface BackendLogEntry {
+  timestamp: string;
+  timestampMs?: number;
+  level: string;
+  target: string;
+  thread: string;
+  message: string;
+  location?: string | null;
+  context?: BackendLogContextPair[];
+}
+
+export interface BackendLogsResponse {
+  entries: BackendLogEntry[];
+  level: string;
+  logDir?: string | null;
+}
+
+export interface BackendLogMatch {
+  file: string;
+  line: number;
+  text: string;
+  before: string[];
+  after: string[];
+}
+
+export interface BackendLogFileResponse {
+  files: string[];
+  active: string;
+  file: string;
+  path: string;
+  totalLines: number;
+  linesRead: number;
+  tail: string[];
+  matches: BackendLogMatch[];
+  truncatedMatches: number;
+  logDir?: string | null;
+}
+
+export interface BackendTaskSummary {
+  taskId: string;
+  entries: number;
+  errors: number;
+  warnings: number;
+  lastSeenMs: number;
+  lastLevel: string;
+  threads: string[];
+  context: BackendLogContextPair[];
+}
+
+export interface BackendTracePhase {
+  phase: string;
+  entries: number;
+  firstMs: number;
+  lastMs: number;
+}
+
+export interface BackendTaskTrace {
+  taskId: string;
+  entries: BackendLogEntry[];
+  errorPath: BackendLogEntry | null;
+  errors: BackendLogEntry[];
+  phases: BackendTracePhase[];
+  threads: string[];
+  firstMs: number;
+  lastMs: number;
+}
+
 /** Safely coerce an untyped JSON value to a string, returning a fallback for non-strings. */
 function asStr(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : fallback;
@@ -833,6 +906,60 @@ export const novaClient = {
     results: Array<{ name: string; ip: string; latencyMs: number | null }>;
   }> {
     return request('/api/dns/ping-all', { method: 'POST' }, 30000);
+  },
+
+  // ── Logging (daemon side) ────────────────────────────────────────────
+  async getLogs(limit = 500, level?: string): Promise<BackendLogsResponse> {
+    const params = new URLSearchParams();
+    params.set('limit', String(limit));
+    if (level) params.set('level', level);
+    return request<BackendLogsResponse>(`/api/logs?${params.toString()}`, undefined, 5000);
+  },
+
+  async getLogLevel(): Promise<{ level: string }> {
+    return request<{ level: string }>('/api/logs/level', undefined, 5000);
+  },
+
+  async setLogLevel(level: string): Promise<{ level: string }> {
+    return request<{ level: string }>(
+      '/api/logs/level',
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ level }),
+      },
+      5000,
+    );
+  },
+
+  async getLogFile(params: {
+    file?: string;
+    lines?: number;
+    grep?: string;
+    context?: number;
+    maxMatches?: number;
+  }): Promise<BackendLogFileResponse> {
+    const query = new URLSearchParams();
+    if (params.file) query.set('file', params.file);
+    if (params.lines !== undefined) query.set('lines', String(params.lines));
+    if (params.grep) query.set('grep', params.grep);
+    if (params.context !== undefined) query.set('context', String(params.context));
+    if (params.maxMatches !== undefined) query.set('maxMatches', String(params.maxMatches));
+    return request<BackendLogFileResponse>(`/api/logs/file?${query.toString()}`, undefined, 10000);
+  },
+
+  async getLogTasks(): Promise<{ tasks: BackendTaskSummary[] }> {
+    return request<{ tasks: BackendTaskSummary[] }>('/api/logs/tasks', undefined, 10000);
+  },
+
+  async getTaskTrace(taskId: string, limit?: number): Promise<{ trace: BackendTaskTrace | null }> {
+    const query = new URLSearchParams({ task: taskId });
+    if (limit !== undefined) query.set('limit', String(limit));
+    return request<{ trace: BackendTaskTrace | null }>(
+      `/api/logs/trace?${query.toString()}`,
+      undefined,
+      10000,
+    );
   },
 
 };

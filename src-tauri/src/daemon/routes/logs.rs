@@ -9,10 +9,15 @@ use serde::Deserialize;
 use crate::daemon::state::SharedState;
 
 pub fn register_routes(router: Router<SharedState>) -> Router<SharedState> {
-    router.route("/api/logs", get(handle_recent_logs)).route(
-        "/api/logs/level",
-        get(handle_get_log_level).patch(handle_set_log_level),
-    )
+    router
+        .route("/api/logs", get(handle_recent_logs))
+        .route(
+            "/api/logs/level",
+            get(handle_get_log_level).patch(handle_set_log_level),
+        )
+        .route("/api/logs/file", get(handle_log_file))
+        .route("/api/logs/tasks", get(handle_log_tasks))
+        .route("/api/logs/trace", get(handle_log_trace))
 }
 
 #[derive(Debug, Deserialize)]
@@ -90,5 +95,106 @@ async fn handle_set_log_level(
     })?;
     Ok(Json(serde_json::json!({
         "level": level.to_string().to_ascii_lowercase(),
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+struct LogFileQuery {
+    /// Base name of the log file (defaults to the active `nova.log`).
+    file: Option<String>,
+    /// Number of trailing lines to return (clamped to [0, 5000]).
+    lines: Option<usize>,
+    /// Case-insensitive substring to grep for (with surrounding context).
+    grep: Option<String>,
+    /// Number of context lines around each grep hit (clamped to [0, 25]).
+    context: Option<usize>,
+    /// Maximum number of grep hits (clamped to [1, 500]).
+    #[serde(rename = "maxMatches")]
+    max_matches: Option<usize>,
+}
+
+async fn handle_log_file(
+    Query(params): Query<LogFileQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let lines = params.lines.unwrap_or(200).min(5000);
+    let context_lines = params.context.unwrap_or(3).min(25);
+    let max_matches = params.max_matches.unwrap_or(100).clamp(1, 500);
+
+    let files = crate::logging::log_files();
+    let names: Vec<String> = files.iter().map(|(name, _)| name.clone()).collect();
+    let active = names
+        .iter()
+        .find(|name| name.as_str() == "nova.log")
+        .cloned()
+        .unwrap_or_else(|| names.first().cloned().unwrap_or_default());
+
+    let file = params.file.as_deref().filter(|f| !f.is_empty());
+    let tail = crate::logging::read_log_file(
+        file,
+        lines,
+        params.grep.as_deref(),
+        context_lines,
+        max_matches,
+    );
+
+    match tail {
+        Some(tail) => Ok(Json(serde_json::json!({
+            "files": names,
+            "active": active,
+            "file": tail.path.rsplit(['/', '\\']).next().unwrap_or_default(),
+            "path": tail.path,
+            "totalLines": tail.total_lines,
+            "linesRead": tail.tail.len(),
+            "tail": tail.tail,
+            "matches": tail.matches,
+            "truncatedMatches": tail.truncated_matches,
+            "logDir": crate::logging::log_dir(),
+        }))),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": format!(
+                    "log file not found: {} (available: {})",
+                    file.unwrap_or("nova.log"),
+                    if names.is_empty() {
+                        "<none>".to_owned()
+                    } else {
+                        names.join(", ")
+                    }
+                )
+            })),
+        )),
+    }
+}
+
+/// Per-task summaries aggregated from the ring buffer, newest activity first.
+async fn handle_log_tasks() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "tasks": crate::logging::task_summaries(),
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+struct LogTraceQuery {
+    /// Task id to reconstruct the trail for.
+    task: String,
+    /// Maximum number of matching records to return (clamped to [1, 5000]).
+    limit: Option<usize>,
+}
+
+async fn handle_log_trace(
+    Query(params): Query<LogTraceQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let task_id = params.task.trim();
+    if task_id.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "task query parameter must not be empty"})),
+        ));
+    }
+    let limit = params.limit.unwrap_or(2000).clamp(1, 5000);
+    let trace = crate::logging::task_trace(task_id, limit);
+    Ok(Json(serde_json::json!({
+        "trace": trace,
     })))
 }

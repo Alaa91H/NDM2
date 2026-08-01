@@ -1181,7 +1181,6 @@ pub fn create_easy_for_range_ext(
     progress: SegmentProgress,
     range: Option<(u64, u64)>,
     bandwidth_limit: Option<u64>,
-    preallocate_bytes: Option<u64>,
 ) -> Result<Easy2<SegmentWriter>, String> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -1195,18 +1194,7 @@ pub fn create_easy_for_range_ext(
         .truncate(false)
         .open(path)
         .map_err(|e| format!("Could not open segment output file: {e}"))?;
-    if let Some(size) = preallocate_bytes {
-        let current = file.metadata().map_or(0, |m| m.len());
-        if current == 0 && size > 0 {
-            // set_len needs FILE_WRITE_DATA access; opening with .append(true)
-            // alone would yield FILE_APPEND_DATA and make SetEndOfFile fail with
-            // "Access is denied (os error 5)" on Windows, killing every download
-            // at the preallocation step.
-            file.set_len(size).map_err(|e| {
-                format!("Could not preallocate segment file (disk may be full): {e}")
-            })?;
-        }
-    } else if file.metadata().map_or(0, |m| m.len()) > 0 {
+    if file.metadata().map_or(0, |m| m.len()) > 0 {
         // Resume path: keep writing after the existing bytes. Without O_APPEND
         // the cursor starts at 0, so seek to the current end explicitly.
         let _ = file

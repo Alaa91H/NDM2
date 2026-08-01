@@ -607,6 +607,7 @@ fn run_single_libcurl(
     retry_after: Arc<AtomicU64>,
     streaming_digest_out: Arc<Mutex<Option<String>>>,
 ) -> Result<TransferOutcome, String> {
+    let _phase_ctx = crate::logging::push_context("phase", "single");
     log::info!(
         "Task {id}: run_single_libcurl starting — url={}, total_size={}, resumable={}, output={}",
         plan.url,
@@ -638,10 +639,27 @@ fn run_single_libcurl(
     }
     if plan.output_path.exists() {
         let existing = FileWriter::current_size(&plan.output_path)?;
+        // NOTE: an on-disk file whose size equals the remote size is NOT treated
+        // as "already complete" here. A file can legitimately have that size
+        // while still missing its real content (e.g. a leftover preallocated
+        // file), and skipping it would mark a garbage file as downloaded.
+        // Resuming from the end of such a file is impossible (the server would
+        // answer 416), so restart it from scratch instead. Genuinely complete
+        // files are still respected by the explicit `skipExisting` option above.
         if plan.total_size > 0 && existing == plan.total_size {
-            return Ok(TransferOutcome::plain(existing, None));
-        }
-        if plan.total_size > 0 && existing > plan.total_size {
+            if plan.allow_overwrite {
+                log::info!(
+                    "Task {id}: on-disk file matches the expected size but completion is unverified; restarting download from scratch: {}",
+                    plan.output_path.display()
+                );
+                let _ = std::fs::remove_file(&plan.output_path);
+            }
+            // With allow_overwrite=false a full-size file is never silently
+            // accepted as complete (it may be a leftover preallocated file).
+            // The dispatcher already auto-renamed it away in this
+            // configuration; if we reach here anyway, fall through and let the
+            // resume flow fail loudly (416) instead of reporting a fake 100%.
+        } else if plan.total_size > 0 && existing > plan.total_size {
             if plan.allow_overwrite {
                 let _ = std::fs::remove_file(&plan.output_path);
             } else {
@@ -672,6 +690,16 @@ fn run_single_libcurl(
         0
     };
     let on_disk_before = FileWriter::current_size(&plan.output_path)?;
+    log::debug!(
+        "[DECISION] task={id} phase=single action=resume-dispatch existing={} resume_from={} resumable={} has_validator={} allow_overwrite={} total_size={} output={}",
+        on_disk_before,
+        resume_existing,
+        plan.resumable,
+        plan.validator.is_some(),
+        plan.allow_overwrite,
+        plan.total_size,
+        plan.output_path.display()
+    );
     let capture = Arc::new(Mutex::new(ResponseCapture::default()));
     let downloaded_counter = Arc::new(AtomicU64::new(0));
     let progress = SegmentProgress {
@@ -687,20 +715,7 @@ fn run_single_libcurl(
     } else {
         None
     };
-    let is_preallocated = resume_existing == 0 && plan.total_size > 0;
-    let preallocate = if is_preallocated {
-        Some(plan.total_size)
-    } else {
-        None
-    };
-    let easy = create_easy_for_range_ext(
-        plan,
-        &plan.output_path,
-        progress,
-        None,
-        task_limit_bps,
-        preallocate,
-    )?;
+    let easy = create_easy_for_range_ext(plan, &plan.output_path, progress, None, task_limit_bps)?;
     let mut guard = CurlMultiGuard::new();
     guard.configure_limits(global_config().connection_limits_for(1, &plan.url))?;
     let mut socket_runtime = if matches!(plan.config.event_loop_mode(), EventLoopMode::MultiSocket)
@@ -718,12 +733,9 @@ fn run_single_libcurl(
     let cancel_for_tick = cancel.clone();
     let mut tick = || {
         let counter_bytes = downloaded_for_tick.load(Ordering::Relaxed);
-        let effective_downloaded = if is_preallocated {
-            on_disk_before + counter_bytes
-        } else {
-            let disk_bytes = FileWriter::current_size(&plan.output_path).unwrap_or(0);
-            on_disk_before + counter_bytes.max(disk_bytes.saturating_sub(on_disk_before))
-        };
+        let disk_bytes = FileWriter::current_size(&plan.output_path).unwrap_or(0);
+        let effective_downloaded =
+            on_disk_before + counter_bytes.max(disk_bytes.saturating_sub(on_disk_before));
         let now = Instant::now();
         let elapsed = now.duration_since(last_tick).as_secs_f64().max(0.001);
         let speed = effective_downloaded.saturating_sub(last_total) as f64 / elapsed;
@@ -768,9 +780,7 @@ fn run_single_libcurl(
             }
         }
     };
-    log::info!(
-        "Task {id}: starting curl multi drive loop (on_disk_before={on_disk_before}, preallocate={preallocate:?})"
-    );
+    log::info!("Task {id}: starting curl multi drive loop (on_disk_before={on_disk_before})");
     if let Some(runtime) = socket_runtime.as_mut() {
         drive_multi_socket(
             guard.multi()?,
@@ -877,8 +887,8 @@ fn run_single_libcurl(
     // legitimately report response_code()==0 on success.
     if response == 0 && is_http_family(&plan.url) {
         // Use the atomic counter (actual curl-written bytes) NOT file size,
-        // because preallocated files inflate FileWriter::current_size() and
-        // mask a zero-byte transfer as "complete".
+        // which may be inflated by anything that resizes the file ahead of the
+        // real data and would mask a zero-byte transfer as "complete".
         let curl_written = downloaded_counter.load(Ordering::Acquire);
         log::warn!(
             "Task {id}: HTTP response=0 — curl_written={curl_written}, on_disk={}, total_size={}",
@@ -928,10 +938,14 @@ fn run_segmented_libcurl(
     streaming_digest_out: Arc<Mutex<Option<String>>>,
     preflight: &PreflightData,
 ) -> Result<TransferOutcome, String> {
+    let _phase_ctx = crate::logging::push_context("phase", "segmented");
     FileWriter::ensure_parent(&plan.output_path)?;
     if !plan.allow_overwrite && plan.output_path.exists() {
         let existing = FileWriter::current_size(&plan.output_path)?;
-        if existing == plan.total_size && plan.total_size > 0 {
+        if existing == plan.total_size
+            && plan.total_size > 0
+            && plan.config.bool_("skipExisting").unwrap_or(false)
+        {
             return Ok(TransferOutcome::plain(existing, None));
         }
         return Err(format!(
@@ -943,12 +957,9 @@ fn run_segmented_libcurl(
         let _ = std::fs::remove_file(&plan.output_path);
         remove_stale_parts_for(&plan.output_path);
     }
-    if plan.output_path.exists()
-        && FileWriter::current_size(&plan.output_path)? == plan.total_size
-        && plan.total_size > 0
-    {
-        return Ok(TransferOutcome::plain(plan.total_size, None));
-    }
+    // A pre-existing output file whose size matches the remote size is NOT
+    // treated as "already complete" — it may be a leftover preallocated file
+    // whose real content is missing. Let the segment/merge flow rebuild it.
 
     let task_limit = state.bandwidth_manager.allowed_speed_for_task(id);
     let cfg = global_config();
@@ -1060,24 +1071,92 @@ fn run_segmented_libcurl(
     } else {
         None
     };
+    // Real bytes written per segment in the previous run (persisted with the
+    // task snapshot). Used to confirm that a full-size on-disk part is
+    // genuinely complete rather than a leftover preallocated part.
+    let persisted_segment_bytes: Vec<u64> = state
+        .curl_jobs
+        .lock()
+        .ok()
+        .map(|jobs| {
+            jobs.get(id)
+                .map(|job| {
+                    job.task
+                        .segments
+                        .iter()
+                        .map(|s| s.downloaded_bytes)
+                        .collect()
+                })
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
     for range in ranges.iter().cloned() {
+        let _segment_ctx = crate::logging::push_context("segment", &range.index.to_string());
         let expected = part_size(&range);
         let actual = FileWriter::current_size(&range.path)?;
-        let existing = if actual > expected {
+        log::debug!(
+            "[SEGMENT] task={id} index={} expected={} on_disk={} start={} end={} path={}",
+            range.index,
+            expected,
+            actual,
+            range.start,
+            range.end,
+            range.path.display()
+        );
+        let mut existing = if actual > expected {
             let _ = std::fs::remove_file(&range.path);
             0
         } else {
             actual
         };
         if existing >= expected {
-            active.push((range, Arc::new(AtomicU64::new(0)), expected));
-            continue;
+            // A full-size part is only trusted when the persisted per-segment
+            // progress confirms it was fully downloaded. Otherwise it may be a
+            // leftover preallocated part whose real content is missing, so
+            // restart that segment instead of merging garbage.
+            let confirmed = persisted_segment_bytes
+                .get(range.index)
+                .copied()
+                .unwrap_or(0)
+                >= expected;
+            if confirmed {
+                log::debug!(
+                    "[DECISION] task={id} segment={} action=resume-complete expected={} on_disk={} persisted={} confirmed=true",
+                    range.index,
+                    expected,
+                    actual,
+                    persisted_segment_bytes
+                        .get(range.index)
+                        .copied()
+                        .unwrap_or(0)
+                );
+                active.push((range, Arc::new(AtomicU64::new(0)), expected));
+                continue;
+            }
+            log::info!(
+                "[DECISION] task={id} segment={} action=restart-fullsize-unverified expected={} on_disk={} persisted={} confirmed=false",
+                range.index,
+                expected,
+                actual,
+                persisted_segment_bytes
+                    .get(range.index)
+                    .copied()
+                    .unwrap_or(0)
+            );
+            let _ = std::fs::remove_file(&range.path);
+            existing = 0;
+        } else {
+            log::debug!(
+                "[DECISION] task={id} segment={} action=resume-partial existing={} expected={}",
+                range.index,
+                existing,
+                expected
+            );
         }
         let start = range.start + existing;
         let progress = Arc::new(AtomicU64::new(0));
         let seg_capture = Arc::new(Mutex::new(ResponseCapture::default()));
         seg_captures.push(seg_capture.clone());
-        let preallocate = if existing == 0 { Some(expected) } else { None };
         let easy = create_easy_for_range_ext(
             plan,
             &range.path,
@@ -1090,7 +1169,6 @@ fn run_segmented_libcurl(
             },
             Some((start, range.end)),
             per_segment_limit_bps,
-            preallocate,
         )?;
         let handle = guard
             .add2(easy)
@@ -1231,11 +1309,31 @@ fn run_libcurl_download(
     // Safety cap: no single download should retry for more than 24 hours,
     // regardless of how the retry policy is configured or dynamically adapted.
     const MAX_RETRY_WALL_TIME: std::time::Duration = std::time::Duration::from_secs(86400);
+    let _dispatch_ctx = crate::logging::push_context("phase", "dispatch");
     log::info!(
         "Task {id}: run_libcurl_download entered — url={}, total_size={}, segmented={}, output={}",
         plan.url,
         plan.total_size,
         plan.segmented,
+        plan.output_path.display()
+    );
+    // Structured plan snapshot: a full reproduction record of how this transfer
+    // was configured, so any later failure can be replayed from logs alone.
+    log::debug!(
+        "[PLAN] task={id} url={} total_size={} resumable={} segmented={} connections={} allow_overwrite={} skip_existing={:?} remove_on_error={} follow_redirects={} retry_attempts={} retry_max_delay_ms={:?} preflight_resolved={} mirrors={} output={}",
+        plan.url,
+        plan.total_size,
+        plan.resumable,
+        plan.segmented,
+        plan.connections,
+        plan.allow_overwrite,
+        plan.config.bool_("skipExisting"),
+        plan.remove_on_error,
+        plan.follow_redirects,
+        plan.config.retry_policy().attempts,
+        plan.config.retry_policy().max_delay.as_millis(),
+        plan.preflight_resolved,
+        plan.link_mirrors.len(),
         plan.output_path.display()
     );
     let retry_policy = plan.config.retry_policy();
@@ -1291,7 +1389,14 @@ fn run_libcurl_download(
     // stale partial file from a previous failed attempt blocked the new one.
     if !plan.allow_overwrite && plan.output_path.exists() {
         let existing_size = FileWriter::current_size(&plan.output_path)?;
-        let is_complete = plan.total_size > 0 && existing_size == plan.total_size;
+        // A full-size file is only trusted as "already complete" when the user
+        // explicitly opted in via skipExisting. Otherwise an on-disk file whose
+        // size matches the remote size may be a leftover preallocated file with
+        // no real content (the reported fake-100% bug), so treat it as a
+        // conflict to rename and download fresh, preserving the existing file.
+        let is_complete = plan.total_size > 0
+            && existing_size == plan.total_size
+            && plan.config.bool_("skipExisting").unwrap_or(false);
         if !is_complete {
             if let Some(renamed) = auto_rename_path(&plan.output_path) {
                 log::info!(
@@ -1322,6 +1427,13 @@ fn run_libcurl_download(
         if cancel.load(Ordering::Acquire) {
             return Err("cancelled".to_owned());
         }
+        log::debug!(
+            "[RETRY] task={id} attempt={} max_attempts={} elapsed_ms={} last_error={}",
+            attempt + 1,
+            retry_policy.attempts,
+            start_time.elapsed().as_millis(),
+            last_error.chars().take(160).collect::<String>()
+        );
         if start_time.elapsed() >= MAX_RETRY_WALL_TIME {
             log::warn!(
                 "Task {id}: retry wall-time limit ({MAX_RETRY_WALL_TIME:?}) exceeded, giving up"
@@ -1638,6 +1750,8 @@ pub fn mark_curl_task_failed(
     cancelled: bool,
     generation: u64,
 ) {
+    let _task_ctx = crate::logging::push_context("task", id);
+    let _path_ctx = crate::logging::push_context("phase", "error-path");
     if cancelled {
         log::info!("Task {id}: download cancelled (generation={generation})");
     } else {
@@ -1663,8 +1777,29 @@ pub fn mark_curl_task_failed(
         job.task.speed_bytes_per_sec = 0;
         job.task.time_left_seconds = 0;
         job.task.engine_status = Some(if cancelled { "paused" } else { "failed" }.to_owned());
-        job.task.error_message = if cancelled { None } else { Some(message) };
+        job.task.error_message = if cancelled {
+            None
+        } else {
+            Some(message.clone())
+        };
         let task = job.task.clone();
+        if !cancelled {
+            let segment_summary: Vec<String> = task
+                .segments
+                .iter()
+                .map(|s| format!("{}:{}", s.id, s.downloaded_bytes))
+                .collect();
+            log::error!(
+                "[ERROR-PATH] task={id} generation={generation} url={} save_path={} downloaded_bytes={} size_bytes={} status={} engine_status={:?} segments=[{}] error={message}",
+                task.url,
+                task.save_path,
+                task.downloaded_bytes,
+                task.size_bytes,
+                task.status,
+                task.engine_status,
+                segment_summary.join(",")
+            );
+        }
         let remove_on_error = job
             .direct_options
             .get("removeOnError")
@@ -1729,6 +1864,8 @@ pub fn start_curl_process(state: &SharedState, id: &str) {
     let id2 = id.to_owned();
     std::thread::spawn(move || {
         let (plan, cancel, generation) = record;
+        let _task_ctx = crate::logging::push_context("task", &id2);
+        let _url_ctx = crate::logging::push_context("url", &plan.url);
         log::info!("Starting libcurl multi transfer for task {id2} generation {generation}");
         let remove_on_error = plan.remove_on_error;
         let output_path = plan.output_path.clone();
@@ -2046,5 +2183,420 @@ mod tests {
         assert_eq!(p2.ttfb_us, 55000);
         assert!(p2.uses_tls);
         assert!(p2.supports_range);
+    }
+
+    // ── Local HTTP server with byte-range support (206) ──────────────────
+    fn spawn_range_server(payload: std::sync::Arc<Vec<u8>>) -> std::net::SocketAddr {
+        use std::io::{Read, Write};
+        use std::net::{Shutdown, TcpListener};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let payload = payload.clone();
+                std::thread::spawn(move || {
+                    let mut buf = [0u8; 8192];
+                    let n = stream.read(&mut buf).unwrap_or(0);
+                    let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let total = payload.len() as u64;
+                    let mut range = None;
+                    for line in req.lines() {
+                        if let Some(rest) = line.to_ascii_lowercase().strip_prefix("range: bytes=")
+                        {
+                            range = Some(rest.trim().to_string());
+                            break;
+                        }
+                    }
+                    let send = |stream: &mut std::net::TcpStream, head: String, body: &[u8]| {
+                        let _ = stream.write_all(head.as_bytes());
+                        let _ = stream.write_all(body);
+                        let _ = stream.shutdown(Shutdown::Write);
+                    };
+                    match range {
+                        Some(r) => {
+                            let (s, e) = r.split_once('-').unwrap_or((r.as_str(), ""));
+                            let start: u64 = s.trim().parse().unwrap_or(0);
+                            if start >= total {
+                                send(
+                                    &mut stream,
+                                    format!(
+                                        "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{total}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                                    ),
+                                    b"",
+                                );
+                                return;
+                            }
+                            let end: u64 = if e.is_empty() {
+                                total - 1
+                            } else {
+                                e.trim().parse().unwrap_or(total - 1)
+                            };
+                            let end = end.min(total - 1);
+                            let body = &payload[start as usize..=end as usize];
+                            send(
+                                &mut stream,
+                                format!(
+                                    "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{end}/{total}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nETag: \"nova-test\"\r\nConnection: close\r\n\r\n",
+                                    body.len()
+                                ),
+                                body,
+                            );
+                        }
+                        None => send(
+                            &mut stream,
+                            format!(
+                                "HTTP/1.1 200 OK\r\nContent-Length: {total}\r\nAccept-Ranges: bytes\r\nETag: \"nova-test\"\r\nConnection: close\r\n\r\n"
+                            ),
+                            &payload,
+                        ),
+                    }
+                });
+            }
+        });
+        addr
+    }
+
+    fn download_body(
+        url: &str,
+        name: &str,
+        size: u64,
+        connections: u32,
+    ) -> crate::daemon::types::CreateDownloadBody {
+        crate::daemon::types::CreateDownloadBody {
+            url: Some(url.to_string()),
+            name: Some(name.to_string()),
+            file_type: Some("other".to_string()),
+            size_bytes: Some(size),
+            category: Some("tests".to_string()),
+            queue_id: Some("main".to_string()),
+            connections: Some(connections),
+            resumable: Some(true),
+            save_path: None,
+            description: Some("integration test".to_string()),
+            referer: None,
+            start_immediately: Some(true),
+            direct_options: None,
+            media_options: None,
+        }
+    }
+
+    fn run_task_to_completion(
+        state: &SharedState,
+        id: &str,
+        timeout: std::time::Duration,
+    ) -> crate::daemon::types::Task {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let task = {
+                let jobs = state.curl_jobs.lock().unwrap();
+                let Some(job) = jobs.get(id) else {
+                    panic!("task {id} vanished");
+                };
+                job.task.clone()
+            };
+            match task.status.as_str() {
+                "completed" => return task,
+                "error" => panic!(
+                    "task {id} failed: {:?} (size={}, downloaded={})",
+                    task.error_message, task.size_bytes, task.downloaded_bytes
+                ),
+                _ => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "task {id} timed out (status={}, downloaded={}, size={})",
+                        task.status,
+                        task.downloaded_bytes,
+                        task.size_bytes
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fresh_single_download_reports_intermediate_progress_and_full_content() {
+        let payload: Vec<u8> = (0..(4 * 1024 * 1024)).map(|i| (i % 251) as u8).collect();
+        let addr = spawn_range_server(std::sync::Arc::new(payload.clone()));
+        let url = format!("http://{addr}/sample.zip");
+        let dir = std::env::temp_dir().join(format!("nova_test_fresh_{}", std::process::id()));
+        let out = dir.join("sample.zip");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let state = std::sync::Arc::new(crate::daemon::persist::tests::test_state(
+            &dir.to_string_lossy(),
+        ));
+        let id = "fresh-progress-test";
+        let body = download_body(&url, "sample.zip", payload.len() as u64, 1);
+        let job = task_from_body(
+            &body,
+            id,
+            "sample.zip".to_string(),
+            &out,
+            std::collections::HashMap::new(),
+            Vec::new(),
+        );
+        {
+            let mut jobs = state.curl_jobs.lock().unwrap();
+            jobs.insert(id.to_string(), job);
+        }
+        state.mark_dirty();
+
+        let st = state.clone();
+        std::thread::spawn(move || start_curl_process(&st, id));
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut saw_intermediate = false;
+        loop {
+            let (status, downloaded, size) = {
+                let jobs = state.curl_jobs.lock().unwrap();
+                let Some(j) = jobs.get(id) else { break };
+                (
+                    j.task.status.clone(),
+                    j.task.downloaded_bytes,
+                    j.task.size_bytes,
+                )
+            };
+            if downloaded > 0 && downloaded < size {
+                saw_intermediate = true;
+            }
+            if status == "completed" || status == "error" {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timeout status={status}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        let task = run_task_to_completion(&state, id, std::time::Duration::from_secs(30));
+        assert_eq!(task.size_bytes, payload.len() as u64);
+        assert!(
+            saw_intermediate,
+            "no intermediate progress observed (downloaded stuck at 0, then jump to 100%)"
+        );
+        let written = std::fs::read(&out).unwrap();
+        assert_eq!(written, payload, "output content mismatch");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resume_of_preallocated_partial_file_repairs_content() {
+        let payload: Vec<u8> = (0..(1024 * 1024)).map(|i| (i % 253) as u8).collect();
+        let addr = spawn_range_server(std::sync::Arc::new(payload.clone()));
+        let url = format!("http://{addr}/resume.zip");
+        let dir = std::env::temp_dir().join(format!("nova_test_resume_{}", std::process::id()));
+        let out = dir.join("resume.zip");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Simulate a leftover preallocated file: full size on disk but only a
+        // fraction of the real payload written (the rest is zeros).
+        let partial = 256 * 1024usize;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&out)
+            .unwrap();
+        f.set_len(payload.len() as u64).unwrap();
+        use std::io::Write;
+        f.write_all(&payload[..partial]).unwrap();
+        f.sync_all().unwrap();
+        drop(f);
+
+        let state = std::sync::Arc::new(crate::daemon::persist::tests::test_state(
+            &dir.to_string_lossy(),
+        ));
+        let id = "resume-prealloc-test";
+        let body = download_body(&url, "resume.zip", payload.len() as u64, 1);
+        let mut direct_options = std::collections::HashMap::new();
+        direct_options.insert(
+            "etag".to_string(),
+            serde_json::Value::String("nova-test".to_string()),
+        );
+        // Restart-in-place is the overwrite path; the no-clobber path auto-
+        // renames the target instead (covered by the dispatcher logic).
+        direct_options.insert("allowOverwrite".to_string(), serde_json::json!(true));
+        let job = task_from_body(
+            &body,
+            id,
+            "resume.zip".to_string(),
+            &out,
+            direct_options,
+            Vec::new(),
+        );
+        {
+            let mut jobs = state.curl_jobs.lock().unwrap();
+            jobs.insert(id.to_string(), job);
+        }
+        state.mark_dirty();
+
+        let st = state.clone();
+        std::thread::spawn(move || start_curl_process(&st, id));
+
+        let task = run_task_to_completion(&state, id, std::time::Duration::from_secs(60));
+        assert_eq!(task.size_bytes, payload.len() as u64);
+        let written = std::fs::read(&out).unwrap();
+        assert_eq!(
+            written, payload,
+            "preallocated partial file was treated as complete and left corrupted"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn no_clobber_full_size_leftover_is_renamed_and_redownloaded() {
+        let payload: Vec<u8> = (0..(1024 * 1024)).map(|i| (i % 253) as u8).collect();
+        let addr = spawn_range_server(std::sync::Arc::new(payload.clone()));
+        let url = format!("http://{addr}/resume.zip");
+        let dir = std::env::temp_dir().join(format!("nova_test_noclob_{}", std::process::id()));
+        let out = dir.join("resume.zip");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Leftover preallocated file at the default (no-clobber) setting.
+        let partial = 256 * 1024usize;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&out)
+            .unwrap();
+        f.set_len(payload.len() as u64).unwrap();
+        use std::io::Write;
+        f.write_all(&payload[..partial]).unwrap();
+        f.sync_all().unwrap();
+        drop(f);
+
+        let state = std::sync::Arc::new(crate::daemon::persist::tests::test_state(
+            &dir.to_string_lossy(),
+        ));
+        let id = "noclob-prealloc-test";
+        let body = download_body(&url, "resume.zip", payload.len() as u64, 1);
+        let mut direct_options = std::collections::HashMap::new();
+        direct_options.insert(
+            "etag".to_string(),
+            serde_json::Value::String("nova-test".to_string()),
+        );
+        let job = task_from_body(
+            &body,
+            id,
+            "resume.zip".to_string(),
+            &out,
+            direct_options,
+            Vec::new(),
+        );
+        {
+            let mut jobs = state.curl_jobs.lock().unwrap();
+            jobs.insert(id.to_string(), job);
+        }
+        state.mark_dirty();
+
+        let st = state.clone();
+        std::thread::spawn(move || start_curl_process(&st, id));
+
+        let task = run_task_to_completion(&state, id, std::time::Duration::from_secs(60));
+        assert_eq!(task.size_bytes, payload.len() as u64);
+        // The leftover is preserved, and a fresh copy is downloaded under a
+        // conflict-suffixed name instead of being accepted as complete.
+        let preserved = std::fs::read(&out).unwrap();
+        assert_eq!(
+            preserved.len(),
+            payload.len(),
+            "existing no-clobber file must not be overwritten"
+        );
+        assert_eq!(
+            preserved[..partial],
+            payload[..partial],
+            "existing no-clobber file must not be overwritten"
+        );
+        let fresh = dir.join("resume (1).zip");
+        assert!(fresh.exists(), "auto-renamed target was not created");
+        let fresh_bytes = std::fs::read(&fresh).unwrap();
+        assert_eq!(fresh_bytes, payload, "auto-renamed download is corrupt");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn segmented_resume_of_preallocated_parts_repairs_content() {
+        use crate::daemon::types::Segment;
+        use std::io::Write;
+        let payload: Vec<u8> = (0..(1024 * 1024)).map(|i| (i % 251) as u8).collect();
+        let addr = spawn_range_server(std::sync::Arc::new(payload.clone()));
+        let url = format!("http://{addr}/seg.zip");
+        let dir = std::env::temp_dir().join(format!("nova_test_seg_{}", std::process::id()));
+        let out = dir.join("seg.zip");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Legacy artifacts: both part files preallocated to their full segment
+        // size while only half of each part's real content was written.
+        let expected_part = 512 * 1024usize;
+        for idx in 0..2usize {
+            let part = dir.join(format!("seg.zip.part{idx:03}"));
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .open(&part)
+                .unwrap();
+            f.set_len(expected_part as u64).unwrap();
+            let seg_start = idx * expected_part;
+            f.write_all(&payload[seg_start..seg_start + expected_part / 2])
+                .unwrap();
+            f.sync_all().unwrap();
+            drop(f);
+        }
+
+        let state = std::sync::Arc::new(crate::daemon::persist::tests::test_state(
+            &dir.to_string_lossy(),
+        ));
+        let id = "seg-resume-test";
+        let body = download_body(&url, "seg.zip", payload.len() as u64, 2);
+        let mut job = task_from_body(
+            &body,
+            id,
+            "seg.zip".to_string(),
+            &out,
+            std::collections::HashMap::new(),
+            Vec::new(),
+        );
+        // Persisted per-segment progress from the interrupted legacy run: each
+        // part was only half-real, so persisted bytes are below the segment size.
+        job.task.segments = vec![
+            Segment {
+                id: 0,
+                progress: 0.5,
+                downloaded_bytes: (expected_part / 2) as u64,
+                total_bytes: expected_part as u64,
+                active: false,
+                speed: 0,
+            },
+            Segment {
+                id: 1,
+                progress: 0.5,
+                downloaded_bytes: (expected_part / 2) as u64,
+                total_bytes: expected_part as u64,
+                active: false,
+                speed: 0,
+            },
+        ];
+        {
+            let mut jobs = state.curl_jobs.lock().unwrap();
+            jobs.insert(id.to_string(), job);
+        }
+        state.mark_dirty();
+
+        let st = state.clone();
+        std::thread::spawn(move || start_curl_process(&st, id));
+
+        let task = run_task_to_completion(&state, id, std::time::Duration::from_secs(60));
+        assert_eq!(task.size_bytes, payload.len() as u64);
+        let written = std::fs::read(&out).unwrap();
+        assert_eq!(
+            written, payload,
+            "preallocated partial parts were merged as garbage"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

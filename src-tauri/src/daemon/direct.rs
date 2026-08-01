@@ -425,6 +425,7 @@ impl RetryPolicy {
             || lower.contains("ssl")
             || lower.contains("tls")
             || lower.contains("429")
+            || lower.contains("416")
             || lower.contains("502")
             || lower.contains("503")
     }

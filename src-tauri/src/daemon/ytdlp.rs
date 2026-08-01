@@ -192,6 +192,8 @@ pub fn start_ytdlp_process(state: &SharedState, id: &str) {
                         let state2 = state2.clone();
                         let id2 = id2.clone();
                         move || {
+                            let _task_ctx = crate::logging::push_context("task", &id2);
+                            let _phase_ctx = crate::logging::push_context("phase", "ytdlp-stdout");
                             let reader = BufReader::new(r);
                             for line in reader.lines().map_while(Result::ok) {
                                 if !line.is_empty() {
@@ -205,6 +207,8 @@ pub fn start_ytdlp_process(state: &SharedState, id: &str) {
                     std::thread::spawn({
                         let id2 = id2.clone();
                         move || {
+                            let _task_ctx = crate::logging::push_context("task", &id2);
+                            let _phase_ctx = crate::logging::push_context("phase", "ytdlp-stderr");
                             let reader = BufReader::new(r);
                             for line in reader.lines().map_while(Result::ok) {
                                 if !line.is_empty() {
@@ -216,6 +220,8 @@ pub fn start_ytdlp_process(state: &SharedState, id: &str) {
                 });
 
                 std::thread::spawn(move || {
+                    let _task_ctx = crate::logging::push_context("task", &id2);
+                    let _phase_ctx = crate::logging::push_context("phase", "ytdlp");
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         // Join reader threads first to ensure pipes are drained
                         if let Some(h) = stdout_handle {

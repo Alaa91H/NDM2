@@ -190,7 +190,7 @@ pub fn start_persistence_loop(state: SharedState) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::daemon::types::{CurlJob, MediaJob, Segment, TelegramConfig};
     use std::sync::atomic::{AtomicBool, AtomicU64};
@@ -232,7 +232,7 @@ mod tests {
         }
     }
 
-    fn test_state(data_dir: &str) -> AppState {
+    pub(crate) fn test_state(data_dir: &str) -> AppState {
         AppState {
             media_jobs: Mutex::new(HashMap::new()),
             curl_jobs: Mutex::new(HashMap::new()),
