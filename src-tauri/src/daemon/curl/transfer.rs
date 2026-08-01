@@ -2697,4 +2697,52 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn stale_generation_does_not_overwrite_newer_task_state() {
+        // Regression for H8/C10: a worker that finished with an old generation
+        // (after a redownload bumped it) must NOT overwrite the current state.
+        let dir = std::env::temp_dir().join(format!("nova_test_gen_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = std::sync::Arc::new(crate::daemon::persist::tests::test_state(
+            &dir.to_string_lossy(),
+        ));
+        let id = "gen-test";
+        let body = download_body("http://127.0.0.1:1/x.zip", "x.zip", 100, 1);
+        let job = task_from_body(
+            &body,
+            id,
+            "x.zip".to_string(),
+            &dir.join("x.zip"),
+            std::collections::HashMap::new(),
+            Vec::new(),
+        );
+        {
+            let mut jobs = state.curl_jobs.lock().unwrap();
+            jobs.insert(id.to_string(), job);
+        }
+        state.mark_dirty();
+
+        // The current generation is 5 (simulating several redownloads).
+        {
+            let mut jobs = state.curl_jobs.lock().unwrap();
+            if let Some(job) = jobs.get_mut(id) {
+                job.run_generation.store(5, std::sync::atomic::Ordering::Release);
+                job.task.status = "downloading".to_owned();
+            }
+        }
+
+        // A stale worker (generation 2) reports completion.
+        mark_curl_task_finished(&state, id, 100, 2);
+
+        // The newer task state must be untouched.
+        let jobs = state.curl_jobs.lock().unwrap();
+        let job = jobs.get(id).unwrap();
+        assert_eq!(job.task.status, "downloading", "stale completion must not win");
+        assert_eq!(
+            job.run_generation.load(std::sync::atomic::Ordering::Acquire),
+            5
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

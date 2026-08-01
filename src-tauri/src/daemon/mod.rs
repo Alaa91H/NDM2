@@ -632,7 +632,18 @@ pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
                     let handles =
                         std::mem::take(&mut *lock_or_err!(shutdown_state.watchdog_handles));
                     for h in handles {
-                        let _ = h.join();
+                        // Do not let a stuck watchdog block shutdown forever —
+                        // give each thread a bounded grace period.
+                        let deadline =
+                            std::time::Instant::now() + std::time::Duration::from_secs(2);
+                        while !h.is_finished() && std::time::Instant::now() < deadline {
+                            std::thread::sleep(std::time::Duration::from_millis(50));
+                        }
+                        if h.is_finished() {
+                            let _ = h.join();
+                        } else {
+                            log::warn!("Watchdog thread did not exit within grace period; detaching");
+                        }
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                     log::info!("Flushing state...");
@@ -797,5 +808,37 @@ fn restore_persisted_tasks(
         if let Ok(mut snapshot) = state.task_snapshot.lock() {
             snapshot.insert(task.id.clone(), task);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn signal_shutdown_delivers_once_and_clears_sender() {
+        // Regression for C1/C2: the shutdown signal must be delivered exactly
+        // once (no leaked tokio runtime on restart) and the Sender must be
+        // drained so a second call is a safe no-op.
+        let (tx, mut rx) = oneshot::channel::<()>();
+        *SHUTDOWN_TX.lock().unwrap() = Some(tx);
+
+        signal_shutdown();
+        assert!(rx.try_recv().is_ok(), "first signal must be delivered");
+
+        // Second call must not panic and must not hold a sender.
+        signal_shutdown();
+        let guard = SHUTDOWN_TX.lock().unwrap();
+        assert!(guard.is_none(), "sender must be drained after shutdown signal");
+    }
+
+    #[test]
+    fn signal_shutdown_without_running_daemon_is_safe() {
+        // Calling shutdown when nothing registered is a no-op, never panics.
+        *SHUTDOWN_TX.lock().unwrap() = None;
+        signal_shutdown();
+        signal_shutdown();
+        let guard = SHUTDOWN_TX.lock().unwrap();
+        assert!(guard.is_none());
     }
 }

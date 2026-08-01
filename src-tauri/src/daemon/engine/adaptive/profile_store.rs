@@ -155,22 +155,32 @@ pub struct UnifiedProfileStore {
 }
 
 impl UnifiedProfileStore {
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self, String> {
         let save_path = Self::default_save_path();
         let profiles = Self::load_from_disk(&save_path);
-        Self {
+        Ok(Self {
             profiles,
             dirty: false,
             save_path,
-        }
+        })
     }
 
-    pub fn with_path(path: PathBuf) -> Self {
+    pub fn with_path(path: PathBuf) -> Result<Self, String> {
         let profiles = Self::load_from_disk(&path);
-        Self {
+        Ok(Self {
             profiles,
             dirty: false,
             save_path: path,
+        })
+    }
+
+    /// In-memory store with no persistence — used as a last-resort fallback
+    /// when no save path is writable.
+    pub fn empty() -> Self {
+        Self {
+            profiles: HashMap::new(),
+            dirty: false,
+            save_path: PathBuf::new(),
         }
     }
 
@@ -329,35 +339,44 @@ impl UnifiedProfileStore {
             })
     }
 
-    pub fn save_if_dirty(&mut self) {
+    pub fn save_if_dirty(&mut self) -> Result<(), String> {
         if !self.dirty {
-            return;
+            return Ok(());
         }
-        self.dirty = false;
         let profiles = self.profiles.clone();
         let path = self.save_path.clone();
-        Self::write_to_disk(&profiles, &path);
+        let result = Self::write_to_disk(&profiles, &path);
+        if result.is_ok() {
+            self.dirty = false;
+        }
+        result
     }
 
-    pub fn save(&self) {
+    pub fn save(&mut self) -> Result<(), String> {
         let profiles = self.profiles.clone();
         let path = self.save_path.clone();
-        Self::write_to_disk(&profiles, &path);
+        let result = Self::write_to_disk(&profiles, &path);
+        if result.is_ok() {
+            self.dirty = false;
+        }
+        result
     }
 
-    fn write_to_disk(profiles: &HashMap<String, PersistedProfile>, path: &PathBuf) {
-        if let Ok(json) = serde_json::to_string_pretty(profiles) {
-            if let Err(e) = fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new("."))) {
-                log::error!("profile_store: failed to create dir: {e}");
-            }
-            if let Err(e) = fs::write(path, json) {
-                log::error!("profile_store: failed to write {}: {e}", path.display());
-            }
-        }
+    fn write_to_disk(profiles: &HashMap<String, PersistedProfile>, path: &PathBuf) -> Result<(), String> {
+        let json = serde_json::to_string_pretty(profiles)
+            .map_err(|e| format!("profile_store: failed to serialize profiles: {e}"))?;
+        let parent = path.parent().unwrap_or(std::path::Path::new("."));
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("profile_store: failed to create dir {}: {e}", parent.display()))?;
+        fs::write(path, json).map_err(|e| format!("profile_store: failed to write {}: {e}", path.display()))
     }
 
     pub fn profile_count(&self) -> usize {
         self.profiles.len()
+    }
+
+    pub fn save_path(&self) -> &PathBuf {
+        &self.save_path
     }
 
     pub fn known_hosts(&self) -> Vec<&str> {
@@ -438,7 +457,7 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("nova_profile_test_{}_{n}", std::process::id()));
         let _ = fs::create_dir_all(&dir);
-        UnifiedProfileStore::with_path(dir.join("profiles.json"))
+        UnifiedProfileStore::with_path(dir.join("profiles.json")).expect("temp store")
     }
 
     fn cleanup(store: &UnifiedProfileStore) {
@@ -450,7 +469,7 @@ mod tests {
 
     #[test]
     fn new_creates_empty_store() {
-        let store = UnifiedProfileStore::new();
+        let store = UnifiedProfileStore::new().expect("store");
         assert_eq!(store.profile_count(), 0);
     }
 
@@ -512,11 +531,46 @@ mod tests {
     fn save_and_load() {
         let mut store = temp_store();
         store.merge_telemetry("host.com", 10_000, 500_000, 200);
-        store.save();
+        store.save().expect("save");
 
-        let loaded = UnifiedProfileStore::with_path(store.save_path.clone());
+        let loaded = UnifiedProfileStore::with_path(store.save_path.clone()).expect("load");
         assert_eq!(loaded.profile_count(), 1);
         cleanup(&store);
+    }
+
+    #[test]
+    fn save_clears_dirty_flag() {
+        let mut store = temp_store();
+        store.merge_telemetry("host.com", 10_000, 500_000, 200);
+        store.save().expect("save");
+        // save_if_dirty after a successful save must not re-write.
+        store.save_if_dirty().expect("no-op");
+        // Dirty was cleared, so a second save_if_dirty is a no-op returning Ok.
+        assert!(store.save_if_dirty().is_ok());
+        cleanup(&store);
+    }
+
+    #[test]
+    fn save_failure_is_reported() {
+        // Point the store at a path whose parent cannot be created (a file in
+        // place of a directory) so the write fails and the error surfaces.
+        let dir = std::env::temp_dir().join(format!(
+            "nova_profile_fail_{}_{}",
+            std::process::id(),
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create dir");
+        let blocker = dir.join("blocker");
+        fs::write(&blocker, "x").expect("write blocker");
+        let bad_path = blocker.join("nested").join("profiles.json");
+
+        let mut store = UnifiedProfileStore::with_path(bad_path).expect("store");
+        store.merge_telemetry("host.com", 10_000, 500_000, 200);
+        assert!(store.save().is_err());
+        // Dirty stays set when the write fails.
+        assert!(store.save_if_dirty().is_err());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -17,7 +17,15 @@ impl DieOrchestrator {
     pub fn new() -> Self {
         Self {
             resource_manager: Arc::new(Mutex::new(ResourceManager::new())),
-            profile_store: Arc::new(Mutex::new(UnifiedProfileStore::new())),
+            profile_store: Arc::new(Mutex::new(
+                UnifiedProfileStore::new().unwrap_or_else(|e| {
+                    log::error!("die_orchestrator: failed to open profile store: {e}");
+                    UnifiedProfileStore::new().unwrap_or_else(|_| {
+                        // Even if the default path is unusable, keep an in-memory store.
+                        UnifiedProfileStore::empty()
+                    })
+                }),
+            )),
             host_connections: HashMap::new(),
         }
     }
@@ -77,7 +85,9 @@ impl DieOrchestrator {
     pub fn record_telemetry(&mut self, host: &str, rtt_us: u64, speed: u64, http_status: u16) {
         if let Ok(mut store) = self.profile_store.lock() {
             store.merge_telemetry(host, rtt_us, speed, http_status);
-            store.save_if_dirty();
+            if let Err(e) = store.save_if_dirty() {
+                log::error!("die_orchestrator: failed to persist telemetry: {e}");
+            }
         }
         if let Ok(mut rm) = self.resource_manager.lock() {
             rm.update_network(speed, self.host_connections.get(host).copied().unwrap_or(1));
@@ -91,7 +101,9 @@ impl DieOrchestrator {
     ) {
         if let Ok(mut store) = self.profile_store.lock() {
             store.merge_preflight(host, profile);
-            store.save();
+            if let Err(e) = store.save() {
+                log::error!("die_orchestrator: failed to persist preflight: {e}");
+            }
         }
     }
 
@@ -108,8 +120,10 @@ impl DieOrchestrator {
     }
 
     pub fn shutdown(&self) {
-        if let Ok(store) = self.profile_store.lock() {
-            store.save();
+        if let Ok(mut store) = self.profile_store.lock() {
+            if let Err(e) = store.save() {
+                log::error!("die_orchestrator: failed to save profiles on shutdown: {e}");
+            }
         }
     }
 }
@@ -133,7 +147,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("nova_die_test_{}_{}", std::process::id(), id));
         std::fs::create_dir_all(&dir).unwrap();
         let profile_path = dir.join("profiles.json");
-        let profile_store = UnifiedProfileStore::with_path(profile_path);
+        let profile_store = UnifiedProfileStore::with_path(profile_path).expect("profile store");
         let resource_manager = ResourceManager::new();
         (
             DieOrchestrator {
@@ -223,6 +237,29 @@ mod tests {
         let speeds = vec![1_000_000; 15];
         let detected = orch.detect_plateau("host.com", &speeds);
         assert!(detected);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn record_telemetry_persists_to_disk() {
+        let (mut orch, dir) = temp_orchestrator();
+        let profile_path = orch.profile_store.lock().unwrap().save_path().clone();
+        orch.record_telemetry("host.com", 10_000, 500_000, 200);
+        orch.record_preflight(
+            "host.com",
+            &super::super::adaptive::server_profiler::ServerProfile {
+                host: "host.com".into(),
+                initial_rtt_us: 50_000,
+                handshake_time_us: 30_000,
+                ..Default::default()
+            },
+        );
+        drop(orch.profile_store.lock().unwrap());
+
+        // The file must now exist with a non-default entry.
+        let raw = std::fs::read_to_string(&profile_path).expect("profiles file written");
+        assert!(raw.contains("host.com"));
+        assert!(raw.contains("total_probes"));
         cleanup(&dir);
     }
 }
