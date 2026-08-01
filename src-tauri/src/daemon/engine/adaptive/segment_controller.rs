@@ -577,7 +577,12 @@ impl SegmentController {
         // fighting the borrow checker.
         let (b_start, b_end, b_downloaded, b_truncate) = {
             let b = &self.segments[b_idx];
-            (b.start_byte, b.end_byte, b.downloaded, b.truncate_on_complete)
+            (
+                b.start_byte,
+                b.end_byte,
+                b.downloaded,
+                b.truncate_on_complete,
+            )
         };
         let a_end = self.segments[a_idx].end_byte;
         if b_start != a_end {
@@ -1072,10 +1077,19 @@ mod tests {
         // Slow shrank; a prefix segment covers the gap; fast untouched.
         let slow = c.segments.iter().find(|s| s.id == 10).unwrap();
         assert!(slow.end_byte < slow_end_before, "slow must shrink");
-        assert!(slow.truncate_on_complete, "slow must be marked for truncation");
+        assert!(
+            slow.truncate_on_complete,
+            "slow must be marked for truncation"
+        );
         let fast = c.segments.iter().find(|s| s.id == 20).unwrap();
-        assert_eq!(fast.start_byte, fast_start_before, "fast start must not move");
-        assert_eq!(fast.downloaded, fast_downloaded_before, "fast must keep progress");
+        assert_eq!(
+            fast.start_byte, fast_start_before,
+            "fast start must not move"
+        );
+        assert_eq!(
+            fast.downloaded, fast_downloaded_before,
+            "fast must keep progress"
+        );
         // The prefix owns exactly the transferred bytes, adjacent to both.
         let prefix = c
             .segments
@@ -1107,7 +1121,10 @@ mod tests {
         let b_id = c.segments[1].id;
         c.merge_adjacent_segments(a_id, b_id);
         let total_after: u64 = c.segments.iter().map(|s| s.downloaded).sum();
-        assert_eq!(total_before, total_after, "merge must not drop downloaded bytes");
+        assert_eq!(
+            total_before, total_after,
+            "merge must not drop downloaded bytes"
+        );
     }
 
     #[test]
@@ -1129,7 +1146,10 @@ mod tests {
             .iter()
             .find(|s| s.id != seg_id)
             .expect("second segment");
-        assert!(s1.end_byte > start + 2000, "split must be after downloaded bytes");
+        assert!(
+            s1.end_byte > start + 2000,
+            "split must be after downloaded bytes"
+        );
         assert!(s1.end_byte < end, "split must be before the end");
         assert_eq!(s1.end_byte, s2.start_byte, "split halves must be adjacent");
     }

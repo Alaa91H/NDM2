@@ -752,7 +752,11 @@ mod tests {
             reject_action("ext"),
         ));
         let results = engine.evaluate("https://x.com/file.mp4", "x.com", None);
-        assert_eq!(results.len(), 1, "uppercase configured extension must match");
+        assert_eq!(
+            results.len(),
+            1,
+            "uppercase configured extension must match"
+        );
     }
 
     #[test]
@@ -771,10 +775,7 @@ mod tests {
         ));
 
         // Exact match (different case) fires.
-        let headers = vec![(
-            "content-type".to_string(),
-            "Application/JSON".to_string(),
-        )];
+        let headers = vec![("content-type".to_string(), "Application/JSON".to_string())];
         assert_eq!(
             engine
                 .evaluate_with_headers("https://x.com/f", "x.com", None, &headers)

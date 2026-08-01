@@ -692,9 +692,7 @@ pub async fn run_scheduler_tick(state: &SharedState) {
                 #[cfg(target_os = "macos")]
                 {
                     // L3: macOS has no systemctl; pmset is the supported API.
-                    let _ = std::process::Command::new("pmset")
-                        .arg("sleepnow")
-                        .spawn();
+                    let _ = std::process::Command::new("pmset").arg("sleepnow").spawn();
                 }
             }
         }

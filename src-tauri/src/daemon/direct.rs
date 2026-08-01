@@ -324,7 +324,9 @@ impl FileWriter {
                 let file = OpenOptions::new()
                     .write(true)
                     .open(&range.path)
-                    .map_err(|e| format!("Could not open segment {} to truncate: {e}", range.index))?;
+                    .map_err(|e| {
+                        format!("Could not open segment {} to truncate: {e}", range.index)
+                    })?;
                 file.set_len(expected)
                     .map_err(|e| format!("Could not truncate segment {}: {e}", range.index))?;
             } else if actual < expected {

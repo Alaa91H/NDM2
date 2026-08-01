@@ -17,15 +17,13 @@ impl DieOrchestrator {
     pub fn new() -> Self {
         Self {
             resource_manager: Arc::new(Mutex::new(ResourceManager::new())),
-            profile_store: Arc::new(Mutex::new(
-                UnifiedProfileStore::new().unwrap_or_else(|e| {
-                    log::error!("die_orchestrator: failed to open profile store: {e}");
-                    UnifiedProfileStore::new().unwrap_or_else(|_| {
-                        // Even if the default path is unusable, keep an in-memory store.
-                        UnifiedProfileStore::empty()
-                    })
-                }),
-            )),
+            profile_store: Arc::new(Mutex::new(UnifiedProfileStore::new().unwrap_or_else(|e| {
+                log::error!("die_orchestrator: failed to open profile store: {e}");
+                UnifiedProfileStore::new().unwrap_or_else(|_| {
+                    // Even if the default path is unusable, keep an in-memory store.
+                    UnifiedProfileStore::empty()
+                })
+            }))),
             host_connections: HashMap::new(),
         }
     }

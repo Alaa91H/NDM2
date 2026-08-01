@@ -110,8 +110,7 @@ impl EngineConfig {
         let total = requested.max(1);
         // M29: (total*2).max(total) is just total*2 — but cap it so a huge
         // requested count cannot blow past the global ceiling.
-        let cache = (total * 2)
-            .min(self.max_total_connections as usize * 4);
+        let cache = (total * 2).min(self.max_total_connections as usize * 4);
         crate::daemon::direct::ConnectionLimits {
             total,
             per_host,

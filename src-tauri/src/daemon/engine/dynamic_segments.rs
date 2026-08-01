@@ -100,15 +100,15 @@ impl DynamicSegmentScheduler {
             // Preserve live progress for ids that survive the reshape.
             for state in next.iter_mut() {
                 if let Some(old) = current.iter().find(|s| s.id == state.id) {
-                    state.downloaded.store(
-                        old.downloaded.load(Ordering::Relaxed),
-                        Ordering::Relaxed,
-                    );
-                    state.speed.store(old.speed.load(Ordering::Relaxed), Ordering::Relaxed);
-                    state.active.store(
-                        old.active.load(Ordering::Relaxed),
-                        Ordering::Relaxed,
-                    );
+                    state
+                        .downloaded
+                        .store(old.downloaded.load(Ordering::Relaxed), Ordering::Relaxed);
+                    state
+                        .speed
+                        .store(old.speed.load(Ordering::Relaxed), Ordering::Relaxed);
+                    state
+                        .active
+                        .store(old.active.load(Ordering::Relaxed), Ordering::Relaxed);
                 }
             }
             *current = next;

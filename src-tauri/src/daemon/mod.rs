@@ -650,7 +650,9 @@ pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
                         if h.is_finished() {
                             let _ = h.join();
                         } else {
-                            log::warn!("Watchdog thread did not exit within grace period; detaching");
+                            log::warn!(
+                                "Watchdog thread did not exit within grace period; detaching"
+                            );
                         }
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -837,7 +839,10 @@ mod tests {
         // Second call must not panic and must not hold a sender.
         signal_shutdown();
         let guard = SHUTDOWN_TX.lock().unwrap();
-        assert!(guard.is_none(), "sender must be drained after shutdown signal");
+        assert!(
+            guard.is_none(),
+            "sender must be drained after shutdown signal"
+        );
     }
 
     #[test]

@@ -1535,7 +1535,10 @@ fn parse_ffmpeg_protocols(output: &str) -> (HashSet<String>, HashSet<String>) {
 /// container. `formats` is a set of individual tokens (from `ffmpeg -formats`),
 /// so each candidate must be checked separately — never the literal
 /// comma-joined string.
-fn hls_dash_supported(formats: &std::collections::HashSet<String>, input_protocols: &std::collections::HashSet<String>) -> bool {
+fn hls_dash_supported(
+    formats: &std::collections::HashSet<String>,
+    input_protocols: &std::collections::HashSet<String>,
+) -> bool {
     input_protocols.contains("http")
         && (formats.contains("hls")
             || formats.contains("dash")
@@ -2060,16 +2063,25 @@ mod tests {
         // H3 regression: formats is a set of individual tokens; the literal
         // comma-joined container string never appears in it, so the old check
         // could never fire. With `mp4` present the capability must be true.
-        let formats: std::collections::HashSet<String> =
-            ["mp4", "mov", "m4a", "matroska"].iter().map(|s| s.to_string()).collect();
-        let input_protocols: std::collections::HashSet<String> =
-            ["http", "https", "tcp"].iter().map(|s| s.to_string()).collect();
+        let formats: std::collections::HashSet<String> = ["mp4", "mov", "m4a", "matroska"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let input_protocols: std::collections::HashSet<String> = ["http", "https", "tcp"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         let hls_dash = hls_dash_supported(&formats, &input_protocols);
-        assert!(hls_dash, "hlsDashDownload must be true when mp4 is in formats");
+        assert!(
+            hls_dash,
+            "hlsDashDownload must be true when mp4 is in formats"
+        );
 
         // Without any HLS/DASH/container token it must be false.
-        let formats2: std::collections::HashSet<String> =
-            ["pcm_s16le", "flac"].iter().map(|s| s.to_string()).collect();
+        let formats2: std::collections::HashSet<String> = ["pcm_s16le", "flac"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         assert!(!hls_dash_supported(&formats2, &input_protocols));
     }
 
@@ -2099,7 +2111,13 @@ mod tests {
         // rawOptions as a direct option key stays unsupported (no passthrough).
         let http_protos: HashSet<String> =
             ["http", "https"].iter().map(|s| s.to_string()).collect();
-        assert!(!curl_key_supported("rawOptions", available, &http_protos, &feature_set, &flags));
+        assert!(!curl_key_supported(
+            "rawOptions",
+            available,
+            &http_protos,
+            &feature_set,
+            &flags
+        ));
     }
 
     #[test]
@@ -2111,16 +2129,34 @@ mod tests {
         let protocol_set = lower_set(&protocols);
         let feature_set = lower_set(&features);
         assert!(
-            curl_key_supported("skipExisting", available, &protocol_set, &feature_set, &flags),
+            curl_key_supported(
+                "skipExisting",
+                available,
+                &protocol_set,
+                &feature_set,
+                &flags
+            ),
             "skipExisting is implemented and must be advertised"
         );
         assert!(
-            curl_key_supported("retryConnRefused", available, &protocol_set, &feature_set, &flags),
+            curl_key_supported(
+                "retryConnRefused",
+                available,
+                &protocol_set,
+                &feature_set,
+                &flags
+            ),
             "retryConnRefused is implemented and must be advertised"
         );
         // These are advertised only when the underlying libcurl build has the
         // feature — never unconditionally.
-        let tf = curl_key_supported("tcpFastOpen", available, &protocol_set, &feature_set, &flags);
+        let tf = curl_key_supported(
+            "tcpFastOpen",
+            available,
+            &protocol_set,
+            &feature_set,
+            &flags,
+        );
         if !available {
             assert!(!tf);
         }

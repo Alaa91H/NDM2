@@ -189,8 +189,8 @@ mod tests {
     #[test]
     fn default_policy_delays_grow_exponentially() {
         let policy = RetryPolicy::default(); // base=1s, mult=2.0, jitter=true
-        // With symmetric jitter (±12.5%) the exact values are no longer
-        // deterministic; assert the growth trend and the ±12.5% band instead.
+                                             // With symmetric jitter (±12.5%) the exact values are no longer
+                                             // deterministic; assert the growth trend and the ±12.5% band instead.
         let d1 = policy.delay_for_attempt(1);
         let d2 = policy.delay_for_attempt(2);
         let d3 = policy.delay_for_attempt(3);

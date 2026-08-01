@@ -362,13 +362,21 @@ impl UnifiedProfileStore {
         result
     }
 
-    fn write_to_disk(profiles: &HashMap<String, PersistedProfile>, path: &PathBuf) -> Result<(), String> {
+    fn write_to_disk(
+        profiles: &HashMap<String, PersistedProfile>,
+        path: &PathBuf,
+    ) -> Result<(), String> {
         let json = serde_json::to_string_pretty(profiles)
             .map_err(|e| format!("profile_store: failed to serialize profiles: {e}"))?;
         let parent = path.parent().unwrap_or(std::path::Path::new("."));
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("profile_store: failed to create dir {}: {e}", parent.display()))?;
-        fs::write(path, json).map_err(|e| format!("profile_store: failed to write {}: {e}", path.display()))
+        fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "profile_store: failed to create dir {}: {e}",
+                parent.display()
+            )
+        })?;
+        fs::write(path, json)
+            .map_err(|e| format!("profile_store: failed to write {}: {e}", path.display()))
     }
 
     pub fn profile_count(&self) -> usize {

@@ -1245,7 +1245,8 @@ pub fn create_easy_for_range_ext(
 /// libcurl interprets 0 as "no limit". Returns the previous setting for restore.
 pub fn set_live_rate(easy: *mut curl_sys::CURL, limit: Option<u64>) -> Result<(), String> {
     let bps = limit.unwrap_or(0);
-    let code = unsafe { curl_sys::curl_easy_setopt(easy, curl_sys::CURLOPT_MAX_RECV_SPEED_LARGE, bps) };
+    let code =
+        unsafe { curl_sys::curl_easy_setopt(easy, curl_sys::CURLOPT_MAX_RECV_SPEED_LARGE, bps) };
     if code == curl_sys::CURLE_OK {
         Ok(())
     } else {
@@ -1361,6 +1362,9 @@ mod tests {
         let result = set_live_rate(std::ptr::null_mut(), Some(1024));
         assert!(result.is_err(), "null handle must produce an error");
         let result = set_live_rate(std::ptr::null_mut(), None);
-        assert!(result.is_err(), "null handle must produce an error even for clear");
+        assert!(
+            result.is_err(),
+            "null handle must produce an error even for clear"
+        );
     }
 }
