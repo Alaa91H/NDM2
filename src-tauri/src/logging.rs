@@ -15,8 +15,8 @@ use log::{LevelFilter, Record};
 use serde::Serialize;
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::io::{Read, Write};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -26,6 +26,9 @@ pub const LOG_BUFFER_CAPACITY: usize = 5000;
 pub const LOG_FILE_MAX_SIZE: u64 = 10 * 1024 * 1024;
 /// Number of rotated log files to keep.
 pub const LOG_FILES_TO_KEEP: usize = 10;
+/// Maximum number of bytes `read_log_file` will read from a log file before
+/// giving up, guarding against unbounded memory use on oversized files.
+const MAX_LOG_FILE_READ_BYTES: u64 = 64 * 1024 * 1024;
 
 /// A single structured log record, as exposed by `/api/logs`.
 #[derive(Debug, Clone, Serialize)]
@@ -760,6 +763,25 @@ pub fn read_log_file(
     read_log_file_in(log_dir(), name, lines, grep, context_lines, max_matches)
 }
 
+/// Read a file's contents as UTF-8, refusing to allocate past `max_bytes`.
+fn read_text_capped(path: &Path, max_bytes: u64) -> std::io::Result<String> {
+    let file = std::fs::File::open(path)?;
+    let mut buf = Vec::new();
+    file.take(max_bytes + 1).read_to_end(&mut buf)?;
+    if buf.len() as u64 > max_bytes {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("file exceeds {max_bytes} bytes"),
+        ));
+    }
+    String::from_utf8(buf).map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("file is not valid UTF-8: {e}"),
+        )
+    })
+}
+
 fn read_log_file_in(
     dir: Option<PathBuf>,
     name: Option<&str>,
@@ -772,7 +794,21 @@ fn read_log_file_in(
     let active = dir.join("nova.log");
     let path = match name {
         Some(base) if !base.is_empty() => {
-            let candidate = dir.join(base);
+            // Only accept a plain file name. Reject anything that contains a
+            // path separator, `..`, an absolute/root/prefix path, or that
+            // escapes `dir` — otherwise a caller-controlled `file` query
+            // parameter could read arbitrary files on disk.
+            let candidate_path = Path::new(base);
+            let is_plain_name = !candidate_path.is_absolute()
+                && candidate_path.components().count() == 1
+                && matches!(
+                    candidate_path.components().next(),
+                    Some(Component::Normal(_))
+                );
+            if !is_plain_name {
+                return None;
+            }
+            let candidate = dir.join(candidate_path);
             if !candidate.is_file() {
                 return None;
             }
@@ -780,7 +816,7 @@ fn read_log_file_in(
         }
         _ => active,
     };
-    let Ok(content) = std::fs::read_to_string(&path) else {
+    let Ok(content) = read_text_capped(&path, MAX_LOG_FILE_READ_BYTES) else {
         return None;
     };
     let all: Vec<&str> = content.lines().collect();

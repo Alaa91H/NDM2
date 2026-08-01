@@ -243,7 +243,7 @@ fn handle_native_request(
     let params = request.get("params").cloned().unwrap_or_else(|| json!({}));
 
     // Routes that are exempt from auth on the daemon side — no token needed.
-    let needs_auth = !matches!(method, "engine.status" | "capabilities" | "external.tools");
+    let needs_auth = !matches!(method, "engine.status" | "capabilities");
 
     let result = match method {
         "engine.status" => http_json(client, state, "GET", "/v1/ping", None, false),
@@ -301,7 +301,7 @@ fn handle_native_request(
             None,
             false,
         ),
-        "external.tools" => http_json(client, state, "GET", "/api/external-tools", None, false),
+        "external.tools" => http_json(client, state, "GET", "/api/external-tools", None, true),
         _ => Err(format!("Unsupported native method: {method}")),
     };
 
