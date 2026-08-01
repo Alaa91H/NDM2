@@ -30,6 +30,10 @@ pub struct LiveSegment {
     pub created_at: Instant,
     pub last_progress_at: Instant,
     pub stall_since: Option<Instant>,
+    /// When true, the segment file may temporarily exceed its logical size
+    /// (M10 rebalance writes a prefix beyond `end_byte`); the merge/complete
+    /// pass must truncate it back to `end_byte + 1` before merging.
+    pub truncate_on_complete: bool,
 }
 
 impl LiveSegment {
@@ -205,8 +209,10 @@ impl SegmentController {
         }
 
         if let (Some(slow_id), Some(fast_id)) = (slowest, fastest) {
-            let slow_seg = self.segments.iter().find(|s| s.id == slow_id).unwrap();
-            let fast_seg = self.segments.iter().find(|s| s.id == fast_id).unwrap();
+            // H9: never unwrap finds — a malformed segment set must yield
+            // None (no decision) instead of panicking.
+            let slow_seg = self.segments.iter().find(|s| s.id == slow_id)?;
+            let fast_seg = self.segments.iter().find(|s| s.id == fast_id)?;
             if fast_seg.speed > slow_seg.speed * 3
                 && slow_seg.remaining_bytes() > self.min_segment_bytes
                 && slow_seg.end_byte == fast_seg.start_byte
@@ -235,8 +241,8 @@ impl SegmentController {
             if consecutive_under.len() >= 2 {
                 let a_id = consecutive_under[0];
                 let b_id = consecutive_under[1];
-                let a = self.segments.iter().find(|s| s.id == a_id).unwrap();
-                let b = self.segments.iter().find(|s| s.id == b_id).unwrap();
+                let a = self.segments.iter().find(|s| s.id == a_id)?;
+                let b = self.segments.iter().find(|s| s.id == b_id)?;
                 if a.end_byte == b.start_byte
                     && a.remaining_bytes() + b.remaining_bytes() < self.min_segment_bytes * 2
                 {
@@ -462,21 +468,53 @@ impl SegmentController {
                 if from_seg == to_seg {
                     return;
                 }
-                if let Some(slow) = self.segments.iter_mut().find(|s| s.id == *from_seg) {
-                    slow.end_byte = slow.end_byte.saturating_sub(*bytes);
-                    slow.downloaded = slow.downloaded.min(slow.total_bytes());
+                // M10: prefix-segment rebalance. Instead of moving the fast
+                // segment's start back (which re-downloads the overlapped
+                // bytes), shrink the slow segment and INSERT a prefix segment
+                // covering [slow.end_byte, fast.start_byte). The fast segment
+                // keeps its start/downloaded untouched, so no byte is ever
+                // downloaded twice.
+                let Some(slow_idx) = self.segments.iter().position(|s| s.id == *from_seg) else {
+                    return;
+                };
+                let Some(fast_idx) = self.segments.iter().position(|s| s.id == *to_seg) else {
+                    return;
+                };
+                if self.segments[slow_idx].end_byte != self.segments[fast_idx].start_byte {
+                    return;
                 }
-                let new_start = self
-                    .segments
-                    .iter()
-                    .find(|s| s.id == *from_seg)
-                    .map(|s| s.end_byte);
-                if let (Some(new_start), Some(fast)) = (
-                    new_start,
-                    self.segments.iter_mut().find(|s| s.id == *to_seg),
-                ) {
-                    fast.start_byte = new_start;
+                let transfer = (*bytes).min(self.segments[slow_idx].remaining_bytes());
+                if transfer == 0 {
+                    return;
                 }
+                let old_slow_end = self.segments[slow_idx].end_byte;
+                let new_slow_end = old_slow_end.saturating_sub(transfer);
+                let new_id = self.segments.iter().map(|s| s.id).max().unwrap_or(0) + 1;
+                let now = Instant::now();
+
+                // Shrink the slow segment and mark it for truncation: its file
+                // already holds `transfer` extra bytes beyond its new end.
+                let slow_downloaded = self.segments[slow_idx].downloaded;
+                let slow_total = self.segments[slow_idx].total_bytes();
+                self.segments[slow_idx].end_byte = new_slow_end;
+                self.segments[slow_idx].truncate_on_complete = true;
+                self.segments[slow_idx].downloaded = slow_downloaded.min(slow_total);
+
+                // Insert the prefix segment that owns those already-written
+                // bytes — no re-download needed.
+                self.segments.push(LiveSegment {
+                    id: new_id,
+                    start_byte: new_slow_end,
+                    end_byte: old_slow_end,
+                    downloaded: transfer,
+                    speed: 0,
+                    assigned_connection: None,
+                    state: SegmentState::Active,
+                    created_at: now,
+                    last_progress_at: now,
+                    stall_since: None,
+                    truncate_on_complete: false,
+                });
             }
             SegmentPlan::SplitSegment { segment_id } => {
                 self.split_segment_at(*segment_id);
@@ -518,6 +556,7 @@ impl SegmentController {
             created_at: now,
             last_progress_at: now,
             stall_since: None,
+            truncate_on_complete: false,
         };
         self.segments.push(new_seg);
     }
@@ -534,14 +573,24 @@ impl SegmentController {
         if a_idx >= b_idx {
             return;
         }
+        // Read all of b's data up front so we can mutate a afterwards without
+        // fighting the borrow checker.
+        let (b_start, b_end, b_downloaded, b_truncate) = {
+            let b = &self.segments[b_idx];
+            (b.start_byte, b.end_byte, b.downloaded, b.truncate_on_complete)
+        };
         let a_end = self.segments[a_idx].end_byte;
-        let b = &self.segments[b_idx];
-        if b.start_byte != a_end {
+        if b_start != a_end {
             return;
         }
-        let b_end = b.end_byte;
+        // Preserve b's downloaded progress in the survivor (M10: merging
+        // discards b's bytes otherwise).
+        self.segments[a_idx].downloaded =
+            self.segments[a_idx].downloaded.saturating_add(b_downloaded);
         self.segments[a_idx].end_byte = b_end;
         self.segments[a_idx].state = SegmentState::Active;
+        self.segments[a_idx].truncate_on_complete =
+            self.segments[a_idx].truncate_on_complete || b_truncate;
         self.segments.remove(b_idx);
     }
 
@@ -585,6 +634,7 @@ impl SegmentController {
                 created_at: Instant::now(),
                 last_progress_at: Instant::now(),
                 stall_since: None,
+                truncate_on_complete: false,
             }];
         }
         let count = if min_segment > 0 && total_size >= min_segment * 2 {
@@ -613,6 +663,7 @@ impl SegmentController {
                 created_at: now,
                 last_progress_at: now,
                 stall_since: None,
+                truncate_on_complete: false,
             });
             start = end;
         }
@@ -828,6 +879,7 @@ mod tests {
             created_at: Instant::now(),
             last_progress_at: Instant::now(),
             stall_since: None,
+            truncate_on_complete: false,
         };
         assert_eq!(seg.total_bytes(), 400);
         assert_eq!(seg.remaining_bytes(), 300);
@@ -846,6 +898,7 @@ mod tests {
             created_at: Instant::now(),
             last_progress_at: Instant::now(),
             stall_since: None,
+            truncate_on_complete: false,
         };
         assert!((seg.progress() - 0.5).abs() < f64::EPSILON);
     }
@@ -989,5 +1042,95 @@ mod tests {
         assert_eq!(c.unassigned_active_count(), 1);
         c.segments[0].assigned_connection = Some(0);
         assert_eq!(c.unassigned_active_count(), 0);
+    }
+
+    #[test]
+    fn rebalance_uses_prefix_segment_no_overlap() {
+        // M10 regression: rebalance must NOT move the fast segment's start
+        // back (which re-downloads the overlapped tail). It inserts a prefix
+        // segment owning the already-written bytes instead.
+        let mut c = SegmentController::new(10_000_000, 1024 * 1024);
+        c.redistribute_for_count(2);
+        // Slow segment first, fast second, adjacent.
+        c.segments[0].id = 10;
+        c.segments[1].id = 20;
+        c.segments[0].speed = 100;
+        c.segments[1].speed = 1000;
+        c.segments[0].downloaded = 1000;
+        let slow_start = c.segments[0].start_byte;
+        let slow_end_before = c.segments[0].end_byte;
+        let fast_start_before = c.segments[1].start_byte;
+        let fast_downloaded_before = c.segments[1].downloaded;
+        assert_eq!(slow_end_before, fast_start_before);
+
+        c.apply_plan(&SegmentPlan::Rebalance {
+            from_seg: 10,
+            to_seg: 20,
+            bytes: 5000,
+        });
+
+        // Slow shrank; a prefix segment covers the gap; fast untouched.
+        let slow = c.segments.iter().find(|s| s.id == 10).unwrap();
+        assert!(slow.end_byte < slow_end_before, "slow must shrink");
+        assert!(slow.truncate_on_complete, "slow must be marked for truncation");
+        let fast = c.segments.iter().find(|s| s.id == 20).unwrap();
+        assert_eq!(fast.start_byte, fast_start_before, "fast start must not move");
+        assert_eq!(fast.downloaded, fast_downloaded_before, "fast must keep progress");
+        // The prefix owns exactly the transferred bytes, adjacent to both.
+        let prefix = c
+            .segments
+            .iter()
+            .find(|s| s.start_byte == slow.end_byte && s.end_byte == fast.start_byte)
+            .expect("prefix segment must exist");
+        assert_eq!(prefix.downloaded, 5000);
+        // No overlap anywhere and everything stays inside [slow_start, fast_end).
+        let mut sorted: Vec<&LiveSegment> = c.segments.iter().collect();
+        sorted.sort_by_key(|s| s.start_byte);
+        for pair in sorted.windows(2) {
+            assert!(
+                pair[0].end_byte <= pair[1].start_byte,
+                "segments must not overlap"
+            );
+        }
+        let _ = slow_start;
+    }
+
+    #[test]
+    fn merge_preserves_downloaded_progress() {
+        // M10: merging must carry b's downloaded bytes into the survivor.
+        let mut c = SegmentController::new(10_000_000, 1024 * 1024);
+        c.redistribute_for_count(2);
+        c.segments[0].downloaded = 1000;
+        c.segments[1].downloaded = 2000;
+        let total_before: u64 = c.segments.iter().map(|s| s.downloaded).sum();
+        let a_id = c.segments[0].id;
+        let b_id = c.segments[1].id;
+        c.merge_adjacent_segments(a_id, b_id);
+        let total_after: u64 = c.segments.iter().map(|s| s.downloaded).sum();
+        assert_eq!(total_before, total_after, "merge must not drop downloaded bytes");
+    }
+
+    #[test]
+    fn split_at_byte_is_inside_remaining_range() {
+        // SplitSegment must cut at a real midpoint inside [start+downloaded, end).
+        let mut c = SegmentController::new(10_000_000, 1024 * 1024);
+        c.redistribute_for_count(1);
+        c.segments[0].downloaded = 2000;
+        let start = c.segments[0].start_byte;
+        let end = c.segments[0].end_byte;
+        let seg_id = c.segments[0].id;
+        c.split_segment_at(seg_id);
+        // Two segments now; the split point lies strictly between
+        // start+downloaded and end.
+        assert_eq!(c.segment_count(), 2);
+        let s1 = c.segments.iter().find(|s| s.id == seg_id).unwrap();
+        let s2 = c
+            .segments
+            .iter()
+            .find(|s| s.id != seg_id)
+            .expect("second segment");
+        assert!(s1.end_byte > start + 2000, "split must be after downloaded bytes");
+        assert!(s1.end_byte < end, "split must be before the end");
+        assert_eq!(s1.end_byte, s2.start_byte, "split halves must be adjacent");
     }
 }

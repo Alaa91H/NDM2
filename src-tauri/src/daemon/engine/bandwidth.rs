@@ -368,6 +368,31 @@ mod tests {
     }
 
     #[test]
+    fn remove_task_limit_cleans_history_without_deadlock() {
+        // M27 regression: remove_task_limit must not hold nested locks across
+        // speed_history and history_order (or deadlock under concurrent
+        // report_speed). Exercise it concurrently to shake out lock order
+        // inversion.
+        let m = std::sync::Arc::new(mgr_with_global(1000));
+        let m2 = m.clone();
+        let writer = std::thread::spawn(move || {
+            for i in 0..500u64 {
+                m2.report_speed("t1", i);
+            }
+        });
+        for _ in 0..50 {
+            m.set_task_limit("t1".into(), 500);
+            m.remove_task_limit("t1");
+        }
+        writer.join().unwrap();
+        // Final cleanup after the writer is done; then the history must be
+        // gone and the global limit applies.
+        m.remove_task_limit("t1");
+        assert_eq!(m.average_speed("t1"), 0);
+        assert_eq!(m.allowed_speed_for_task("t1"), 1000);
+    }
+
+    #[test]
     fn speed_window_capped_at_30() {
         let m = mgr_with_global(1000);
 

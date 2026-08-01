@@ -424,9 +424,12 @@ where
 
         if paused.load(Ordering::Acquire) {
             // Pause gate: no multi.action calls while paused, so the transfer
-            // cannot move bytes. Keep ticking so resume is picked up quickly.
+            // cannot move bytes. Keep the multi handle fresh via timeout()
+            // (prevents it from declaring the transfer stalled) and keep
+            // ticking so resume is picked up quickly.
             std::thread::sleep(Duration::from_millis(PROGRESS_INTERVAL_MS));
             runtime.drain_updates(multi)?;
+            let _ = multi.timeout();
             tick();
             continue;
         }

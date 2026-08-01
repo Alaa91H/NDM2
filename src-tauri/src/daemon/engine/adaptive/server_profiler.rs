@@ -161,7 +161,15 @@ impl ServerProfile {
         }
         if !self.throughput_samples.is_empty() {
             self.throughput_ceiling = self.throughput_samples.iter().copied().max().unwrap_or(0);
-            self.per_connection_ceiling = self.throughput_ceiling;
+            // L13: per_connection_ceiling must not be stomped to the aggregate
+            // ceiling on every sample. Establish it once (from the aggregate
+            // divided by the learned optimal connection count) and keep it —
+            // re-deriving it every sample makes the per-connection thresholds
+            // wrong whenever connection counts change.
+            if self.per_connection_ceiling == 0 && self.optimal_connections > 0 {
+                self.per_connection_ceiling =
+                    self.throughput_ceiling / u64::from(self.optimal_connections);
+            }
         }
         let total = self.total_probes;
         if total > 0 {

@@ -72,7 +72,11 @@ impl ConvergenceDetector {
         if ratio < 1.05 {
             self.consecutive_no_improvement += 1;
         } else {
+            // M23/L12: an improvement cancels any pending cooldown — the
+            // transfer is converging again, so throttling further adjustments
+            // would just delay reaching the optimum.
             self.consecutive_no_improvement = 0;
+            self.cooldown_until = None;
         }
 
         if self.consecutive_no_improvement >= 3 {
@@ -287,5 +291,37 @@ mod tests {
             c.record_adjustment(100);
         }
         assert!(c.cooldown_until.is_some());
+    }
+
+    #[test]
+    fn improvement_cancels_cooldown() {
+        // M23/L12 regression: an improvement (ratio ≥ 1.05) must clear the
+        // cooldown, not leave the detector throttled.
+        let mut c = ConvergenceDetector::new();
+        // Seed history with slow samples.
+        for _ in 0..40 {
+            c.record_speed(100, 1);
+        }
+        for _ in 0..3 {
+            c.consecutive_no_improvement += 1;
+            c.record_adjustment(100);
+        }
+        assert!(c.cooldown_until.is_some(), "cooldown must be active");
+
+        // Now an improvement arrives: 10x faster samples land in the tail of
+        // the window (last 8), with the preceding 8 still slow — so
+        // improvement_ratio(8) sees before≈100 and after≈1000.
+        for _ in 0..8 {
+            c.record_speed(100, 1);
+        }
+        for _ in 0..8 {
+            c.record_speed(1000, 1);
+        }
+        c.record_adjustment(1000);
+        assert!(
+            c.cooldown_until.is_none(),
+            "improvement must cancel the cooldown"
+        );
+        assert_eq!(c.consecutive_no_improvement, 0);
     }
 }

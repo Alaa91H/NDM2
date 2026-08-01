@@ -223,6 +223,8 @@ pub(crate) mod tests {
                 total_bytes: 1000,
                 active: false,
                 speed: 0,
+                start_byte: 0,
+                end_byte: 1000,
             }],
             referer: None,
             engine: engine.to_string(),

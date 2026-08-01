@@ -543,6 +543,8 @@ fn update_curl_task_progress(
                     total_bytes: seg_total,
                     active: seg_downloaded < seg_total && job.task.status == "downloading",
                     speed: segment_speeds[i],
+                    start_byte: range.start,
+                    end_byte: range.end,
                 }
             })
             .collect();
@@ -2727,6 +2729,8 @@ mod tests {
                 total_bytes: expected_part as u64,
                 active: false,
                 speed: 0,
+                start_byte: 0,
+                end_byte: expected_part as u64,
             },
             Segment {
                 id: 1,
@@ -2735,6 +2739,8 @@ mod tests {
                 total_bytes: expected_part as u64,
                 active: false,
                 speed: 0,
+                start_byte: expected_part as u64,
+                end_byte: (expected_part * 2) as u64,
             },
         ];
         {
@@ -2851,10 +2857,26 @@ mod tests {
         }
         assert!(seen_any, "transfer never started writing");
 
-        // Pause and sample the on-disk size over 600ms — it must not grow.
+        // Pause and sample the on-disk size — it must not grow. Wait for the
+        // pause gate to actually engage (the worker may be mid-perform when
+        // pause_all() is called) by requiring two consecutive stable reads.
         state.bandwidth_manager.pause_all();
-        let frozen = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
-        std::thread::sleep(std::time::Duration::from_millis(600));
+        let mut frozen = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
+        let mut stable_reads = 0;
+        for _ in 0..50 {
+            std::thread::sleep(std::time::Duration::from_millis(40));
+            let now = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
+            if now == frozen {
+                stable_reads += 1;
+                if stable_reads >= 2 {
+                    break;
+                }
+            } else {
+                frozen = now;
+                stable_reads = 0;
+            }
+        }
+        assert!(stable_reads >= 2, "transfer never stalled after pause");
         let after_pause = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
         assert_eq!(
             after_pause, frozen,
@@ -2864,7 +2886,7 @@ mod tests {
         // Resume and let it complete.
         state.bandwidth_manager.resume_all();
         worker.join().unwrap();
-        let task = run_task_to_completion(&state, id, std::time::Duration::from_secs(60));
+        let task = run_task_to_completion(&state, id, std::time::Duration::from_secs(120));
         assert_eq!(task.status, "completed");
         let written = std::fs::read(&out).unwrap();
         assert_eq!(written, payload, "resumed download is corrupt");

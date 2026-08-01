@@ -248,6 +248,8 @@ pub fn build_segments(connections: u32, total: u64, downloaded: u64, speed: u64)
             total_bytes: 0,
             active: true,
             speed,
+            start_byte: 0,
+            end_byte: 0,
         }];
     }
     let per_seg = total / u64::from(connections.max(1));
@@ -273,6 +275,8 @@ pub fn build_segments(connections: u32, total: u64, downloaded: u64, speed: u64)
             total_bytes: seg_end - seg_start,
             active: true,
             speed: speed / u64::from(connections.max(1)),
+            start_byte: seg_start,
+            end_byte: seg_end,
         });
     }
     segs

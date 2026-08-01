@@ -418,6 +418,8 @@ fn update_structured_progress(record: &mut MediaJob, payload: &str) {
             total_bytes: record.task.size_bytes,
             active: true,
             speed: record.task.speed_bytes_per_sec,
+            start_byte: 0,
+            end_byte: record.task.size_bytes,
         }];
     }
 }
@@ -1009,6 +1011,8 @@ pub async fn create_ytdlp_task(
             total_bytes: 0,
             active: true,
             speed: 0,
+            start_byte: 0,
+            end_byte: 0,
         }],
         referer: None,
         engine: "yt-dlp".to_owned(),

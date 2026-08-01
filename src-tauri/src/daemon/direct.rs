@@ -313,7 +313,21 @@ impl FileWriter {
         for range in ranges {
             let expected = range.len();
             let actual = Self::current_size(&range.path)?;
-            if actual != expected {
+            if actual > expected {
+                // A segment may temporarily exceed its logical length after an
+                // adaptive rebalance wrote a prefix beyond the planned end.
+                // Truncate it back to the expected size before merging.
+                log::warn!(
+                    "merge_parts: truncating segment {} from {actual} to {expected} bytes",
+                    range.index
+                );
+                let file = OpenOptions::new()
+                    .write(true)
+                    .open(&range.path)
+                    .map_err(|e| format!("Could not open segment {} to truncate: {e}", range.index))?;
+                file.set_len(expected)
+                    .map_err(|e| format!("Could not truncate segment {}: {e}", range.index))?;
+            } else if actual < expected {
                 return Err(format!(
                     "Segment {} is incomplete: expected {} bytes, got {} bytes",
                     range.index, expected, actual

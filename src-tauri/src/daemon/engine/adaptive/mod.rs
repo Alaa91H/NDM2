@@ -145,17 +145,14 @@ impl TelemetryBus {
     }
 
     pub fn report_speed(&self, conn_id: usize, speed: u64) {
+        // M9: store the slot speed only. The aggregate is recomputed in
+        // snapshot() from the live slots, which is race-free — the old
+        // fetch_add/fetch_sub delta could mis-apply under concurrent updates
+        // and even underflow u64 in release builds.
         if conn_id < MAX_TRACKED_CONNECTIONS {
-            let prev = self.connections[conn_id]
+            self.connections[conn_id]
                 .speed
-                .swap(speed, Ordering::Relaxed);
-            if speed > prev {
-                self.aggregate_speed
-                    .fetch_add(speed - prev, Ordering::Relaxed);
-            } else if prev > speed {
-                self.aggregate_speed
-                    .fetch_sub(prev - speed, Ordering::Relaxed);
-            }
+                .store(speed, Ordering::Relaxed);
             self.aggregate_peak.fetch_max(speed, Ordering::Relaxed);
         }
     }
@@ -211,7 +208,10 @@ impl TelemetryBus {
         }
     }
 
-    pub fn set_alive(&self, conn_id: usize, alive: bool) {
+    /// Set the alive flag for a connection slot. Returns the previous value
+    /// so callers can detect state transitions (H16: a double `false` must
+    /// not decrement active_conns twice).
+    pub fn set_alive(&self, conn_id: usize, alive: bool) -> bool {
         if conn_id < MAX_TRACKED_CONNECTIONS {
             let prev = self.connections[conn_id]
                 .alive
@@ -223,6 +223,9 @@ impl TelemetryBus {
                     self.active_conns.fetch_sub(1, Ordering::Relaxed);
                 }
             }
+            prev
+        } else {
+            false
         }
     }
 
@@ -253,11 +256,15 @@ impl TelemetryBus {
             });
         }
         let total_bytes: u64 = connections.iter().map(|c| c.bytes_downloaded).sum();
+        // M9: recompute the aggregate speed from the live slots instead of
+        // reading a delta-maintained counter (which could underflow and went
+        // stale when a connection finished).
+        let total_speed: u64 = connections.iter().map(|c| c.last_speed).sum();
         TelemetrySnapshot {
             connections,
             aggregate: AggregateTelemetry {
                 total_bytes,
-                total_speed: self.aggregate_speed.load(Ordering::Relaxed),
+                total_speed,
                 peak_speed: self.aggregate_peak.load(Ordering::Relaxed),
                 active_connections: self.active_conns.load(Ordering::Relaxed),
                 completed_connections: self.completed_conns.load(Ordering::Relaxed),
@@ -909,5 +916,72 @@ mod tests {
             256 * 1024,
         );
         assert_eq!(engine.segment_controller().segment_count(), 1);
+    }
+
+    #[test]
+    fn telemetry_speed_aggregate_is_recomputed_not_delta() {
+        // M9 regression: total_speed must equal the sum of live slot speeds
+        // (no delta counter that can underflow or go stale).
+        let bus = TelemetryBus::new();
+        bus.report_speed(0, 1000);
+        bus.report_speed(1, 2000);
+        bus.report_speed(2, 3000);
+        let snap = bus.snapshot();
+        assert_eq!(snap.aggregate.total_speed, 6000);
+
+        // Update one slot downward; aggregate must follow exactly.
+        bus.report_speed(1, 500);
+        let snap2 = bus.snapshot();
+        assert_eq!(snap2.aggregate.total_speed, 4500);
+
+        // Peak tracks the maximum ever reported.
+        assert_eq!(snap2.aggregate.peak_speed, 3000);
+    }
+
+    #[test]
+    fn telemetry_set_alive_counts_transitions_once() {
+        // H16 regression: setting alive=false twice must decrement the active
+        // count only once (no underflow).
+        let bus = TelemetryBus::new();
+        bus.set_alive(0, true);
+        bus.set_alive(0, true); // no-op
+        assert_eq!(bus.snapshot().aggregate.active_connections, 1);
+
+        bus.set_alive(0, false);
+        bus.set_alive(0, false); // no-op
+        assert_eq!(bus.snapshot().aggregate.active_connections, 0);
+
+        // mark_completed twice on the same slot: completed counts once, and
+        // active never goes negative.
+        bus.set_alive(1, true);
+        bus.mark_completed(1);
+        bus.mark_completed(1);
+        let snap = bus.snapshot();
+        assert_eq!(snap.aggregate.active_connections, 0);
+        assert_eq!(snap.aggregate.completed_connections, 2);
+    }
+
+    #[test]
+    fn telemetry_concurrent_report_speed_does_not_underflow() {
+        // M9: concurrent writers on the same slot must never corrupt the
+        // aggregate (the old fetch_sub path could underflow u64).
+        let bus = std::sync::Arc::new(TelemetryBus::new());
+        let mut handles = Vec::new();
+        for t in 0..8usize {
+            let bus = bus.clone();
+            handles.push(std::thread::spawn(move || {
+                for i in 0..200usize {
+                    bus.report_speed(t % 4, (i as u64) * 10);
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        let snap = bus.snapshot();
+        // No underflow: total is the sum of the last written values, each
+        // ≤ 1990, so the total is bounded well below u64::MAX.
+        assert!(snap.aggregate.total_speed < 10_000_000);
+        assert!(snap.aggregate.peak_speed < 10_000_000);
     }
 }
