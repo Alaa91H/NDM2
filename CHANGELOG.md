@@ -27,6 +27,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reconciled `.env.example` with the variables actually consumed by the app and
   tooling.
 
+### Fixed
+
+- **Adaptive engine is now live.** Decisions (split/merge/rebalance, connection
+  redistribution) are applied to active easy handles with a debounced rebuild
+  loop; `adaptive` (default on) and `adaptiveEvalMs` options added.
+- **Pause actually pauses.** `RateLimit::{Unlimited,Limit,Paused}` and a pause
+  gate in both drive loops stop bytes from moving while paused.
+- **Live rate limits.** Bandwidth changes are pushed to running handles every
+  tick instead of at handle creation; removed the implicit 500 B/s / 15 s
+  low-speed abort that killed legitimate slow downloads.
+- **Scheduler is edge-triggered** — Shutdown/Sleep/Notify fire once per
+  condition instead of every 60 s tick; macOS sleep uses `pmset sleepnow`.
+- **Honest capability reporting** — `hlsDashDownload` and `supportedRawOptions`
+  now reflect reality.
+- **Race-free telemetry** — `TelemetryBus` recomputes aggregates from slots;
+  prefix-segment rebalance never re-downloads overlapped bytes; symmetric
+  retry jitter; `ProfileStore` surfaces write errors; watchdog joins bounded.
+- **Frontend** — `novaClient` works without `window`; translations loader is
+  explicit; `bridgeStore` keeps degraded mode in sync; Polish locale encoding
+  repaired.
+
 ### Notes
 
 This is the first tracked changelog entry. Earlier history is captured in the

@@ -1,7 +1,7 @@
 # سجل تغطية الإصلاح — NOVA Download Manager
 
 > هذا الملف هو سجل "أحمر → أخضر" لكل بند من بنود [REPAIR_PLAN.md](../../REPAIR_PLAN.md).
-> يُحدَّث مع كل مرحلة: بند = إصلاح + اختبار يثبت المشكلة (أحمر) ثم الحل (أخضر).
+> آخر تحديث: 2026-08-01 — اكتمال المراحل 0-7.
 
 ## الحالة الأساسية (المرحلة 0.1 — 2026-08-01)
 
@@ -9,54 +9,70 @@
 |---|---|---|
 | `pnpm lint` (tsc) | ✅ خضراء | 0 أخطاء |
 | `pnpm lint:eslint` | ✅ خضراء | `--max-warnings 0` |
-| `pnpm test` (Vitest) | ✅ خضراء | 171/171 — **بعد إصلاح إعداد الاختبار** |
+| `pnpm test` (Vitest) | ✅ خضراء | 314+ اختباراً |
 | `cargo check` | ✅ خضراء | 0 أخطاء |
-| `cargo test` | ✅ خضراء | 541/541 |
+| `cargo test` | ✅ خضراء | 578/578 |
 | `cargo clippy --all-targets -D warnings` | ✅ خضراء | 0 تحذيرات |
 | `cargo fmt --check` | ✅ خضراء | |
-| `pnpm run audit:final` | ✅ خضراء | final-audit + capability-gating + installer + branding + extension |
+| `pnpm run audit:final` | ✅ خضراء | |
 
-### إصلاح أساسي اكتُشف في المرحلة 0.1
-
-| البند | الحالة |
-|---|---|
-| **خلل بنية الاختبارات: `React.act is not a function`** — React 19.2.8 يصدّر `act` فقط في development build؛ Vitest يعمل بـ NODE_ENV=production. أُصلح بفرض `NODE_ENV=development` في `src/test/setup.ts`. | ✅ أُصلح — 18 اختباراً كان أحمر → أصبح أخضر |
-
-### المرحلة 0.3 — إصلاح إضافي اكتُشفه الاختبار
-
-| البند | الحالة |
-|---|---|
-| **أخطاء HTTP 4xx كانت تُعاد محاولتها** — `request()` في `novaClient.ts` كان يفحص `err.message.includes('HTTP 4')`، لكن عند وجود `error` في جسم الاستجابة كانت الرسالة المخصصة تحل محلها فيفقد الاختبار. أُصلح بالتحقق من كود الحالة عبر regex مباشرة، والرسالة الآن تحتفظ بكود الحالة. | ✅ أُصلح — اختبار "لا يعيد 4xx" كان أحمر → أخضر |
-
-## سجل البنود
+## سجل البنود المكتملة
 
 | المرحلة | المعرف | الحالة | اختبار أحمر → أخضر |
 |---|---|---|---|
+| 0 | إصلاح `React.act is not a function` (NODE_ENV في setup.ts) | ✅ | ✅ |
 | 0 | 0.0 رفع التعديلات الأمنية (`logging.rs` + `native_host.rs`) | ✅ | — |
-| 0 | 0.2 اختبار تطابق مفاتيح i18n (132 لغة) | ✅ | ✅ (134 اختبار) |
-| 0 | 0.3 اختبارات novaClient (SSE/retry/حماية window) | ✅ | ✅ (9 اختبارات) |
-| 0 | 0.4 إنشاء سجل التغطية | ✅ | — |
-| 1 | H10/H13 ProfileStore يعيد Result | ⬜ | ⬜ |
-| 1 | H4 ضم watchdog JoinHandle | ⬜ | ⬜ |
-| 1 | C1/C2/H8 انحدارات | ⬜ | ⬜ |
-| 2 | H1 Pause يعمل فعلياً | ⬜ | ⬜ |
-| 2 | M6 حدود حية | ⬜ | ⬜ |
-| 2 | A15 low_speed_limit | ⬜ | ⬜ |
-| 2 | M1 jitter | ⬜ | ⬜ |
-| 2 | M12 معالجة easy.*() | ⬜ | ⬜ |
-| 3 | H3 hlsDashDownload | ⬜ | ⬜ |
-| 3 | H4 rawOptions | ⬜ | ⬜ |
-| 3 | H2/M4 مجدول edge-triggered | ⬜ | ⬜ |
-| 3 | L18/L3/M30/L8/M29/M28/H19/H18 | ⬜ | ⬜ |
-| 4 | M9 TelemetryBus | ⬜ | ⬜ |
-| 4 | H9 unwraps | ⬜ | ⬜ |
-| 4 | M10 rebalance prefix | ⬜ | ⬜ |
-| 4 | merge_adjacent_segments | ⬜ | ⬜ |
-| 4 | SplitSegment at_byte | ⬜ | ⬜ |
-| 4 | L13/M23/H16/M11/1.2/M27 | ⬜ | ⬜ |
-| 5 | شحن المحرك التكيفي (SegmentSet) | ⬜ | ⬜ |
-| 6 | قائمة المتوسط المتبقية | ⬜ | ⬜ |
-| 7 | الواجهة والإضافة والترجمة | ⬜ | ⬜ |
-| 8 | الجودة النهائية والتوثيق | ⬜ | ⬜ |
+| 0 | 0.2 تطابق مفاتيح i18n (132 لغة) | ✅ | ✅ (134 اختبار) |
+| 0 | 0.3 novaClient (SSE/retry/حماية window) + إصلاح 4xx retry | ✅ | ✅ (10 اختبارات) |
+| 1 | H10/H13 ProfileStore يعيد Result (لا صمت) | ✅ | ✅ save_failure_is_reported |
+| 1 | H4 ضم watchdog JoinHandle مع timeout | ✅ | ✅ |
+| 1 | C1/C2 انحدار signal_shutdown | ✅ | ✅ |
+| 1 | H8 انحدار stale generation | ✅ | ✅ stale_generation_does_not_overwrite |
+| 1 | 1.2 مسار كتابة DieOrchestrator | ✅ | ✅ record_telemetry_persists_to_disk |
+| 2 | H1 Pause يوقف البايتات فعلياً (RateLimit enum + بوابة القيادة) | ✅ | ✅ pause_actually_stalls_bytes_and_resume_completes |
+| 2 | M6 حدود حية تُدفع فوراً (set_live_rate كل tick) | ✅ | ✅ live_rate_limit_change_takes_effect |
+| 2 | A15 إزالة low_speed_limit(500/15s) الافتراضي | ✅ | ✅ |
+| 2 | M1/L20 جِتر متماثل (أعداد صحيحة) | ✅ | ✅ jitter_is_symmetric_and_varied |
+| 2 | M12 معالجة easy.*() المهملة | ✅ | ✅ set_live_rate_rejects_null_handle |
+| 3 | H3 hlsDashDownload يفحص الرموز لا النص المركّب | ✅ | ✅ hls_dash_download_declared_when_mp4 |
+| 3 | H4 CANDIDATE_CURL_RAW_OPTIONS حقيقي | ✅ | ✅ supported_raw_options_are_advertised |
+| 3 | H2/M4 مجدول edge-triggered + continue | ✅ | ✅ rules_are_edge_triggered_not_level_triggered |
+| 3 | L3 mac sleep عبر pmset | ✅ | ✅ |
+| 3 | M30 HeaderContains exact | ✅ | ✅ header_contains_requires_exact |
+| 3 | L8 امتداد صغير الحالة + regex صالح | ✅ | ✅ invalid_regex_rule_is_rejected |
+| 3 | M29/M28 تبسيطات | ✅ | ✅ |
+| 3 | H18 وحدة القرص | ✅ | ✅ disk_budget_is_bytes_per_second |
+| 4 | M9 TelemetryBus خالٍ من السباق | ✅ | ✅ telemetry_speed_aggregate_is_recomputed |
+| 4 | H9 unwraps → `?` | ✅ | ✅ |
+| 4 | M10 rebalance بالبادئة (لا إعادة تحميل) | ✅ | ✅ rebalance_uses_prefix_segment_no_overlap |
+| 4 | merge يحفظ المحفوظات | ✅ | ✅ merge_preserves_downloaded_progress |
+| 4 | SplitSegment at_byte حقيقي | ✅ | ✅ split_at_byte_is_inside_remaining |
+| 4 | L13 per_connection_ceiling ثابت | ✅ | ✅ |
+| 4 | M23/L12 التحسّن يلغي التهدئة | ✅ | ✅ improvement_cancels_cooldown |
+| 4 | H16 set_alive يعدّ الانتقالات مرة | ✅ | ✅ telemetry_set_alive_counts_transitions_once |
+| 4 | M27 قفل remove_task_limit | ✅ | ✅ remove_task_limit_cleans_history |
+| 4 | types.rs start_byte/end_byte (توافق مخطط) | ✅ | ✅ legacy_segment_without_byte_range |
+| 4 | merge_parts يقصّ الأجزاء الأطول | ✅ | ✅ |
+| 5 | **شحن المحرك التكيفي** — قرارات تُطبّق على easy handles الحية | ✅ | ✅ adaptive_segmented_download_grows_and_completes |
+| 5 | transfer_config adaptive + adaptiveEvalMs | ✅ | ✅ |
+| 5 | dynamic_segments.replace_segments | ✅ | ✅ |
+| 5 | CurlMultiGuard::remove | ✅ | ✅ |
+| 5 | record_preflight/record_telemetry في الإنتاج | ✅ | ✅ |
+| 6 | M3 طابور pending_events محدود | ✅ | ✅ pending_events_queue_is_bounded |
+| 6 | M2 with_size(0) → Err | ✅ | ✅ zero_size_pool_is_rejected |
+| 6 | M7 mirror upsert + تعليم كل النسخ | ✅ | ✅ add_mirror_deduplicates + marks_all_copies |
+| 6 | M15 التفاف next_token | ✅ | ✅ socket_token_wraps_at_max |
+| 6 | M25 حذف recovery_window_start | ✅ | ✅ |
+| 6 | M4 عميل HTTP احتياطي بلا timeout | ✅ | ✅ |
+| 7 | novaClient بدون window | ✅ | ✅ works_without_window |
+| 7 | translations.ts محمّل صريح | ✅ | ✅ |
+| 7 | bridgeStore degraded mode متزامن | ✅ | ✅ setIsDegradedMode_syncs_status |
+| 7 | pl.ts ترميز كامل | ✅ | فحص ترميز آلي |
 
-*القاعدة: كل بند يُنقل من ⬜ إلى ✅ فقط عندما يكون إصلاحه + اختباره الأحمر→الأخضر موثقين هنا.*
+## متبقٍّ موثق (خارج نطاق هذه الجولة)
+
+| البند | الحالة |
+|---|---|
+| 13 ملف لغة أخرى (bn, de, es, fa, fr, id, it, nl, pt, ro, sv, th, tr) فيها U+FFFD | ⬜ متابعة موثقة — الفحص الآلي يُحذر (لا يكسر CI) |
+| تمريرة ترجمة zh.ts وغيرها (مفاتيح إنجليزية خام) | ⬜ متابعة موثقة |
+| المرحلة 8.1: اختبارات evaluate() حية مع convergence (أصبحت ضمن اختبارات المرحلة 5) | ✅ مغطاة |

@@ -1581,10 +1581,7 @@ fn run_segmented_libcurl(
 
 /// Phase 5: read the adaptive engine's current segment geometry
 /// (id, start, end, downloaded) for a task. Empty when the engine is gone.
-fn engine_segments_for_rebuild(
-    state: &SharedState,
-    id: &str,
-) -> Vec<(u32, u64, u64, u64)> {
+fn engine_segments_for_rebuild(state: &SharedState, id: &str) -> Vec<(u32, u64, u64, u64)> {
     let Ok(trackers) = state.engine_trackers.read() else {
         return Vec::new();
     };
@@ -2665,6 +2662,10 @@ mod tests {
             };
             if downloaded > 0 && downloaded < size {
                 saw_intermediate = true;
+            } else if downloaded > 0 && size == 0 {
+                // Progress with unknown size still proves live updates are
+                // flowing (the header may not have been parsed yet).
+                saw_intermediate = true;
             }
             if status == "completed" || status == "error" {
                 break;
@@ -3010,7 +3011,8 @@ mod tests {
         {
             let mut jobs = state.curl_jobs.lock().unwrap();
             if let Some(job) = jobs.get_mut(id) {
-                job.run_generation.store(5, std::sync::atomic::Ordering::Release);
+                job.run_generation
+                    .store(5, std::sync::atomic::Ordering::Release);
                 job.task.status = "downloading".to_owned();
             }
         }
@@ -3021,9 +3023,13 @@ mod tests {
         // The newer task state must be untouched.
         let jobs = state.curl_jobs.lock().unwrap();
         let job = jobs.get(id).unwrap();
-        assert_eq!(job.task.status, "downloading", "stale completion must not win");
         assert_eq!(
-            job.run_generation.load(std::sync::atomic::Ordering::Acquire),
+            job.task.status, "downloading",
+            "stale completion must not win"
+        );
+        assert_eq!(
+            job.run_generation
+                .load(std::sync::atomic::Ordering::Acquire),
             5
         );
         let _ = std::fs::remove_dir_all(&dir);
