@@ -1192,6 +1192,7 @@ pub fn create_easy_for_range_ext(
     let mut file = OpenOptions::new()
         .create(true)
         .write(true)
+        .truncate(false)
         .open(path)
         .map_err(|e| format!("Could not open segment output file: {e}"))?;
     if let Some(size) = preallocate_bytes {
@@ -1208,9 +1209,9 @@ pub fn create_easy_for_range_ext(
     } else if file.metadata().map_or(0, |m| m.len()) > 0 {
         // Resume path: keep writing after the existing bytes. Without O_APPEND
         // the cursor starts at 0, so seek to the current end explicitly.
-        let _ = file.seek(SeekFrom::End(0)).map_err(|e| {
-            format!("Could not position segment file for resume: {e}")
-        })?;
+        let _ = file
+            .seek(SeekFrom::End(0))
+            .map_err(|e| format!("Could not position segment file for resume: {e}"))?;
     }
     let mut easy = Easy2::new(SegmentWriter {
         file,
