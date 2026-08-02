@@ -1,6 +1,6 @@
 [package]
 name = "nova"
-version = "2.1.0-alpha"
+version = "2.2.1-alpha"
 description = "NOVA Download Manager"
 authors = ["NOVA"]
 license = "MIT"
@@ -52,10 +52,10 @@ lto = "fat"
 codegen-units = 1
 strip = "symbols"
 opt-level = 3
-panic = "abort"
+panic = "unwind"
 debug = false
 incremental = false
-overflow-checks = false
+overflow-checks = true
 
 [profile.release.package."*"]
 opt-level = 3
