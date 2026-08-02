@@ -65,4 +65,66 @@ describe('i18n key parity (REPAIR 0.2)', () => {
       expect(getTranslation(lang, sample).length).toBeGreaterThan(0);
     }
   });
+
+  it('zh/zh_TW have no raw English values (round 2)', async () => {
+    // Round-2 follow-up: zh.ts/zh_TW.ts historically kept keys with raw
+    // English values (sched_engine_*, rename_*, settings_logging_*, …).
+    // A value that is pure ASCII English prose is treated as untranslated.
+    // Technical tokens are legitimate ASCII: resolutions (8K 4320p),
+    // keyboard modifiers (Ctrl/Alt/Shift), browser names, protocols,
+    // placeholders (URLs/ports), file extensions, single words ≤ 12 chars.
+    const legitAscii =
+      /^(https?:\/\/|socks\d?:\/\/|[\w.-]+\.\w{2,4}$|pdf, doc|\d+K \d+p$|\d+p$|(Ctrl|Alt|Shift)(\+|$)|Webhook|PID$|NTLM$|Cookie$|AdGuard|DNS0|OpenDNS|Chrome|Edge$|Firefox|Safari|Test$|Buffer$|Clear$|Refresh$|Auto-scroll|All Levels|Filter by source|Rename$|New name|Rename Download|Re-download|Refresh URL|Rename download)/;
+    const legitKeys = new Set([
+      'batch_placeholder',
+      'settings_8k',
+      'settings_4k',
+      'settings_2k',
+      'settings_360p',
+      'settings_240p',
+      'settings_144p',
+      'settings_dns_opendns',
+      'settings_dns_adguard',
+      'settings_dns_dns0',
+      'settings_vpn_proxy_placeholder',
+      'settings_vpn_bind_placeholder',
+      'browser_chrome_edge',
+      'browser_firefox',
+      'batch_cookies',
+      'add_dl_auth_ntlm',
+      'settings_browser_safari',
+      'settings_browser_chrome',
+      'settings_browser_edge',
+      'settings_browser_firefox',
+      'settings_file_types_placeholder',
+      'settings_intercept_alt',
+      'settings_intercept_ctrl',
+      'settings_intercept_shift',
+      'settings_intercept_alt_ctrl',
+      'settings_dns_test_run',
+      'settings_bridge_pid',
+    ]);
+    for (const lang of ['zh', 'zh_TW']) {
+      const dict = dictOf(localeModules[`../${lang}.ts`] as Record<string, unknown>);
+      const raw: string[] = [];
+      for (const [key, value] of Object.entries(dict)) {
+        if (value === key) {
+          raw.push(key);
+          continue;
+        }
+        if (legitKeys.has(key) || legitAscii.test(value)) {
+          continue;
+        }
+        // Pure-ASCII English prose (Chinese is never ASCII) — the value is
+        // untranslated regardless of length.
+        if (/^[A-Za-z0-9 .,:;'"()/&%!?+-]+$/.test(value) && value.trim().length > 2) {
+          raw.push(`${key} = "${value}"`);
+        }
+      }
+      expect(
+        raw,
+        `${lang} has ${raw.length} untranslated values: ${raw.slice(0, 10).join('; ')}`,
+      ).toEqual([]);
+    }
+  });
 });

@@ -51,6 +51,15 @@ impl PluginApi {
     }
 
     pub fn register_plugin(&self, manifest: PluginManifest) -> Result<(), String> {
+        // M12: the manifest's api_version must be compatible with the
+        // engine's supported version — a plugin written against a different
+        // API surface must not be silently accepted as bookkeeping.
+        if manifest.api_version != self.api_version {
+            return Err(format!(
+                "Plugin api_version '{}' is not supported (engine supports '{}')",
+                manifest.api_version, self.api_version
+            ));
+        }
         let state = PluginState {
             id: manifest.id.clone(),
             enabled: true,
@@ -278,5 +287,20 @@ mod tests {
     fn api_version_returns_correct_value() {
         let api = PluginApi::new();
         assert_eq!(api.api_version(), "1.0.0");
+    }
+
+    #[test]
+    fn incompatible_api_version_is_rejected() {
+        // M12: a plugin targeting a different API version must be refused
+        // with a clear message instead of being accepted as bookkeeping.
+        let api = PluginApi::new();
+        let mut manifest = make_manifest("p-rogue");
+        manifest.api_version = "9.9.9".to_string();
+        let err = api.register_plugin(manifest).unwrap_err();
+        assert!(
+            err.contains("9.9.9") && err.contains("1.0.0"),
+            "error should name both versions: {err}"
+        );
+        assert!(api.list_plugins().is_empty(), "rejected plugin must not be stored");
     }
 }
