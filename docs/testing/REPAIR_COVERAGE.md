@@ -69,10 +69,30 @@
 | 7 | bridgeStore degraded mode متزامن | ✅ | ✅ setIsDegradedMode_syncs_status |
 | 7 | pl.ts ترميز كامل | ✅ | فحص ترميز آلي |
 
-## متبقٍّ موثق (خارج نطاق هذه الجولة)
+## الجولة الثانية (2026-08-01) — سجل البنود المكتملة
+
+| المرحلة | المعرف | الحالة | اختبار أحمر → أخضر |
+|---|---|---|---|
+| A | ترميز 10 ملفات لاتينية (de, es, fr, id, it, nl, pt, ro, sv, tr) — 0 U+FFFD | ✅ | فحص آلي fix-locale-encoding.mjs |
+| A | ترقية فحص الترميز ليفشل CI على أي U+FFFD لاتيني | ✅ | nova-extension-feature-parity-check |
+| B | M8 قراءات Linux حقيقية (meminfo/self.io/stat) + WARN مرة واحدة | ✅ | fallback_warning_logged_once + linux_proc_readings |
+| B | M22 segment_ctrl.evaluate() مرة واحدة لكل tick | ✅ | |
+| B | M13 attempted_segments = القطع الفعلية | ✅ | |
+| B | M10 clone_with_url بدل plan.clone() | ✅ | |
+| B | L17 from_u32 موثق | ✅ | from_u32_out_of_range_defaults_to_normal |
+| B | M26 حذف _mem_gb | ✅ | |
+| C | M3 Telegram يستخدم Handle مشترك (لا runtime ثانٍ) | ✅ | |
+| C | logging بلا استنساخ حلقة كاملة | ✅ | task_summaries_aggregate + task_trace_* |
+| C | set_live_rate الفاشل يُسجَّل مرة لا كل tick | ✅ | |
+| C | L18 توثيق تداخل جداول bandwidth | ✅ | |
+| D | M12 رفض api_version غير متوافق | ✅ | incompatible_api_version_is_rejected |
+| D | zh.ts/zh_TW.ts ترجمة كل القيم الإنجليزية (sched_engine, rename, logging, progress…) | ✅ | i18n-parity zh/zh_TW |
+| D | إضافة zh.ts: candidate.detail.* | ✅ | |
+
+## متبقٍّ موثق (خارج نطاق الجولتين)
 
 | البند | الحالة |
 |---|---|
-| 13 ملف لغة أخرى (bn, de, es, fa, fr, id, it, nl, pt, ro, sv, th, tr) فيها U+FFFD | ⬜ متابعة موثقة — الفحص الآلي يُحذر (لا يكسر CI) |
-| تمريرة ترجمة zh.ts وغيرها (مفاتيح إنجليزية خام) | ⬜ متابعة موثقة |
+| bn/fa/th (الإضافة): 6,107 حرف U+FFFD — انهار النص غير اللاتيني بلا رجعة، يحتاج إعادة ترجمة يدوية | ⬜ متابعة — الفحص يُحذر (لا يكسر CI) |
+| خريطة استرجاع أوسع للغات لاتينية إضافية إن ظهرت | ⬜ متابعة |
 | المرحلة 8.1: اختبارات evaluate() حية مع convergence (أصبحت ضمن اختبارات المرحلة 5) | ✅ مغطاة |
