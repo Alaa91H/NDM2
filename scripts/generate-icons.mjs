@@ -65,7 +65,7 @@ function unfilterRow(filter, row, prev, bpp) {
 function parsePNG(buf) {
   let offset = 8;
   let width = 0, height = 0, colorType = 6;
-  let idatChunks = [];
+  const idatChunks = [];
   while (offset < buf.length) {
     const len = buf.readUInt32BE(offset);
     const type = buf.slice(offset + 4, offset + 8).toString('ascii');

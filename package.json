@@ -48,7 +48,13 @@
     "audit:final": "node scripts/final-audit.mjs && node scripts/verify-capability-gating.mjs && node scripts/installer-lifecycle-audit.mjs && node scripts/verify-branding-assets.mjs && pnpm --filter nova-browser-extension verify:nova-sync && pnpm --filter nova-browser-extension audit:release",
     "audit:installer": "node scripts/installer-lifecycle-audit.mjs",
     "verify:capabilities": "node scripts/verify-capability-gating.mjs",
-    "release:windows": "pnpm run tauri:build && pnpm run msix:build"
+    "release:windows": "pnpm run tauri:build && pnpm run msix:build",
+    "ci:lint": "pnpm run lint && pnpm run lint:eslint",
+    "ci:format": "pnpm run format:check",
+    "ci:audit": "pnpm run audit:final && pnpm run audit:installer",
+    "ci:test": "pnpm run test && pnpm run test:coverage",
+    "security:check": "node scripts/security-check.mjs",
+    "deps:check-updates": "node scripts/check-updates.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

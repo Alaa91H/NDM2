@@ -26,6 +26,12 @@ export default defineConfig({
         'src/test/**',
         'src/lib/i18n/**',
       ],
+      thresholds: {
+        lines: 60,
+        functions: 60,
+        branches: 50,
+        statements: 60,
+      },
     },
   },
 });

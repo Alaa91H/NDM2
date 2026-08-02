@@ -25,6 +25,7 @@
     // TODO: Enable after fixing ~60 type errors:
     // "noUncheckedIndexedAccess": true,
     // "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
     "noEmit": true
   },
   "exclude": [

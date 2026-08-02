@@ -107,6 +107,13 @@ body {
   border-right: 3px solid var(--accent-primary);
 }
 
+/* Mobile Task Card (TaskCardList.tsx) */
+.mobile-task-card {
+  contain: layout style;
+  content-visibility: auto;
+  contain-intrinsic-size: 140px;
+}
+
 /* Interactive elements — one shared press/hover effect for every button
    (download toolbar, settings, scheduler) so the whole app feels unified. */
 .interactive-btn {

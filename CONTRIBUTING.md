@@ -100,6 +100,26 @@ cargo test  --manifest-path src-tauri/Cargo.toml
 4. Open the PR against `main` with a clear description of the change and its
    motivation.
 
+### PR Checklist
+
+Before requesting review, confirm all of the following:
+
+- [ ] `pnpm run lint` passes (TypeScript type-check, zero errors)
+- [ ] `pnpm run lint:eslint` passes (zero warnings — `--max-warnings 0`)
+- [ ] `pnpm run format:check` passes (Prettier)
+- [ ] `pnpm test` passes
+- [ ] `pnpm run i18n:validate` passes if translation keys were touched
+- [ ] `pnpm run audit:final` passes
+- [ ] `cargo check --manifest-path src-tauri/Cargo.toml` passes if Rust was touched
+- [ ] `cargo test --manifest-path src-tauri/Cargo.toml` passes if Rust was touched
+- [ ] New user-visible features include unit tests
+- [ ] No `console.log` left in production code paths
+- [ ] No hardcoded secrets, credentials, or tokens
+- [ ] `CHANGELOG.md` updated under `[Unreleased]`
+- [ ] `docs/` updated if architectural decisions changed (see [DECISION_LOG.md](docs/architecture/DECISION_LOG.md))
+
+See [docs/quality/CODE_STYLE.md](docs/quality/CODE_STYLE.md) for naming conventions, import order, commit message format, and component guidelines.
+
 ## Security
 
 Do not report security vulnerabilities through public issues or pull requests.

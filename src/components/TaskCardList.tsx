@@ -49,7 +49,7 @@ const TaskCardListInner: React.FC<TaskCardListProps> = ({
         return (
           <div
             key={task.id}
-            className={`p-3 rounded-lg border transition-all cursor-default select-none bg-[var(--bg-sidebar)] border-[var(--border-color)] ${
+            className={`mobile-task-card p-3 rounded-lg border transition-all cursor-default select-none bg-[var(--bg-sidebar)] border-[var(--border-color)] ${
               isChecked ? 'bg-[var(--accent-primary)]/5 border-[var(--accent-primary)]' : 'hover:bg-[var(--bg-hover)]'
             }`}
           >

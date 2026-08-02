@@ -329,14 +329,12 @@ impl ResourceMonitor {
                 for line in content.lines() {
                     if let Some(rest) = line.strip_prefix("MemTotal:") {
                         mem_total_kb = rest
-                            .trim()
                             .split_whitespace()
                             .next()
                             .and_then(|v| v.parse().ok())
                             .unwrap_or(0);
                     } else if let Some(rest) = line.strip_prefix("MemAvailable:") {
                         mem_avail_kb = rest
-                            .trim()
                             .split_whitespace()
                             .next()
                             .and_then(|v| v.parse().ok())

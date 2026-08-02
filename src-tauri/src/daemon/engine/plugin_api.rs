@@ -301,6 +301,9 @@ mod tests {
             err.contains("9.9.9") && err.contains("1.0.0"),
             "error should name both versions: {err}"
         );
-        assert!(api.list_plugins().is_empty(), "rejected plugin must not be stored");
+        assert!(
+            api.list_plugins().is_empty(),
+            "rejected plugin must not be stored"
+        );
     }
 }

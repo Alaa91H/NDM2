@@ -52,10 +52,10 @@ lto = "fat"
 codegen-units = 1
 strip = "symbols"
 opt-level = 3
-panic = "unwind"
+panic = "abort"
 debug = false
 incremental = false
-overflow-checks = true
+overflow-checks = false
 
 [profile.release.package."*"]
 opt-level = 3
