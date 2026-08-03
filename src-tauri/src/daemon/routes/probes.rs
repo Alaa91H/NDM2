@@ -545,6 +545,42 @@ async fn probe_url_uncached(
                         }
                     }
                 }
+                // No meta-refresh: some sites (Sublime "thank you" page,
+                // SourceForge, GitHub releases) link the real file via plain
+                // <a href> anchors. Follow the best candidate so the probe
+                // reports the real file size instead of the HTML page.
+                if let Some(link) =
+                    crate::daemon::utils::extract_direct_download_links(&body_text, &stage_final)
+                        .into_iter()
+                        .next()
+                {
+                    log::info!("probe direct-download link for {url}: {link}");
+                    if let Ok(resp) = apply_probe_request_options(
+                        client
+                            .get(link)
+                            .header(reqwest::header::USER_AGENT, PROBE_USER_AGENT)
+                            .header(reqwest::header::ACCEPT, "*/*")
+                            .header(RANGE, "bytes=0-0")
+                            .timeout(Duration::from_secs(PROBE_RANGE_TIMEOUT_SECS)),
+                        body,
+                    )
+                    .send()
+                    .await
+                    {
+                        let r_status = resp.status().as_u16();
+                        let r_final = resp.url().to_string();
+                        if r_status == 206 || r_status == 416 || r_status < 400 {
+                            let payload = probe_payload(
+                                url,
+                                &r_final,
+                                resp.headers(),
+                                r_status,
+                                "GET direct-download link range=0-0",
+                            );
+                            return Ok(Json(payload));
+                        }
+                    }
+                }
             }
             // A challenge/interstitial page means the origin returned HTML
             // instead of the file; the download engine re-resolves the effective

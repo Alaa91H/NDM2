@@ -334,43 +334,42 @@ fn resolve_effective_target(plan: &DirectDownloadPlan) -> (String, bool, Preflig
     //   3. Lose cookie/session state from the RIE probe
     //   4. Risk receiving a Cloudflare challenge page on the second request
     if plan.preflight_resolved {
-        log::info!(
-            "resolve_effective_target: RIE already resolved {} — reusing preflight results (range={})",
-            plan.url,
-            plan.preflight_supports_range
-        );
-        let preflight = PreflightData {
-            supports_range: plan.preflight_supports_range,
-            ..Default::default()
-        };
-        return (plan.url.clone(), plan.preflight_supports_range, preflight);
-    }
-
-    // ── Fast path: skip the preflight HTTP request entirely for direct file
-    //    URLs that already have a recognizable extension. The probe was adding
-    //    5+ seconds of latency before every download start, and if libcurl's TLS
-    //    was misconfigured it would fail silently and block the download.
-    //
-    //    The apply_fast_resolve path already validated the URL and derived the
-    //    filename. We only need the meta-refresh / redirect resolution for URLs
-    //    that might point to HTML interstitials — not for direct file links.
-    if crate::daemon::utils::file_type_from_extension(
-        &plan.url.rsplit('.').next().unwrap_or("").to_lowercase(),
-    ) != "other"
-        || plan.url.ends_with(".exe")
-        || plan.url.ends_with(".zip")
-        || plan.url.ends_with(".pdf")
-    {
-        log::debug!(
-            "resolve_effective_target: skipping preflight for direct file URL {}",
+        // Trust the RIE's preflight results ONLY when the resolved resource is
+        // a real file. Some sites (get.videolan.org) answer a browser-like
+        // User-Agent with an HTML interstitial instead of a redirect; if the
+        // RIE recorded that page as the "final" resource we must re-resolve
+        // instead of downloading the HTML page itself.
+        let rts_html = plan
+            .config
+            .str_("contentType")
+            .is_some_and(|ct| ct.to_ascii_lowercase().contains("text/html"));
+        if !rts_html {
+            log::info!(
+                "resolve_effective_target: RIE already resolved {} — reusing preflight results (range={})",
+                plan.url,
+                plan.preflight_supports_range
+            );
+            let preflight = PreflightData {
+                supports_range: plan.preflight_supports_range,
+                ..Default::default()
+            };
+            return (plan.url.clone(), plan.preflight_supports_range, preflight);
+        }
+        log::warn!(
+            "resolve_effective_target: RIE recorded an HTML interstitial for {} — re-resolving",
             plan.url
         );
-        let preflight = PreflightData {
-            supports_range: true,
-            ..Default::default()
-        };
-        return (plan.url.clone(), true, preflight);
     }
+
+    // ── Preflight loop ─────────────────────────────────────────────────
+    //    Every URL goes through this cheap HEAD/GET loop (one request for a
+    //    direct file). It follows HTTP redirects (libcurl follow_location),
+    //    meta-refresh interstitials and — new — plain `<a href>` download
+    //    links found on HTML "thank you" pages (e.g. Sublime). The probe adds
+    //    a single round-trip for direct file URLs, but skipping it entirely
+    //    let HTML interstitials through: get.videolan.org serves a 200 HTML
+    //    page to browser UAs even for `.exe` paths, which then failed or
+    //    downloaded the page itself.
 
     log::info!(
         "resolve_effective_target: no known extension — running preflight HEAD/GET for {}",
@@ -389,15 +388,40 @@ fn resolve_effective_target(plan: &DirectDownloadPlan) -> (String, bool, Preflig
             log::warn!(
                 "resolve_effective_target: apply_easy_options failed for hop, returning current={current}"
             );
-            return (current, true, preflight);
+            // No response was received — do not claim range support; the
+            // engine falls back to a single connection on a dead target.
+            return (current, false, preflight);
         }
         let _ = easy.timeout(Duration::from_secs(5));
+        // Bound the preflight body: the capture handler stores at most 64 KiB
+        // but tells curl it consumed everything, so a range-ignoring server
+        // that answers our bytes=0-0 probe with a full 200 body would stream
+        // the ENTIRE file just to sniff the content-type (the exact "5+
+        // seconds of latency" the old fast path existed to avoid). Capping
+        // the file size makes curl abort with CURLE_FILESIZE_EXCEEDED before
+        // the body arrives while headers (status/content-type) stay readable.
+        if plan.config.u64_("maxFilesize").is_none() {
+            let _ = easy.max_filesize(1024 * 1024);
+        }
 
+        // A size-abort (range-ignoring server) still leaves the response code
+        // and content-type readable from the headers, so only bail when we
+        // never got a response at all.
         if let Err(e) = easy.perform() {
-            log::warn!(
-                "resolve_effective_target: preflight perform failed for {current}: {e}, returning current={current}"
+            let code = easy.response_code().unwrap_or(0);
+            if code == 0 {
+                log::warn!(
+                    "resolve_effective_target: preflight perform failed for {current}: {e}, returning current={current}"
+                );
+                // The server never answered (network drop, TLS failure):
+                // claiming range support here would push a segmented plan
+                // against a dead target. Return false and let the transfer
+                // fail fast on a single connection instead.
+                return (current, false, preflight);
+            }
+            log::info!(
+                "resolve_effective_target: preflight body bounded for {current} (status {code}), continuing with headers"
             );
-            return (current, true, preflight);
         }
 
         let code = easy.response_code().unwrap_or(0);
@@ -452,6 +476,20 @@ fn resolve_effective_target(plan: &DirectDownloadPlan) -> (String, bool, Preflig
                 let next = crate::daemon::utils::refreshed_url(refresh, &effective);
                 if next.starts_with("http") && next != current && next != effective {
                     log::info!("resolve: meta-refresh {current} -> {next}");
+                    current = next;
+                    continue;
+                }
+            }
+            // Some download pages (Sublime "thank you", SourceForge, GitHub
+            // releases) link the real file via plain <a href> instead of a
+            // meta-refresh. Follow the best candidate before giving up.
+            let direct = crate::daemon::utils::extract_direct_download_links(
+                &easy.get_ref().text(),
+                &effective,
+            );
+            if let Some(next) = direct.into_iter().next() {
+                if next.starts_with("http") && next != current && next != effective {
+                    log::info!("resolve: direct-download link {current} -> {next}");
                     current = next;
                     continue;
                 }
@@ -3763,6 +3801,286 @@ mod tests {
                 "post-rebuild merge is corrupt (first diff at byte {first_diff})"
             );
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Serves an HTML "thank you" interstitial (like Sublime's download page)
+    /// that links the real file via a plain `<a href>` — no meta-refresh, no
+    /// redirect — plus the actual file behind a range-capable endpoint.
+    fn spawn_interstitial_server(payload: std::sync::Arc<Vec<u8>>) -> std::net::SocketAddr {
+        use std::io::{Read, Write};
+        use std::net::{Shutdown, TcpListener};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let payload = payload.clone();
+                std::thread::spawn(move || {
+                    let mut buf = [0u8; 8192];
+                    let n = stream.read(&mut buf).unwrap_or(0);
+                    let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let total = payload.len() as u64;
+                    let mut range = None;
+                    for line in req.lines() {
+                        if let Some(rest) = line.to_ascii_lowercase().strip_prefix("range: bytes=")
+                        {
+                            range = Some(rest.trim().to_string());
+                            break;
+                        }
+                    }
+                    let path = req
+                        .lines()
+                        .next()
+                        .and_then(|l| l.split_whitespace().nth(1))
+                        .unwrap_or("/");
+                    let send = |stream: &mut std::net::TcpStream, head: String, body: &[u8]| {
+                        let _ = stream.write_all(head.as_bytes());
+                        let _ = stream.write_all(body);
+                        let _ = stream.shutdown(Shutdown::Write);
+                    };
+                    if path.starts_with("/page") || path.starts_with("/thanks") {
+                        // Interstitial: ignore Range, always serve HTML that
+                        // links the real file (absolute URL so the engine can
+                        // resolve it without knowing the host in advance).
+                        let html = format!(
+                            "<!DOCTYPE html><html><head><title>Thanks</title></head><body>\n\
+                             <a href=\"http://{addr}/file.bin\">Download</a>\n\
+                             <a href=\"http://{addr}/file.bin.sig\">sig</a>\n\
+                             </body></html>"
+                        );
+                        send(
+                            &mut stream,
+                            format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                html.len()
+                            ),
+                            html.as_bytes(),
+                        );
+                        return;
+                    }
+                    match range {
+                        Some(r) => {
+                            let (s, e) = r.split_once('-').unwrap_or((r.as_str(), ""));
+                            let start: u64 = s.trim().parse().unwrap_or(0);
+                            if start >= total {
+                                send(
+                                    &mut stream,
+                                    format!(
+                                        "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{total}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                                    ),
+                                    b"",
+                                );
+                                return;
+                            }
+                            let end: u64 = if e.is_empty() {
+                                total - 1
+                            } else {
+                                e.trim().parse().unwrap_or(total - 1)
+                            };
+                            let end = end.min(total - 1);
+                            let body = &payload[start as usize..=end as usize];
+                            send(
+                                &mut stream,
+                                format!(
+                                    "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{end}/{total}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nETag: \"nova-test\"\r\nConnection: close\r\n\r\n",
+                                    body.len()
+                                ),
+                                body,
+                            );
+                        }
+                        None => send(
+                            &mut stream,
+                            format!(
+                                "HTTP/1.1 200 OK\r\nContent-Length: {total}\r\nAccept-Ranges: bytes\r\nETag: \"nova-test\"\r\nConnection: close\r\n\r\n"
+                            ),
+                            &payload,
+                        ),
+                    }
+                });
+            }
+        });
+        addr
+    }
+
+    #[test]
+    fn html_interstitial_with_direct_link_downloads_real_file() {
+        // Sublime-style case: the engine must follow a plain <a href> download
+        // link on an HTML "thank you" page (no meta-refresh) and produce a
+        // byte-for-byte identical file — not download the HTML page itself.
+        let payload: Vec<u8> = (0..(4 * 1024 * 1024)).map(|i| (i % 251) as u8).collect();
+        let addr = spawn_interstitial_server(std::sync::Arc::new(payload.clone()));
+        // The pasted URL has no recognizable extension, so it goes through the
+        // full preflight loop where the interstitial is detected and followed.
+        let url = format!("http://{addr}/download_thanks?target=win-x64");
+        let dir =
+            std::env::temp_dir().join(format!("nova_test_interstitial_{}", std::process::id()));
+        let out = dir.join("app_setup.exe");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let state = std::sync::Arc::new(crate::daemon::persist::tests::test_state(
+            &dir.to_string_lossy(),
+        ));
+        let id = "interstitial-test";
+        let body = download_body(&url, "app_setup.exe", payload.len() as u64, 2);
+        let job = task_from_body(
+            &body,
+            id,
+            "app_setup.exe".to_string(),
+            &out,
+            std::collections::HashMap::new(),
+            Vec::new(),
+        );
+        {
+            let mut jobs = state.curl_jobs.lock().unwrap();
+            jobs.insert(id.to_string(), job);
+        }
+        state.mark_dirty();
+
+        let st = state.clone();
+        std::thread::spawn(move || start_curl_process(&st, id));
+
+        let task = run_task_to_completion(&state, id, std::time::Duration::from_secs(120));
+        assert_eq!(task.status, "completed");
+        let written = std::fs::read(&out).unwrap();
+        assert_eq!(written, payload, "interstitial download is corrupt");
+        // The saved file must be the real file, not the HTML page.
+        assert_eq!(written.len(), payload.len());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn meta_refresh_interstitial_follows_to_real_file() {
+        // VideoLAN-style case: the download URL ends with .exe (fast-path
+        // territory) but the server answers browser-like probes with an HTML
+        // interstitial carrying a meta-refresh. The engine must follow the
+        // refresh target and download the real file, not the HTML page.
+        use std::io::{Read, Write};
+        use std::net::{Shutdown, TcpListener};
+        let payload: Vec<u8> = (0..(3 * 1024 * 1024)).map(|i| (i % 251) as u8).collect();
+        let payload_arc = std::sync::Arc::new(payload.clone());
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let payload = payload_arc.clone();
+                std::thread::spawn(move || {
+                    let mut buf = [0u8; 8192];
+                    let n = stream.read(&mut buf).unwrap_or(0);
+                    let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let path = req
+                        .lines()
+                        .next()
+                        .and_then(|l| l.split_whitespace().nth(1))
+                        .unwrap_or("/");
+                    let total = payload.len() as u64;
+                    let send = |stream: &mut std::net::TcpStream, head: String, body: &[u8]| {
+                        let _ = stream.write_all(head.as_bytes());
+                        let _ = stream.write_all(body);
+                        let _ = stream.shutdown(Shutdown::Write);
+                    };
+                    if path.ends_with(".exe") || path.contains("vlc") {
+                        // Interstitial for the .exe path (mirrors get.videolan.org
+                        // behaviour): meta-refresh + direct mirror links.
+                        let html = format!(
+                            "<!DOCTYPE html><html><head><meta http-equiv=\"refresh\" \
+                             content=\"5;URL='http://{addr}/real/file.bin'\" /></head>\
+                             <body><a href=\"http://{addr}/real/file.bin\">mirror</a></body></html>"
+                        );
+                        send(
+                            &mut stream,
+                            format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                html.len()
+                            ),
+                            html.as_bytes(),
+                        );
+                        return;
+                    }
+                    let mut range = None;
+                    for line in req.lines() {
+                        if let Some(rest) = line.to_ascii_lowercase().strip_prefix("range: bytes=")
+                        {
+                            range = Some(rest.trim().to_string());
+                            break;
+                        }
+                    }
+                    match range {
+                        Some(r) => {
+                            let (s, e) = r.split_once('-').unwrap_or((r.as_str(), ""));
+                            let start: u64 = s.trim().parse().unwrap_or(0);
+                            if start >= total {
+                                send(
+                                    &mut stream,
+                                    format!(
+                                        "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{total}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                                    ),
+                                    b"",
+                                );
+                                return;
+                            }
+                            let end: u64 = if e.is_empty() {
+                                total - 1
+                            } else {
+                                e.trim().parse().unwrap_or(total - 1)
+                            };
+                            let end = end.min(total - 1);
+                            let body = &payload[start as usize..=end as usize];
+                            send(
+                                &mut stream,
+                                format!(
+                                    "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{end}/{total}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nETag: \"nova-test\"\r\nConnection: close\r\n\r\n",
+                                    body.len()
+                                ),
+                                body,
+                            );
+                        }
+                        None => send(
+                            &mut stream,
+                            format!(
+                                "HTTP/1.1 200 OK\r\nContent-Length: {total}\r\nAccept-Ranges: bytes\r\nETag: \"nova-test\"\r\nConnection: close\r\n\r\n"
+                            ),
+                            &payload,
+                        ),
+                    }
+                });
+            }
+        });
+        let url = format!("http://{addr}/vlc/3.0.23/win64/vlc-3.0.23-win64.exe");
+        let dir = std::env::temp_dir().join(format!("nova_test_mrefresh_{}", std::process::id()));
+        let out = dir.join("vlc.exe");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let state = std::sync::Arc::new(crate::daemon::persist::tests::test_state(
+            &dir.to_string_lossy(),
+        ));
+        let id = "mrefresh-test";
+        let body = download_body(&url, "vlc.exe", payload.len() as u64, 2);
+        let job = task_from_body(
+            &body,
+            id,
+            "vlc.exe".to_string(),
+            &out,
+            std::collections::HashMap::new(),
+            Vec::new(),
+        );
+        {
+            let mut jobs = state.curl_jobs.lock().unwrap();
+            jobs.insert(id.to_string(), job);
+        }
+        state.mark_dirty();
+
+        let st = state.clone();
+        std::thread::spawn(move || start_curl_process(&st, id));
+
+        let task = run_task_to_completion(&state, id, std::time::Duration::from_secs(120));
+        assert_eq!(task.status, "completed");
+        let written = std::fs::read(&out).unwrap();
+        assert_eq!(
+            written, payload,
+            "meta-refresh interstitial download is corrupt"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

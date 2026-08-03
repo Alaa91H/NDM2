@@ -697,6 +697,146 @@ pub fn refreshed_url(refresh: String, page_url: &str) -> String {
     refresh
 }
 
+/// Extract candidate direct download URLs from an HTML page. Many download
+/// sites (Sublime's "thank you" page, SourceForge, GitHub release pages)
+/// link the real file via plain `<a href>` anchors instead of a meta-refresh
+/// or an HTTP redirect. Returns absolute URLs resolved against `page_url`,
+/// filtered to links whose path ends in a recognizable file extension and
+/// ranked best-first by platform/architecture hints found in `page_url`
+/// (e.g. `?target=win-x64` prefers `.exe`/`.msi` installers).
+pub fn extract_direct_download_links(html: &str, page_url: &str) -> Vec<String> {
+    let lower = html.to_ascii_lowercase();
+    let mut candidates: Vec<String> = Vec::new();
+    let mut pos = 0usize;
+    while let Some(rel) = lower[pos..].find("href") {
+        let start = pos + rel;
+        let mut j = start + 4;
+        while j < lower.len() && lower.as_bytes()[j] == b' ' {
+            j += 1;
+        }
+        if j >= lower.len() || lower.as_bytes()[j] != b'=' {
+            pos = start + 4;
+            continue;
+        }
+        j += 1;
+        while j < lower.len() && lower.as_bytes()[j] == b' ' {
+            j += 1;
+        }
+        if j >= lower.len() {
+            break;
+        }
+        let q = lower.as_bytes()[j];
+        if q != b'"' && q != b'\'' {
+            pos = j;
+            continue;
+        }
+        let body_start = j + 1;
+        let Some(end_rel) = lower[body_start..].find(q as char) else {
+            break;
+        };
+        let raw = &html[body_start..body_start + end_rel];
+        pos = body_start + end_rel + 1;
+        let link = decode_html_entities(raw).trim().to_string();
+        if link.is_empty()
+            || link.starts_with('#')
+            || link.starts_with("mailto:")
+            || link.starts_with("javascript:")
+            || link.starts_with("tel:")
+            || link.starts_with("data:")
+        {
+            continue;
+        }
+        let absolute = if link.starts_with("http://") || link.starts_with("https://") {
+            link
+        } else {
+            // Full RFC 3986 resolution: a leading "/" href is host-rooted
+            // (`https://host/...`), while bare/"../" paths resolve against the
+            // page directory. The meta-refresh `refreshed_url` helper joins
+            // against the directory only, which is wrong for root-relative
+            // anchors like `<a href="/download/app.zip">`.
+            reqwest::Url::parse(page_url)
+                .ok()
+                .and_then(|base| base.join(&link).ok())
+                .map(|u| u.to_string())
+                .unwrap_or_else(|| refreshed_url(link, page_url))
+        };
+        let path = absolute.split(['?', '#']).next().unwrap_or(&absolute);
+        let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+        if ext.is_empty() || file_type_from_extension(&ext) == "other" {
+            continue;
+        }
+        if !candidates.contains(&absolute) {
+            candidates.push(absolute);
+        }
+    }
+
+    // Rank best-first: match the platform/architecture implied by the page URL.
+    let page_lower = page_url.to_ascii_lowercase();
+    // NOTE: avoid a bare "win" substring — "darwin" (macOS) contains "win".
+    let win = page_lower.contains("windows")
+        || page_lower.contains("win-x64")
+        || page_lower.contains("win64")
+        || page_lower.contains("win32")
+        || page_lower.contains("win_");
+    let mac =
+        page_lower.contains("mac") || page_lower.contains("darwin") || page_lower.contains("osx");
+    let linux = page_lower.contains("linux")
+        || page_lower.contains("ubuntu")
+        || page_lower.contains("debian")
+        || page_lower.contains("fedora")
+        || page_lower.contains("snap");
+    let x64 = page_lower.contains("x64")
+        || page_lower.contains("amd64")
+        || page_lower.contains("x86_64")
+        || page_lower.contains("-64");
+    let arm64 = page_lower.contains("arm64") || page_lower.contains("aarch64");
+
+    candidates.sort_by(|a, b| {
+        score_link(b, win, mac, linux, x64, arm64).cmp(&score_link(a, win, mac, linux, x64, arm64))
+    });
+    candidates
+}
+
+fn score_link(url: &str, win: bool, mac: bool, linux: bool, x64: bool, arm64: bool) -> i64 {
+    let u = url.to_ascii_lowercase();
+    let ext = u.rsplit('.').next().unwrap_or("").to_string();
+    let ext_win = matches!(
+        ext.as_str(),
+        "exe" | "msi" | "msix" | "bat" | "cmd" | "zip" | "7z" | "rar"
+    );
+    let ext_mac = matches!(ext.as_str(), "dmg" | "pkg" | "zip");
+    let ext_linux = matches!(
+        ext.as_str(),
+        "deb" | "rpm" | "appimage" | "tar" | "gz" | "xz" | "zst" | "flatpak" | "snap"
+    );
+    let mut score: i64 = 0;
+    if win && ext_win {
+        score += 10;
+    }
+    if mac && ext_mac {
+        score += 10;
+    }
+    if linux && ext_linux {
+        score += 10;
+    }
+    if x64 && (u.contains("x64") || u.contains("amd64") || u.contains("x86_64")) {
+        score += 5;
+    }
+    if arm64 && (u.contains("arm64") || u.contains("aarch64")) {
+        score += 5;
+    }
+    if matches!(
+        ext.as_str(),
+        "exe" | "msi" | "msix" | "dmg" | "pkg" | "deb" | "rpm" | "appimage"
+    ) {
+        score += 2;
+    }
+    if u.contains("setup") || u.contains("installer") || u.contains("install") {
+        score += 2;
+    }
+    score
+}
+
 /// Validate that a proxy URL does not target internal/private networks (SSRF).
 /// Blocks localhost, loopback, private ranges, link-local, and multicast.
 pub fn validate_proxy_url(proxy_url: &str) -> Result<(), String> {
@@ -1294,6 +1434,90 @@ mod tests {
         assert_eq!(
             refreshed_url("/file.zip".into(), "https://example.com/dl/page"),
             "https://example.com/dl/file.zip"
+        );
+    }
+
+    // ── extract_direct_download_links ─────────────────────────────────────
+
+    #[test]
+    fn direct_links_rank_platform_match_first() {
+        // Sublime "thank you" page for win-x64: the setup.exe must be chosen
+        // over the mac zip / linux deb / signature files.
+        let html = r#"<html><body>
+            <a href="https://download.sublimetext.com/sublime_text_build_4200_x64_setup.exe">Windows setup</a>
+            <a href="https://download.sublimetext.com/sublime_text_build_4200_x64.zip">Windows zip</a>
+            <a href="https://download.sublimetext.com/sublime_text_build_4200_mac.zip">macOS zip</a>
+            <a href="https://download.sublimetext.com/sublime-text_build-4200_amd64.deb">Linux deb</a>
+            <a href="https://download.sublimetext.com/sublimehq-pub.gpg">GPG key</a>
+            <a href="/download">More</a>
+        </body></html>"#;
+        let links = extract_direct_download_links(
+            html,
+            "https://www.sublimetext.com/download_thanks?target=win-x64#direct-downloads",
+        );
+        assert!(
+            !links.is_empty(),
+            "expected at least one file link, got {:?}",
+            links
+        );
+        assert_eq!(
+            links[0],
+            "https://download.sublimetext.com/sublime_text_build_4200_x64_setup.exe"
+        );
+        // Signature / navigation links must be excluded.
+        assert!(!links.iter().any(|l| l.contains(".gpg")));
+        assert!(!links.iter().any(|l| l.ends_with("/download")));
+    }
+
+    #[test]
+    fn direct_links_resolve_relative_urls() {
+        let html = r#"<a href="files/app-1.2.3.zip">zip</a>"#;
+        let links = extract_direct_download_links(html, "https://example.com/dl/page");
+        assert_eq!(links, vec!["https://example.com/dl/files/app-1.2.3.zip"]);
+    }
+
+    #[test]
+    fn direct_links_single_quoted_href() {
+        let html = r#"<a href='/dl/app_setup.exe'>Download</a>"#;
+        let links = extract_direct_download_links(html, "https://mirror.example.com/thanks");
+        assert_eq!(links, vec!["https://mirror.example.com/dl/app_setup.exe"]);
+    }
+
+    #[test]
+    fn direct_links_skip_anchors_and_non_files() {
+        let html = r##"<a href="#top">top</a> <a href="mailto:x@y.z">mail</a> <a href="https://x.example.com/">home</a>"##;
+        let links = extract_direct_download_links(html, "https://x.example.com/page");
+        assert!(links.is_empty());
+    }
+
+    #[test]
+    fn direct_links_linux_target_picks_linux_file() {
+        let html = r#"<html>
+            <a href="https://dl.example.com/app-1.0-x86_64.AppImage">AppImage</a>
+            <a href="https://dl.example.com/app-1.0_amd64.deb">deb</a>
+            <a href="https://dl.example.com/app-1.0-mac.dmg">dmg</a>
+        </html>"#;
+        let links =
+            extract_direct_download_links(html, "https://example.com/download?target=linux-x64");
+        // Both AppImage and deb are Linux-family; the mac dmg must rank last.
+        assert!(
+            links
+                .iter()
+                .any(|l| l.ends_with(".deb") || l.ends_with(".AppImage")),
+            "expected a linux file first, got {:?}",
+            links
+        );
+        assert!(
+            links
+                .iter()
+                .position(|l| l.contains("-mac.dmg"))
+                .unwrap_or(usize::MAX)
+                > links
+                    .iter()
+                    .position(|l| l.ends_with(".deb") || l.ends_with(".AppImage"))
+                    .unwrap_or(usize::MAX),
+            "mac dmg outranked linux files: {:?}",
+            links
         );
     }
 }

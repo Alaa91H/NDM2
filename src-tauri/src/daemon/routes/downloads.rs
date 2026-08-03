@@ -742,6 +742,17 @@ async fn background_resolve_and_start(state: SharedState, task_id: String, origi
         }
     };
 
+    // Hoisted to function scope: both the curl_jobs block below and the
+    // task_snapshot sync block must refuse HTML-page metadata (size, name,
+    // resumable). Some CDNs (get.videolan.org) answer browser-like probes
+    // with a 200 HTML interstitial instead of a redirect; applying that
+    // page's size/name to the task would leak a bogus ~12 KB "file" into
+    // the UI and break the engine's own re-resolution.
+    let rie_saw_html = metadata
+        .content_type
+        .as_deref()
+        .is_some_and(|ct| ct.to_ascii_lowercase().contains("text/html"));
+
     // ── Apply enriched metadata to curl job first, then task snapshot ──
     // Lock order: curl_jobs → task_snapshot (documented order).
     let mut updates_applied = false;
@@ -785,22 +796,27 @@ async fn background_resolve_and_start(state: SharedState, task_id: String, origi
                         .collect();
                     opts.insert("linkMirrors".to_owned(), serde_json::Value::Array(mirrors));
                 }
-                if job.task.size_bytes == 0 && metadata.size_bytes > 0 {
+                if job.task.size_bytes == 0 && metadata.size_bytes > 0 && !rie_saw_html {
                     job.task.size_bytes = metadata.size_bytes;
                 }
+                // Never apply a file name scraped from an HTML interstitial
+                // page (e.g. get.videolan.org's "thanks" page, which answers
+                // browser probes with a 200 HTML document); the engine
+                // preflight re-resolves and picks the real file name.
                 if let Some(ref probe_name) = metadata.file_name {
-                    let should_update = job.task.name == "download"
-                        || job.task.name.is_empty()
-                        || job
-                            .task
-                            .name
-                            .eq_ignore_ascii_case(&fallback_file_name(&job.task.url));
+                    let should_update = !rie_saw_html
+                        && (job.task.name == "download"
+                            || job.task.name.is_empty()
+                            || job
+                                .task
+                                .name
+                                .eq_ignore_ascii_case(&fallback_file_name(&job.task.url)));
                     if should_update {
                         job.task.name = probe_name.clone();
                         deferred_name_update = Some(probe_name.clone());
                     }
                 }
-                job.task.resumable = metadata.resumable;
+                job.task.resumable = metadata.resumable && !rie_saw_html;
                 if let Some(ref strategy) = metadata.strategy {
                     opts.insert(
                         "rieStrategy".to_owned(),
@@ -813,14 +829,27 @@ async fn background_resolve_and_start(state: SharedState, task_id: String, origi
                         serde_json::Value::Number(connections.into()),
                     );
                 }
+                // Only mark the task as preflight-resolved when the RIE
+                // actually found a real file. Some CDNs (get.videolan.org)
+                // answer browser-like probes with an HTML interstitial page;
+                // trusting it would make the engine skip its own preflight
+                // and download the HTML page instead of the file.
                 opts.insert(
                     "preflightResolved".to_owned(),
-                    serde_json::Value::Bool(true),
+                    serde_json::Value::Bool(!rie_saw_html),
                 );
                 opts.insert(
                     "preflightSupportsRange".to_owned(),
-                    serde_json::Value::Bool(metadata.resumable),
+                    serde_json::Value::Bool(metadata.resumable && !rie_saw_html),
                 );
+                if rie_saw_html {
+                    // Do not apply the HTML page's bogus size/name; the
+                    // engine preflight re-resolves through redirects,
+                    // meta-refresh and direct download links.
+                    log::info!(
+                        "Task {task_id}: RIE resolved to an HTML interstitial — deferring to engine preflight"
+                    );
+                }
                 updates_applied = true;
             }
         }
@@ -829,10 +858,13 @@ async fn background_resolve_and_start(state: SharedState, task_id: String, origi
     // Sync all changes to task_snapshot (single lock acquisition).
     if let Ok(mut tasks) = state.task_snapshot.lock() {
         if let Some(task) = tasks.get_mut(&task_id) {
-            if task.size_bytes == 0 && metadata.size_bytes > 0 {
+            // Never apply an HTML interstitial's bogus size/resumability to
+            // the UI snapshot either — the engine preflight re-resolves and
+            // reports the real file size once the transfer starts.
+            if task.size_bytes == 0 && metadata.size_bytes > 0 && !rie_saw_html {
                 task.size_bytes = metadata.size_bytes;
             }
-            task.resumable = metadata.resumable;
+            task.resumable = metadata.resumable && !rie_saw_html;
             if let Some(ref final_url) = deferred_url_update {
                 task.url = final_url.clone();
             }
