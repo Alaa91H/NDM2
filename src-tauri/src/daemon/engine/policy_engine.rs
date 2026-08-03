@@ -671,6 +671,77 @@ mod tests {
     }
 
     #[test]
+    fn recovery_resumes_from_checkpoint_on_persistent_failures_with_resume() {
+        let pe = PolicyEngine::new();
+        let ctx_4 = DecisionContext {
+            consecutive_failures: 4,
+            supports_resume: true,
+            supports_range: true,
+            total_downloaded: 4096,
+            ..base_ctx()
+        };
+        match pe.decide_recovery(&ctx_4) {
+            PolicyDecision::Recovery {
+                action: RecoveryAction::ResumeFromCheckpoint,
+                ..
+            } => {}
+            other => panic!(
+                "4 failures with resume support should be ResumeFromCheckpoint, got {other:?}"
+            ),
+        }
+
+        // Without resume support the same failure count must fall back to a
+        // full restart instead of claiming a checkpoint that cannot be used.
+        let ctx_4_no_resume = DecisionContext {
+            consecutive_failures: 4,
+            supports_resume: false,
+            ..base_ctx()
+        };
+        match pe.decide_recovery(&ctx_4_no_resume) {
+            PolicyDecision::Recovery {
+                action: RecoveryAction::RestartDownload,
+                ..
+            } => {}
+            other => panic!("4 failures without resume should be RestartDownload, got {other:?}"),
+        }
+
+        // And the boundary at 5 failures still prefers the checkpoint when
+        // resume is possible and partial data exists on disk.
+        let ctx_5 = DecisionContext {
+            consecutive_failures: 5,
+            supports_resume: true,
+            total_downloaded: 4096,
+            ..base_ctx()
+        };
+        match pe.decide_recovery(&ctx_5) {
+            PolicyDecision::Recovery {
+                action: RecoveryAction::ResumeFromCheckpoint,
+                ..
+            } => {}
+            other => panic!(
+                "5 failures with resume support should be ResumeFromCheckpoint, got {other:?}"
+            ),
+        }
+
+        // Pin the upper boundary: at 5 failures WITHOUT resume support (even
+        // with partial data on disk) the policy must fall back to a restart,
+        // never claim a checkpoint that cannot be resumed.
+        let ctx_5_no_resume = DecisionContext {
+            consecutive_failures: 5,
+            supports_resume: false,
+            total_downloaded: 4096,
+            ..base_ctx()
+        };
+        match pe.decide_recovery(&ctx_5_no_resume) {
+            PolicyDecision::Recovery {
+                action: RecoveryAction::RestartDownload,
+                ..
+            } => {}
+            other => panic!("5 failures without resume should be RestartDownload, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn buffer_reduces_under_memory_pressure() {
         let pe = PolicyEngine::new();
         let mut ctx = base_ctx();

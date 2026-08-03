@@ -2195,6 +2195,17 @@ fn run_libcurl_download(
                                     log::warn!("Task {id}: self-healer recommends abort — {error}");
                                     healer_abort = true;
                                 }
+                                RecoveryAction::RetryConnection => {
+                                    // Single transient failure: the retry loop
+                                    // below performs the actual retry. Keep the
+                                    // current connection count — do not shrink
+                                    // it — and surface the decision so the
+                                    // recovery is visible in the logs instead of
+                                    // being swallowed by a catch-all arm.
+                                    log::info!(
+                                        "Task {id}: self-healer recommends retry connection after transient failure"
+                                    );
+                                }
                                 RecoveryAction::ReduceConnections => {
                                     let new_conns = (plan.connections / 2).max(1);
                                     log::info!(
@@ -2204,6 +2215,26 @@ fn run_libcurl_download(
                                         new_conns
                                     );
                                     plan.connections = new_conns;
+                                }
+                                RecoveryAction::RestartSegment(_seg) => {
+                                    // Segment-level retries are owned by the
+                                    // adaptive segment controller (which resumes
+                                    // from disk truth); this policy hint is
+                                    // logged for observability and does not need
+                                    // a whole-download restart.
+                                    log::info!(
+                                        "Task {id}: self-healer suggests segment restart; segment-level retries are handled by the adaptive controller"
+                                    );
+                                }
+                                RecoveryAction::ResumeFromCheckpoint => {
+                                    // Persistent failures with resume support:
+                                    // keep the partial data on disk and make the
+                                    // next attempt resume from the checkpoint
+                                    // instead of re-downloading or restarting.
+                                    log::info!(
+                                        "Task {id}: self-healer recommends resuming from checkpoint — keeping partial data"
+                                    );
+                                    plan.resumable = true;
                                 }
                                 RecoveryAction::PauseAndRetry(dur) => {
                                     log::info!(
@@ -2223,7 +2254,6 @@ fn run_libcurl_download(
                                     remove_stale_parts_for(&plan.output_path);
                                     plan.resumable = false;
                                 }
-                                _ => {}
                             }
                         }
                     }
