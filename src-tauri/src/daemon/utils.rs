@@ -882,9 +882,243 @@ pub fn validate_proxy_url(proxy_url: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Sanitize a file name that originates from an untrusted source (server
+/// Content-Disposition header, URL path segment, or user input) so it can
+/// never escape its destination directory. Server-controlled names are the
+/// classic path-traversal vector: a `Content-Disposition: filename="../../x"`
+/// or a URL segment containing `%2F` (decoded to `/`) or `%2E%2E` (decoded to
+/// `..`) would otherwise let a remote server write files anywhere the daemon
+/// can. Returns a bare file name with no path components, no separators, no
+/// traversal, no Windows-reserved names, bounded length, and a safe fallback.
+pub fn sanitize_derived_file_name(raw: &str) -> String {
+    // Defense in depth: some upstream paths pass the name percent-encoded
+    // (e.g. `%2F` for `/`, `%5C` for `\`, `%2E%2E` for `..`). Decode only
+    // the separator-relevant escapes so a remote server cannot smuggle a
+    // traversal through encoding, regardless of which decoder ran before.
+    // Iterates by UTF-8 char (not byte) so multi-byte names survive intact.
+    let mut decoded = String::with_capacity(raw.len());
+    let mut i = 0;
+    while i < raw.len() {
+        let b = raw.as_bytes()[i];
+        if b == b'%' && i + 2 < raw.len() {
+            if let Ok(v) = u8::from_str_radix(&raw[i + 1..i + 3], 16) {
+                if matches!(v, b'/' | b'\\' | b'.') {
+                    decoded.push(v as char);
+                    i += 3;
+                    continue;
+                }
+            }
+        }
+        let ch = raw[i..].chars().next().unwrap_or('\u{FFFD}');
+        decoded.push(ch);
+        i += ch.len_utf8();
+    }
+    // Strip any directory components — never trust path separators from the
+    // source. This neutralizes both `/` and `\` and any `..`/`.` traversal.
+    let base = decoded.rsplit(['/', '\\']).next().unwrap_or("").trim();
+    if base.is_empty() {
+        return "download".to_owned();
+    }
+    // Normalize away lookalike separators (fullwidth slash, division slash)
+    // and reject control characters, then re-check for traversal that the
+    // NFC normalization may have introduced (e.g. composed `..` sequences).
+    let mut sanitized = String::with_capacity(base.len());
+    for ch in base.chars() {
+        let mapped = match ch {
+            '\u{2215}' | '\u{FF0F}' | '\u{2044}' => '_', // ⁄, ／, ⁄
+            c if c.is_control() || c == '/' || c == '\\' => '_',
+            c => c,
+        };
+        sanitized.push(mapped);
+    }
+    // Trim trailing dots/spaces only — leading dots are meaningful for
+    // dotfiles (`.gitignore`, `.env`) and must be preserved. A bare `.`/`..`
+    // (or any all-dots name) is rejected below as a traversal vector.
+    let sanitized = sanitized.trim_end().trim_end_matches(['.', ' ']);
+    if sanitized.is_empty()
+        || sanitized == "."
+        || sanitized == ".."
+        || sanitized.chars().all(|c| c == '.')
+    {
+        return "download".to_owned();
+    }
+    // Windows reserves device names with ANY extension (CON.txt, NUL.exe,
+    // PRN, AUX, COM1-9, LPT1-9). Writing such a name fails with
+    // ERROR_INVALID_NAME, so reject them up front instead of failing the
+    // download at write time.
+    if is_windows_reserved_device_name(sanitized.trim()) {
+        return "download".to_owned();
+    }
+    // Bound the length: 240 chars keeps room for the directory and Windows
+    // MAX_PATH considerations while remaining human-readable.
+    sanitized.chars().take(240).collect()
+}
+
+/// True when `name` (a bare file name, no separators) is a Windows-reserved
+/// device name. The base name (before the first dot) is compared
+/// case-insensitively against CON/PRN/AUX/NUL/COM1-9/LPT1-9, which Windows
+/// reserves with any extension.
+fn is_windows_reserved_device_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name).trim();
+    if stem.is_empty() {
+        return false;
+    }
+    let upper = stem.to_ascii_uppercase();
+    matches!(
+        upper.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
+}
+
+/// Sanitize an output path so that no component can escape the directory the
+/// caller chose. The user-picked directory is preserved, but `.`/`..`
+/// components are neutralized and the final file-name component — which may be
+/// derived from an untrusted server name — is forced to be a bare safe name.
+pub fn sanitize_output_path(output: &std::path::Path) -> std::path::PathBuf {
+    use std::path::Component;
+    let safe_name = output
+        .file_name()
+        .map(|f| sanitize_derived_file_name(&f.to_string_lossy()))
+        .unwrap_or_else(|| "download".to_owned());
+    // Rebuild only the directory portion (parent), dropping CurDir/ParentDir
+    // so a server-controlled name cannot push the write target outside the
+    // chosen folder. The raw file-name component is intentionally excluded
+    // from the rebuild and replaced by `safe_name` below.
+    let mut dir = std::path::PathBuf::new();
+    if let Some(parent) = output.parent() {
+        for comp in parent.components() {
+            match comp {
+                Component::CurDir | Component::ParentDir => {}
+                other => dir.push(other),
+            }
+        }
+    }
+    if dir.as_os_str().is_empty() {
+        std::path::PathBuf::from(safe_name)
+    } else {
+        dir.join(safe_name)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── sanitize_derived_file_name ────────────────────────────────────────
+
+    #[test]
+    fn derived_name_strips_path_traversal() {
+        // Classic `..` traversal via Content-Disposition.
+        assert_eq!(sanitize_derived_file_name("../../etc/passwd"), "passwd");
+        assert_eq!(sanitize_derived_file_name("..\\..\\evil.exe"), "evil.exe");
+        assert_eq!(sanitize_derived_file_name("a/../../b/c.exe"), "c.exe");
+    }
+
+    #[test]
+    fn derived_name_neutralizes_percent_encoded_separators() {
+        // A URL path segment may already be percent-decoded by the time the
+        // name is derived; `%2F` -> `/` and `%2E%2E` -> `..` must not survive.
+        assert_eq!(sanitize_derived_file_name("..%2F..%2Fwin.exe"), "win.exe");
+        assert_eq!(sanitize_derived_file_name("..%5C..%5Csys.dll"), "sys.dll");
+    }
+
+    #[test]
+    fn derived_name_keeps_plain_names_and_dots() {
+        assert_eq!(sanitize_derived_file_name("photo.png"), "photo.png");
+        assert_eq!(
+            sanitize_derived_file_name("archive.tar.gz"),
+            "archive.tar.gz"
+        );
+        assert_eq!(
+            sanitize_derived_file_name("  spaced file.zip "),
+            "spaced file.zip"
+        );
+    }
+
+    #[test]
+    fn derived_name_falls_back_on_empty_or_dot() {
+        assert_eq!(sanitize_derived_file_name(""), "download");
+        assert_eq!(sanitize_derived_file_name("   "), "download");
+        assert_eq!(sanitize_derived_file_name("..."), "download");
+        assert_eq!(sanitize_derived_file_name("CON"), "download");
+    }
+
+    #[test]
+    fn derived_name_rejects_windows_reserved_devices_with_extension() {
+        // Windows reserves device names with ANY extension; writing them
+        // fails at the filesystem layer, so the sanitizer must reject them.
+        assert_eq!(sanitize_derived_file_name("CON.txt"), "download");
+        assert_eq!(sanitize_derived_file_name("nul.exe"), "download");
+        assert_eq!(sanitize_derived_file_name("PRN"), "download");
+        assert_eq!(sanitize_derived_file_name("com1.zip"), "download");
+        assert_eq!(sanitize_derived_file_name("LPT9.bin"), "download");
+        // Plain names that merely contain the letters are fine.
+        assert_eq!(sanitize_derived_file_name("constant.exe"), "constant.exe");
+        assert_eq!(sanitize_derived_file_name("conman.pdf"), "conman.pdf");
+    }
+
+    #[test]
+    fn derived_name_keeps_leading_dot_dotfiles() {
+        // Leading dots are meaningful for dotfiles; only empty/dot-only
+        // names fall back to "download".
+        assert_eq!(sanitize_derived_file_name(".gitignore"), ".gitignore");
+        assert_eq!(sanitize_derived_file_name(".env"), ".env");
+    }
+
+    #[test]
+    fn derived_name_replaces_control_and_lookalike_separators() {
+        assert_eq!(sanitize_derived_file_name("a\u{0000}b.exe"), "a_b.exe");
+        assert_eq!(sanitize_derived_file_name("a\u{2215}b.exe"), "a_b.exe");
+    }
+
+    #[test]
+    fn derived_name_bounds_length() {
+        let long = "x".repeat(1000);
+        assert_eq!(sanitize_derived_file_name(&long).len(), 240);
+    }
+    #[test]
+    fn output_path_neutralizes_traversal_and_sanitizes_name() {
+        let out = std::path::Path::new("C:/Downloads/..%2F..%2Fevil.exe");
+        let safe = sanitize_output_path(out);
+        assert_eq!(safe, std::path::PathBuf::from("C:/Downloads/evil.exe"));
+
+        let plain = std::path::Path::new("C:/Downloads/report.pdf");
+        assert_eq!(sanitize_output_path(plain), plain.to_path_buf());
+
+        let bare = std::path::Path::new("../../evil.exe");
+        assert_eq!(
+            sanitize_output_path(bare),
+            std::path::PathBuf::from("evil.exe")
+        );
+
+        // Reserved device name in the file component is neutralized too.
+        let reserved = std::path::Path::new("C:/Downloads/NUL.exe");
+        assert_eq!(
+            sanitize_output_path(reserved),
+            std::path::PathBuf::from("C:/Downloads/download")
+        );
+    }
 
     // ── is_safe_target_url ────────────────────────────────────────────────
 

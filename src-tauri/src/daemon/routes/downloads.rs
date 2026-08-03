@@ -812,8 +812,14 @@ async fn background_resolve_and_start(state: SharedState, task_id: String, origi
                                 .name
                                 .eq_ignore_ascii_case(&fallback_file_name(&job.task.url)));
                     if should_update {
-                        job.task.name = probe_name.clone();
-                        deferred_name_update = Some(probe_name.clone());
+                        // The name comes from a server-controlled
+                        // Content-Disposition header; sanitize it to a bare
+                        // file name so a crafted `filename="../../evil"`
+                        // cannot become a path traversal on disk.
+                        let safe_name =
+                            crate::daemon::utils::sanitize_derived_file_name(probe_name);
+                        job.task.name = safe_name.clone();
+                        deferred_name_update = Some(safe_name);
                     }
                 }
                 job.task.resumable = metadata.resumable && !rie_saw_html;

@@ -706,7 +706,9 @@ impl Extractor for CurlExtractor {
 
 #[cfg(test)]
 mod tests {
-    use crate::daemon::curl::{build_curl_args, drive_multi_socket, split_ranges, CurlMultiGuard};
+    use crate::daemon::curl::{
+        build_curl_args, destination_from_body, drive_multi_socket, split_ranges, CurlMultiGuard,
+    };
     use crate::daemon::types::CreateDownloadBody;
     use ::curl::easy::Easy2;
     use std::io::Read;
@@ -739,6 +741,37 @@ mod tests {
     fn has_pair(args: &[String], flag: &str, value: &str) -> bool {
         args.windows(2)
             .any(|pair| pair[0] == flag && pair[1] == value)
+    }
+
+    #[test]
+    fn destination_neutralizes_server_controlled_name_traversal() {
+        // Server-controlled Content-Disposition name with `..` traversal must
+        // never become the output path (CWE-22).
+        let mut body = base_body();
+        body.name = Some("..%2F..%2F..%2FWindows%2Fevil.exe".to_owned());
+        body.save_path = None;
+        let (name, path) = destination_from_body(&body, "https://evil.example/x");
+        assert_eq!(name, "evil.exe");
+        assert_eq!(path, std::path::PathBuf::from("evil.exe"));
+
+        // Percent-encoded backslash traversal in the URL-derived name.
+        let mut body2 = base_body();
+        body2.name = None;
+        body2.save_path = None;
+        let (_name, path2) =
+            destination_from_body(&body2, "https://evil.example/a%5C..%5C..%5Cwin.exe");
+        assert_eq!(path2, std::path::PathBuf::from("win.exe"));
+    }
+
+    #[test]
+    fn destination_preserves_user_save_dir_but_sanitizes_name() {
+        // The user picks the folder; the file-name component (server-derived)
+        // is forced to a bare name while the directory is preserved.
+        let mut body = base_body();
+        body.name = Some("..%2F..%2Freport.pdf".to_owned());
+        body.save_path = Some("C:/Downloads/..%2F..%2Freport.pdf".to_owned());
+        let (_name, path) = destination_from_body(&body, "https://evil.example/x");
+        assert_eq!(path, std::path::PathBuf::from("C:/Downloads/report.pdf"));
     }
 
     #[test]

@@ -3120,7 +3120,11 @@ mod tests {
     #[test]
     fn fresh_single_download_reports_intermediate_progress_and_full_content() {
         let payload: Vec<u8> = (0..(4 * 1024 * 1024)).map(|i| (i % 251) as u8).collect();
-        let addr = spawn_range_server(std::sync::Arc::new(payload.clone()));
+        // Use the throttled server: a plain localhost transfer can complete
+        // between the 5ms polling ticks under parallel load, making the
+        // "intermediate progress observed" assertion a race. Dribbling the
+        // body out over several hundred ms makes the observation deterministic.
+        let addr = spawn_slow_range_server(std::sync::Arc::new(payload.clone()), 64 * 1024, 2);
         let url = format!("http://{addr}/sample.zip");
         let dir = std::env::temp_dir().join(format!("nova_test_fresh_{}", std::process::id()));
         let out = dir.join("sample.zip");

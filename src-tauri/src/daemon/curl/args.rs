@@ -6,7 +6,9 @@ use super::PathBuf;
 use crate::daemon::direct::DirectUrl;
 use crate::daemon::engine::config::global_config;
 use crate::daemon::types::CreateDownloadBody;
-use crate::daemon::utils::{push_arg, DEFAULT_USER_AGENT};
+use crate::daemon::utils::{
+    push_arg, sanitize_derived_file_name, sanitize_output_path, DEFAULT_USER_AGENT,
+};
 
 const ALLOWED_CURL_RAW_OPTIONS: &[&str] = &[
     "--ipv4",
@@ -246,14 +248,24 @@ fn file_name_from_url(url: &str) -> String {
 }
 
 pub fn destination_from_body(body: &CreateDownloadBody, url: &str) -> (String, PathBuf) {
-    let name = body.name.clone().unwrap_or_else(|| file_name_from_url(url));
+    // The name may originate from a server-controlled source (Content-
+    // Disposition header, URL path segment). Sanitize it into a bare file
+    // name BEFORE it becomes the output path — otherwise a crafted
+    // `filename="../../evil"` or a URL segment with `%2F`/`%2E%2E` would
+    // let a remote server write files outside the chosen directory
+    // (path traversal, CWE-22).
+    let name =
+        sanitize_derived_file_name(&body.name.clone().unwrap_or_else(|| file_name_from_url(url)));
     if let Some(save_path) = body
         .save_path
         .as_deref()
         .map(str::trim)
         .filter(|v| !v.is_empty())
     {
-        let path = PathBuf::from(save_path);
+        // The save path is user-chosen, but its file-name component may be
+        // derived from the untrusted server name; neutralize traversal in
+        // the whole path while preserving the chosen directory.
+        let path = sanitize_output_path(std::path::Path::new(save_path));
         return (name, path);
     }
     (name.clone(), PathBuf::from(name))
