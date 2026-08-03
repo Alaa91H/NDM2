@@ -375,8 +375,21 @@ impl UnifiedProfileStore {
                 parent.display()
             )
         })?;
-        fs::write(path, json)
-            .map_err(|e| format!("profile_store: failed to write {}: {e}", path.display()))
+        // H-1: atomic write — serialize to a temp file in the same directory
+        // and rename over the target. A crash mid-write can no longer leave a
+        // truncated/corrupt server_profiles.json that would silently drop all
+        // learned server profiles on the next load.
+        let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
+        fs::write(&tmp, &json)
+            .map_err(|e| format!("profile_store: failed to write temp {}: {e}", tmp.display()))?;
+        if let Err(e) = fs::rename(&tmp, path) {
+            let _ = fs::remove_file(&tmp);
+            return Err(format!(
+                "profile_store: failed to finalize {}: {e}",
+                path.display()
+            ));
+        }
+        Ok(())
     }
 
     pub fn profile_count(&self) -> usize {

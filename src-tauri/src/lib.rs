@@ -567,10 +567,15 @@ fn restart_daemon(
     // Signal the running daemon to shut down gracefully (saves state, etc.).
     crate::daemon::signal_shutdown();
     std::thread::sleep(std::time::Duration::from_millis(800));
-    // Also kill orphaned daemon processes on the port range.
+    // M-3: kill only the recorded daemon PID (read from the port file) instead
+    // of spawning a PowerShell process for every port in the scan range, which
+    // froze the UI for seconds. Fall back to the range scan only when no PID
+    // is on file.
     let our_pid = std::process::id();
     let preferred = requested_daemon_port();
-    kill_old_daemon_range(our_pid, preferred);
+    if !kill_pid_from_port_file(our_pid) {
+        kill_old_daemon_range(our_pid, preferred);
+    }
     let port = find_available_daemon_port(requested_daemon_port());
     set_daemon_url(&daemon_url, port);
     let resource_dir = app
@@ -589,6 +594,29 @@ fn restart_daemon(
     Ok(())
 }
 
+/// Read the daemon PID recorded in the port file and kill it. Returns true
+/// when a PID was found (and killed); false means the caller should fall back
+/// to scanning the port range.
+fn kill_pid_from_port_file(our_pid: u32) -> bool {
+    let data_dir = std::env::var("APPDATA")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_owned());
+    let data_dir = std::path::Path::new(&data_dir).join("nova-download-manager");
+    let port_file = data_dir.join("nova-daemon.port");
+    if let Ok(content) = std::fs::read_to_string(&port_file) {
+        let lines: Vec<&str> = content.lines().collect();
+        if lines.len() >= 2 {
+            if let Ok(old_pid) = lines[1].trim().parse::<u32>() {
+                if old_pid != 0 && old_pid != our_pid {
+                    crate::daemon::utils::kill_process(old_pid);
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Kill any orphaned daemon process by reading the stored PID from the port file,
 /// or fall back to scanning the port range. Non-blocking: spawns a background thread.
 fn kill_old_daemon() {
@@ -596,25 +624,10 @@ fn kill_old_daemon() {
     let preferred = requested_daemon_port();
     std::thread::spawn(move || {
         if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            // Try to read the old PID from the port file first.
-            let data_dir = std::env::var("APPDATA")
-                .or_else(|_| std::env::var("USERPROFILE"))
-                .unwrap_or_else(|_| ".".to_owned());
-            let data_dir = std::path::Path::new(&data_dir).join("nova-download-manager");
-            let port_file = data_dir.join("nova-daemon.port");
-            if let Ok(content) = std::fs::read_to_string(&port_file) {
-                let lines: Vec<&str> = content.lines().collect();
-                if lines.len() >= 2 {
-                    if let Ok(old_pid) = lines[1].trim().parse::<u32>() {
-                        if old_pid != 0 && old_pid != our_pid {
-                            crate::daemon::utils::kill_process(old_pid);
-                            return;
-                        }
-                    }
-                }
+            // Prefer the recorded PID; fall back to scanning the port range.
+            if !kill_pid_from_port_file(our_pid) {
+                kill_old_daemon_range(our_pid, preferred);
             }
-            // Fallback: scan the port range
-            kill_old_daemon_range(our_pid, preferred);
         })) {
             let msg = if let Some(s) = e.downcast_ref::<&str>() {
                 (*s).to_owned()

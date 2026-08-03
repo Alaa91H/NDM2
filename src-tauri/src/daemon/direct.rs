@@ -196,6 +196,24 @@ impl SegmentRange {
     }
 }
 
+/// The part-file naming convention shared by the transfer planner, the
+/// segmented writers and the adaptive rebuild loop. `output_path` may be
+/// `dir/name.ext`; the part file is `dir/name.ext.partNNN` (the original
+/// extension is preserved so the part files sort next to the destination and
+/// are matched by `remove_stale_parts_for`). Every geometry — the initial
+/// plan AND each adaptive rebuild — MUST derive its part paths from this
+/// helper, otherwise the rebuild loop writes to differently-named files,
+/// losing resume state and leaving orphaned parts behind.
+pub fn part_file_path(output_path: &Path, index: u32) -> PathBuf {
+    let file_base = output_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("download")
+        .to_owned();
+    let dir = output_path.parent().unwrap_or_else(|| Path::new(""));
+    dir.join(format!("{file_base}.part{index:03}"))
+}
+
 #[derive(Clone, Debug)]
 pub struct SegmentPlanner {
     max_connections: u32,
@@ -218,12 +236,6 @@ impl SegmentPlanner {
             as usize;
         let base = total_size / count as u64;
         let rem = total_size % count as u64;
-        let file_base = output_path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or("download")
-            .to_owned();
-        let dir = output_path.parent().unwrap_or_else(|| Path::new(""));
         let mut ranges = Vec::with_capacity(count);
         let mut start = 0u64;
         for index in 0..count {
@@ -234,7 +246,7 @@ impl SegmentPlanner {
                 index,
                 start,
                 end,
-                path: dir.join(format!("{file_base}.part{index:03}")),
+                path: part_file_path(output_path, index as u32),
             });
             start = end.saturating_add(1);
         }
@@ -310,39 +322,50 @@ impl FileWriter {
             .open(&tmp_path)
             .map_err(|e| format!("Could not create merge file: {e}"))?;
         let mut total = 0u64;
-        for range in ranges {
-            let expected = range.len();
-            let actual = Self::current_size(&range.path)?;
-            if actual > expected {
-                // A segment may temporarily exceed its logical length after an
-                // adaptive rebalance wrote a prefix beyond the planned end.
-                // Truncate it back to the expected size before merging.
-                log::warn!(
-                    "merge_parts: truncating segment {} from {actual} to {expected} bytes",
-                    range.index
+        {
+            // M-10: 1 MiB buffers on BOTH sides. std::io::copy alone uses an
+            // 8 KiB internal buffer, so merging many segments was syscall-bound
+            // (one tiny read + write per 8 KiB), slowing finalization of large
+            // files. A BufWriter around `out` batches the writes too.
+            let mut buffered_out = std::io::BufWriter::with_capacity(1 << 20, &mut out);
+            for range in ranges {
+                let expected = range.len();
+                let actual = Self::current_size(&range.path)?;
+                if actual > expected {
+                    // A segment may temporarily exceed its logical length after an
+                    // adaptive rebalance wrote a prefix beyond the planned end.
+                    // Truncate it back to the expected size before merging.
+                    log::warn!(
+                        "merge_parts: truncating segment {} from {actual} to {expected} bytes",
+                        range.index
+                    );
+                    let file = OpenOptions::new()
+                        .write(true)
+                        .open(&range.path)
+                        .map_err(|e| {
+                            format!("Could not open segment {} to truncate: {e}", range.index)
+                        })?;
+                    file.set_len(expected)
+                        .map_err(|e| format!("Could not truncate segment {}: {e}", range.index))?;
+                } else if actual < expected {
+                    return Err(format!(
+                        "Segment {} is incomplete: expected {} bytes, got {} bytes",
+                        range.index, expected, actual
+                    ));
+                }
+                let mut input = std::io::BufReader::with_capacity(
+                    1 << 20,
+                    File::open(&range.path)
+                        .map_err(|e| format!("Could not read segment {}: {e}", range.index))?,
                 );
-                let file = OpenOptions::new()
-                    .write(true)
-                    .open(&range.path)
-                    .map_err(|e| {
-                        format!("Could not open segment {} to truncate: {e}", range.index)
-                    })?;
-                file.set_len(expected)
-                    .map_err(|e| format!("Could not truncate segment {}: {e}", range.index))?;
-            } else if actual < expected {
-                return Err(format!(
-                    "Segment {} is incomplete: expected {} bytes, got {} bytes",
-                    range.index, expected, actual
-                ));
+                let copied = std::io::copy(&mut input, &mut buffered_out)
+                    .map_err(|e| format!("Could not merge segment {}: {e}", range.index))?;
+                total += copied;
             }
-            let mut input = File::open(&range.path)
-                .map_err(|e| format!("Could not read segment {}: {e}", range.index))?;
-            let copied = std::io::copy(&mut input, &mut out)
-                .map_err(|e| format!("Could not merge segment {}: {e}", range.index))?;
-            total += copied;
+            buffered_out
+                .flush()
+                .map_err(|e| format!("Could not flush merged file: {e}"))?;
         }
-        out.flush()
-            .map_err(|e| format!("Could not flush merged file: {e}"))?;
         out.sync_all()
             .map_err(|e| format!("Could not fsync merged file: {e}"))?;
         drop(out);

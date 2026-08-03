@@ -102,4 +102,11 @@ pub(super) struct SegmentProgress {
     pub(super) retry_after: Arc<AtomicU64>,
     pub(super) capture: Arc<Mutex<ResponseCapture>>,
     pub(super) streaming_digest_out: Arc<Mutex<Option<String>>>,
+    /// Set by the header callback when the server answers 200 (instead of the
+    /// requested 206) to a partial-range request. Shared across all segments
+    /// so every write callback stops immediately (C-2).
+    pub(super) range_rejected: Arc<AtomicBool>,
+    /// True when this segment requested a partial range and therefore must
+    /// receive a 206 response for the transfer to be valid.
+    pub(super) expects_206: bool,
 }

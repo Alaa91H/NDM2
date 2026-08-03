@@ -540,21 +540,22 @@ where
             }
         }
 
-        if ready_count > 0 && dispatched > 0 {
-        } else if wait_fds.is_empty() || ready_count == 0 {
-            running = multi
-                .timeout()
-                .map_err(|e| wrap_multi_error(MultiErrorKind::Timeout, e.to_string()))?;
-            runtime.drain_updates(multi)?;
-        } else {
-            for (idx, interest) in interests.iter().enumerate() {
-                let mut events = Events::new();
-                events.input(interest.input);
-                events.output(interest.output);
+        if !(ready_count > 0 && dispatched > 0) {
+            if wait_fds.is_empty() || ready_count == 0 {
                 running = multi
-                    .action(sockets[idx], &events)
-                    .map_err(|e| wrap_multi_error(MultiErrorKind::SocketAction, e.to_string()))?;
+                    .timeout()
+                    .map_err(|e| wrap_multi_error(MultiErrorKind::Timeout, e.to_string()))?;
                 runtime.drain_updates(multi)?;
+            } else {
+                for (idx, interest) in interests.iter().enumerate() {
+                    let mut events = Events::new();
+                    events.input(interest.input);
+                    events.output(interest.output);
+                    running = multi.action(sockets[idx], &events).map_err(|e| {
+                        wrap_multi_error(MultiErrorKind::SocketAction, e.to_string())
+                    })?;
+                    runtime.drain_updates(multi)?;
+                }
             }
         }
 

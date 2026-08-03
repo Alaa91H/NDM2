@@ -36,16 +36,13 @@ unsafe fn raw_setopt_str(
 ) -> Result<(), String> {
     let c_val = std::ffi::CString::new(value)
         .map_err(|e| format!("Could not convert option to CString: {e}"))?;
-    // Leak the CString intentionally: libcurl either strdup's the string
-    // (7.52+) or stores the raw pointer. Leaking ensures the pointer
-    // remains valid for the lifetime of the easy handle regardless of
-    // libcurl version. On failure, free it since curl didn't take it.
-    let ptr = c_val.into_raw();
-    let code = unsafe { curl_sys::curl_easy_setopt(easy_ptr, option, ptr) };
+    // C-5: libcurl always strdups STRINGPOINT options, so the CString can be
+    // dropped right after setopt. The previous `into_raw()` leaked one
+    // allocation per option for the lifetime of the process.
+    let code = unsafe { curl_sys::curl_easy_setopt(easy_ptr, option, c_val.as_ptr()) };
     if code == curl_sys::CURLE_OK {
         Ok(())
     } else {
-        unsafe { drop(std::ffi::CString::from_raw(ptr)) }
         Err(format!("libcurl rejected option (code {code})"))
     }
 }
@@ -108,7 +105,9 @@ pub struct SegmentWriter {
 
 impl Handler for SegmentWriter {
     fn write(&mut self, data: &[u8]) -> Result<usize, WriteError> {
-        if self.progress.abort.load(Ordering::Relaxed) {
+        if self.progress.abort.load(Ordering::Relaxed)
+            || self.progress.range_rejected.load(Ordering::Relaxed)
+        {
             return Ok(0);
         }
         if let Some(ref mut hasher) = self.streaming_hasher {
@@ -131,6 +130,7 @@ impl Handler for SegmentWriter {
 
     fn progress(&mut self, _dltotal: f64, _dlnow: f64, _ultotal: f64, _ulnow: f64) -> bool {
         !self.progress.abort.load(Ordering::Relaxed)
+            && !self.progress.range_rejected.load(Ordering::Relaxed)
     }
 
     fn header(&mut self, data: &[u8]) -> bool {
@@ -150,6 +150,15 @@ impl Handler for SegmentWriter {
             if let Some(code) = parts.next().and_then(|c| c.parse().ok()) {
                 if let Ok(mut cap) = self.progress.capture.lock() {
                     cap.status_code = code;
+                }
+                // C-2: a segment that requested a partial range must receive
+                // 206. A 200 means the server ignored the Range header and is
+                // sending the whole body to every segment. Flag it so ALL
+                // segments stop writing immediately (shared flag) instead of
+                // downloading the file N times in parallel before failing at
+                // merge time.
+                if code == 200 && self.progress.expects_206 {
+                    self.progress.range_rejected.store(true, Ordering::Release);
                 }
             }
             return true;
@@ -1297,6 +1306,8 @@ mod tests {
             retry_after: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             capture: Arc::new(Mutex::new(ResponseCapture::default())),
             streaming_digest_out: Arc::new(Mutex::new(None)),
+            range_rejected: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            expects_206: false,
         };
         SegmentWriter {
             file,

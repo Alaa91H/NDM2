@@ -678,7 +678,25 @@ struct ProbeMetadata {
 /// probe if RIE fails.
 async fn background_resolve_and_start(state: SharedState, task_id: String, original_url: String) {
     // ── Try the RIE first ──────────────────────────────────────────────
-    let report = state.rie.resolve(&state, &original_url, None).await;
+    // M-2: bound the RIE resolve so a hung probe (DNS, TLS, anti-bot wait)
+    // cannot strand a queued task forever. On timeout, start the download
+    // without the RIE enrichment and let the engine's own preflight handle
+    // the URL.
+    let report = match tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        state.rie.resolve(&state, &original_url, None),
+    )
+    .await
+    {
+        Ok(report) => report,
+        Err(_) => {
+            log::warn!(
+                "Task {task_id}: RIE resolve timed out after 60s; starting download without enrichment"
+            );
+            start_curl_task_by_id(&state, &task_id);
+            return;
+        }
+    };
 
     // Map the ResolutionReport into a flat ProbeMetadata struct.
     let identity = report.resource_identity.as_ref();

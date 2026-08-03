@@ -237,6 +237,33 @@ pub async fn resume_task(state: &SharedState, id: &str) -> Result<Task, String> 
     }
 
     {
+        // M-5: if a previous worker is still exiting (pausing/stopping), wait
+        // (bounded) for it to fully stop before resuming instead of failing
+        // immediately. A genuinely active "downloading" task is NOT waited for
+        // — resuming an actively running worker would double-start it, so that
+        // state errors out right away with a clear message.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let state_now = lock_or_err!(state.curl_jobs)
+                .get(id)
+                .map(|j| j.task.status.clone());
+            match state_now.as_deref() {
+                None | Some("paused") | Some("queued") | Some("error") | Some("completed") => break,
+                Some("downloading") => {
+                    return Err("Cannot resume: download is still actively running.".to_owned());
+                }
+                Some("pausing") | Some("stopping") => {
+                    if std::time::Instant::now() >= deadline {
+                        return Err(format!(
+                            "Cannot resume task {id}: previous worker did not stop within 10s."
+                        ));
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                _ => break,
+            }
+        }
+
         let mut jobs = lock_or_err!(state.curl_jobs);
         if let Some(job) = jobs.get_mut(id) {
             if job.task.status == "completed" {
@@ -244,12 +271,6 @@ pub async fn resume_task(state: &SharedState, id: &str) -> Result<Task, String> 
                     "Cannot resume '{}': download is already completed.",
                     job.task.name
                 ));
-            }
-            if matches!(
-                job.task.status.as_str(),
-                "downloading" | "pausing" | "stopping"
-            ) {
-                return Err(format!("Cannot resume '{}': current state is {}. Wait until the previous libcurl worker has stopped.", job.task.name, job.task.status));
             }
             job.task.status = "queued".to_owned();
             job.task.engine_status = Some("resume-requested".to_owned());
@@ -563,8 +584,18 @@ pub async fn delete_task(state: &SharedState, id: &str, delete_files: bool) -> R
     }
 
     {
-        let entry = {
+        let (entry, was_active) = {
             let mut jobs = lock_or_err!(state.curl_jobs);
+            // M-8: remember whether the worker was actually running so we can
+            // release its queue slot (active_downloads) immediately instead of
+            // waiting for the worker's async mark_curl_task_failed, which is
+            // now a no-op for deleted tasks (generation was bumped above).
+            let was_active = jobs.get(id).is_some_and(|job| {
+                matches!(
+                    job.task.status.as_str(),
+                    "downloading" | "pausing" | "stopping"
+                )
+            });
             if let Some(job) = jobs.get_mut(id) {
                 job.cancel_token.store(true, Ordering::Release);
                 job.run_generation.fetch_add(1, Ordering::Release);
@@ -575,10 +606,20 @@ pub async fn delete_task(state: &SharedState, id: &str, delete_files: bool) -> R
             // Remove from snapshot before curl_jobs to prevent ghost task.
             lock_or_err!(state.task_snapshot).remove(id);
             let job = jobs.remove(id);
-            job.map(|job| (std::path::PathBuf::from(&job.task.save_path), job.task.url))
+            (
+                job.map(|job| (std::path::PathBuf::from(&job.task.save_path), job.task.url)),
+                was_active,
+            )
         };
         if let Some((path, url)) = entry {
-            state.priority_queue.remove(id);
+            // M-8: release the slot immediately for a running download; the
+            // worker's exit callback skips stop_download for deleted tasks.
+            // Non-active tasks never consumed a slot, so keep plain remove.
+            if was_active {
+                state.priority_queue.stop_download(id);
+            } else {
+                state.priority_queue.remove(id);
+            }
             state.bandwidth_manager.remove_task_limit(id);
             if !url.is_empty() {
                 state.metadata_cache.remove(&url);

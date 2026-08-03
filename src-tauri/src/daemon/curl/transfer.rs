@@ -723,6 +723,8 @@ fn run_single_libcurl(
         retry_after: retry_after.clone(),
         capture: capture.clone(),
         streaming_digest_out: streaming_digest_out.clone(),
+        range_rejected: Arc::new(AtomicBool::new(false)),
+        expects_206: false,
     };
     let task_limit = state.bandwidth_manager.allowed_speed_for_task(id);
     let task_limit_bps = if task_limit > 0 {
@@ -800,7 +802,15 @@ fn run_single_libcurl(
         last_total = effective_downloaded;
         last_tick = now;
 
-        if effective_downloaded > prev_last_total {
+        // H-2: paused time must not count toward the stall detector — a
+        // global pause (or a long-running pause of this task) would otherwise
+        // be misread as a 60s stall and force-cancel the transfer.
+        if state
+            .bandwidth_manager
+            .paused_flag()
+            .load(Ordering::Relaxed)
+            || effective_downloaded > prev_last_total
+        {
             last_progress_time = now;
         } else if now.duration_since(last_progress_time).as_secs() >= 60
             && effective_downloaded == prev_last_total
@@ -1085,6 +1095,32 @@ fn run_segmented_libcurl(
             protocol,
             cfg.min_segment_bytes,
         );
+        // Honor the adaptiveEvalMs option. This was previously parsed into the
+        // config but never applied, so tests that set a fast evaluation
+        // interval were silently ignored (the engine kept its 2s default).
+        if let Some(eval_ms) = plan.config.adaptive_eval_ms {
+            let interval = std::time::Duration::from_millis(eval_ms);
+            engine.set_tick_interval(interval);
+            engine.segment_ctrl.set_eval_interval(interval);
+        }
+        // C-1 (root cause): seed the engine's segment geometry with the
+        // EXACT ranges the transfer planner created for the part files on
+        // disk. The engine constructor seeds a single whole-file segment;
+        // if we left it that way, per-segment progress updates for ids > 0
+        // would be silently dropped (no such segment exists in the engine)
+        // and the first adaptive rebuild would produce a geometry that does
+        // not correspond to part000..part0NN on disk — the corruption the
+        // audit flagged. Seeding from the plan keeps engine ids/ranges
+        // ≡ part files on disk from the very first tick.
+        {
+            let plan_ranges: Vec<(u32, u64, u64)> = ranges
+                .iter()
+                .map(|r| (r.index as u32, r.start, r.end))
+                .collect();
+            engine
+                .segment_ctrl
+                .seed_from_ranges(plan.total_size, &plan_ranges);
+        }
         if preflight.initial_rtt_us > 0 || preflight.ttfb_us > 0 {
             engine.seed_profile(
                 protocol,
@@ -1179,6 +1215,9 @@ fn run_segmented_libcurl(
 
     let mut handles = Vec::new();
     let mut seg_captures: Vec<Arc<Mutex<ResponseCapture>>> = Vec::new();
+    // C-2: shared flag — when any segment's header callback sees a 200 in
+    // answer to a partial-range request, every segment stops writing.
+    let range_rejected = Arc::new(AtomicBool::new(false));
     let per_segment_limit_bps = if task_limit > 0 {
         Some((task_limit * 1024) / u64::from(effective_connections.max(1)))
     } else {
@@ -1279,6 +1318,8 @@ fn run_segmented_libcurl(
                 retry_after: retry_after.clone(),
                 capture: seg_capture,
                 streaming_digest_out: streaming_digest_out.clone(),
+                range_rejected: range_rejected.clone(),
+                expects_206: start > 0 || ranges.len() > 1,
             },
             Some((start, range.end)),
             per_segment_limit_bps,
@@ -1310,6 +1351,18 @@ fn run_segmented_libcurl(
             .sum(),
     );
     let last_tick_cell: std::cell::Cell<Instant> = std::cell::Cell::new(Instant::now());
+    // H-3: dedicated cells for update_curl_task_progress's internal speed/ETA
+    // bookkeeping. The tick closure resets last_tick_cell on every call, so
+    // update_curl_task_progress must keep its OWN last_total/last_tick state
+    // here (read into locals, pass by &mut, write back).
+    let progress_total_cell: std::cell::Cell<u64> = std::cell::Cell::new(
+        active_cell
+            .borrow()
+            .iter()
+            .map(|(r, p, initial)| (*initial + p.load(Ordering::Relaxed)).min(part_size(r)))
+            .sum(),
+    );
+    let progress_tick_cell: std::cell::Cell<Instant> = std::cell::Cell::new(Instant::now());
     let prev_seg_bytes_cell: std::cell::RefCell<Vec<u64>> =
         std::cell::RefCell::new(vec![0; active_cell.borrow().len()]);
     // Live rate-limit tracking for the segmented path (M6).
@@ -1321,6 +1374,8 @@ fn run_segmented_libcurl(
     // to at most one rebuild per 10s to prevent oscillation.
     let pending_rebuild = std::cell::Cell::new(false);
     let last_rebuild_at = std::cell::Cell::new(std::time::Instant::now());
+    // H-1: last time per-tick telemetry was persisted to the profile store.
+    let last_telemetry_cell = std::cell::Cell::new(std::time::Instant::now());
     // Log a failed live rate-cap push only once (see single-path tick).
     let seg_rate_failure_logged = std::cell::Cell::new(false);
     let mut tick = || {
@@ -1358,18 +1413,30 @@ fn run_segmented_libcurl(
         let mut prev_seg_bytes = prev_seg_bytes_cell.borrow_mut();
         let mut seg_downloads = Vec::with_capacity(active.len());
         let mut seg_speeds = Vec::with_capacity(active.len());
-        for (i, (_range, progress, _initial)) in active.iter().enumerate() {
-            let seg_downloaded = progress.load(Ordering::Relaxed);
-            let seg_speed = if seg_downloaded > prev_seg_bytes[i] {
-                ((seg_downloaded - prev_seg_bytes[i]) as f64 / elapsed) as u64
+        // C-1: collect the REAL segment id per active entry. The engine's
+        // segment ids are not the array positions: after an adaptive split the
+        // new segment gets id = max+1 (non-contiguous), so passing the array
+        // index to update_progress would update the wrong segment or none.
+        // Also report TOTAL bytes (on-disk resume offset + bytes written this
+        // run), not just this run's bytes, so the engine's `downloaded` counter
+        // matches what is actually on disk — otherwise a resumed segment would
+        // undercount and the next rebuild would resume from the wrong offset.
+        let mut seg_ids: Vec<u32> = Vec::with_capacity(active.len());
+        for (i, (range, progress, initial)) in active.iter().enumerate() {
+            let seg_new = progress.load(Ordering::Relaxed);
+            let seg_downloaded = (*initial + seg_new).min(part_size(range));
+            let seg_speed = if seg_new > prev_seg_bytes[i] {
+                ((seg_new - prev_seg_bytes[i]) as f64 / elapsed) as u64
             } else {
                 0
             };
-            prev_seg_bytes[i] = seg_downloaded;
-            segment_scheduler.update_segment(i as u32, seg_downloaded, seg_speed, true);
+            prev_seg_bytes[i] = seg_new;
+            let seg_id = range.index as u32;
+            segment_scheduler.update_segment(seg_id, seg_downloaded, seg_speed, true);
             telemetry_bus.report_bytes(i, seg_downloaded);
             telemetry_bus.report_speed(i, seg_speed);
             telemetry_bus.set_alive(i, true);
+            seg_ids.push(seg_id);
             seg_downloads.push(seg_downloaded);
             seg_speeds.push(seg_speed);
         }
@@ -1384,7 +1451,7 @@ fn run_segmented_libcurl(
                         {
                             engine
                                 .segment_ctrl
-                                .update_progress(i as u32, downloaded, speed);
+                                .update_progress(seg_ids[i], downloaded, speed);
                         }
                         // Phase 5: drive the adaptive engine LIVE. When the
                         // decision asks for a geometry change we set
@@ -1444,9 +1511,12 @@ fn run_segmented_libcurl(
                                     })
                                     .collect();
                                 segment_scheduler.replace_segments(&new_geometry);
-                                if last_rebuild_at.get().elapsed()
-                                    >= std::time::Duration::from_secs(10)
-                                {
+                                let rebuild_debounce = plan
+                                    .config
+                                    .adaptive_rebuild_ms
+                                    .map(std::time::Duration::from_millis)
+                                    .unwrap_or(std::time::Duration::from_secs(10));
+                                if last_rebuild_at.get().elapsed() >= rebuild_debounce {
                                     pending_rebuild.set(true);
                                     last_rebuild_at.set(std::time::Instant::now());
                                 }
@@ -1458,8 +1528,10 @@ fn run_segmented_libcurl(
         }
         // Phase 5/1.2: persist per-tick telemetry into the unified profile
         // store so the adaptive engine's DecisionContext stays warm across
-        // sessions.
-        {
+        // sessions. H-1: throttled to once per 5s — this used to run on every
+        // tick (every ~50ms), locking the store and fsyncing the profile file
+        // dozens of times per second per task.
+        if last_telemetry_cell.get().elapsed() >= std::time::Duration::from_secs(5) {
             if let Ok(mut die) = state.die_orchestrator.lock() {
                 let host = reqwest::Url::parse(&plan.url)
                     .ok()
@@ -1468,15 +1540,23 @@ fn run_segmented_libcurl(
                 let agg: u64 = seg_speeds.iter().sum();
                 die.record_telemetry(&host, 0, agg, 206);
             }
+            last_telemetry_cell.set(Instant::now());
         }
+        // H-3: update_curl_task_progress mutates its speed/ETA bookkeeping;
+        // read the dedicated cells into locals and write them back (the old
+        // `&mut cell.get()` passed a reference to a discarded temporary).
+        let mut progress_total = progress_total_cell.get();
+        let mut progress_tick = progress_tick_cell.get();
         update_curl_task_progress(
             state,
             id,
             plan.total_size,
             &active_cell.borrow(),
-            &mut last_total_cell.get(),
-            &mut last_tick_cell.get(),
+            &mut progress_total,
+            &mut progress_tick,
         );
+        progress_total_cell.set(progress_total);
+        progress_tick_cell.set(progress_tick);
     };
     // Phase 5 outer drive loop: drive until completion, rebuilding the easy
     // handles whenever the adaptive engine changes the segment geometry.
@@ -1521,15 +1601,80 @@ fn run_segmented_libcurl(
         let mut active = active_cell.borrow_mut();
         active.clear();
         let new_geometry: Vec<(u32, u64, u64, u64)> = engine_segments_for_rebuild(state, id);
-        for (seg_id, start, end, downloaded) in new_geometry {
-            let path = plan.output_path.with_extension(format!("part{seg_id:03}"));
+        let new_geometry_len = new_geometry.len();
+        // `_downloaded`: the engine's counter is deliberately NOT used as a
+        // resume base (see C-1 comment below); the on-disk length is truth.
+        for &(seg_id, start, end_excl, _downloaded) in &new_geometry {
+            // C-1 (naming): the part path MUST use the same convention as
+            // SegmentPlanner::plan (`<file>.partNNN`, not
+            // `with_extension("partNNN")` which replaces the destination's
+            // own extension). With with_extension, the rebuild wrote to
+            // `rebuild.part000` while the planner had created
+            // `rebuild.zip.part000` — the resume state was silently lost,
+            // stale parts were orphaned, and the final merge read files that
+            // never matched the initial geometry.
+            let path = crate::daemon::direct::part_file_path(&plan.output_path, seg_id);
+            // The engine reports segment ends EXCLUSIVE (one past the last
+            // byte), while ByteRange and the HTTP Range header are INCLUSIVE.
+            // Passing the exclusive end straight through would make every
+            // rebuilt segment request one byte too far and report sizes one
+            // byte too large — the final merge would then be off by the number
+            // of segments. Convert once here.
+            let end = end_excl.saturating_sub(1);
             let range = ByteRange {
                 index: seg_id as usize,
                 start,
                 end,
                 path: path.clone(),
             };
+            // C-1: the on-disk part file length is the ONLY trustworthy resume
+            // point. The engine's `downloaded` counter is a hint, NOT ground
+            // truth: after a merge the survivor's counter sums both halves
+            // while the second half's bytes still live in an orphaned part
+            // file; after a split the counter can exceed the new, narrower
+            // bounds. Crucially, the segment writer APPENDS at the file's
+            // current end (seek-to-end resume), so the HTTP range requested
+            // must start exactly at the on-disk length — otherwise new bytes
+            // land at the wrong offset and the merge is silently corrupt.
+            // `trusted = on_disk.min(seg_size)` is therefore the only safe
+            // resume offset; the engine counter is never used here.
+            let seg_size = end_excl.saturating_sub(start);
+            if seg_size == 0 {
+                // Defensive: a degenerate zero-length segment (end_excl <= start)
+                // contributes nothing and must not produce a phantom 1-byte
+                // ByteRange (end = 0.saturating_sub(1) == 0 has len 1) that
+                // would corrupt the merge. The engine should never emit one,
+                // but skip it rather than trust the invariant.
+                log::debug!(
+                    "Task {id}: rebuild — skipping degenerate empty segment {seg_id} (start={start}, end_excl={end_excl})"
+                );
+                continue;
+            }
+            let on_disk = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+            let mut trusted = on_disk.min(seg_size);
+            if on_disk > seg_size {
+                // Stale bytes from a previous, wider geometry: truncate so the
+                // final merge reads exactly the planned range.
+                log::warn!(
+                    "Task {id}: rebuild — truncating stale part {seg_id} from {on_disk} to {seg_size} bytes"
+                );
+                let _ = std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&path)
+                    .and_then(|f| f.set_len(seg_size));
+                trusted = seg_size;
+            }
             let progress = Arc::new(AtomicU64::new(0));
+            if trusted >= seg_size {
+                // Segment already fully present on disk under the new geometry:
+                // no handle needed, but it must still be counted toward the
+                // final merge and the live totals.
+                log::debug!(
+                    "Task {id}: rebuild — segment {seg_id} already complete on disk ({trusted}/{seg_size})"
+                );
+                active.push((range, progress, trusted));
+                continue;
+            }
             let seg_capture = Arc::new(Mutex::new(ResponseCapture::default()));
             seg_captures.push(seg_capture.clone());
             let easy = create_easy_for_range_ext(
@@ -1541,15 +1686,17 @@ fn run_segmented_libcurl(
                     retry_after: retry_after.clone(),
                     capture: seg_capture,
                     streaming_digest_out: streaming_digest_out.clone(),
+                    range_rejected: range_rejected.clone(),
+                    expects_206: start + trusted > 0 || new_geometry_len > 1,
                 },
-                Some((start + downloaded, end)),
+                Some((start + trusted, end)),
                 per_segment_limit_bps,
             )?;
             let handle = guard
                 .add2(easy)
                 .map_err(|e| format!("Could not add segment {seg_id}: {e}"))?;
             handles_cell.borrow_mut().push(handle);
-            active.push((range, progress, downloaded));
+            active.push((range, progress, trusted));
         }
         // Recompute totals for the new geometry.
         last_total_cell.set(
@@ -1565,6 +1712,21 @@ fn run_segmented_libcurl(
             break 'drive;
         }
     }
+    // C-2: the server answered 200 (not 206) to a partial-range request on at
+    // least one segment, so every segment stopped writing via the shared
+    // range_rejected flag. Fail fast with a clear error instead of merging
+    // truncated or overlapping part files.
+    if range_rejected.load(Ordering::Acquire) {
+        for r in active_cell.borrow().iter() {
+            let _ = std::fs::remove_file(&r.0.path);
+        }
+        return Err(
+            "Server returned 200 OK instead of 206 Partial Content to a byte-range request; \
+             the server does not honor range requests. Retry with a single connection or \
+             disable segmented mode."
+                .to_owned(),
+        );
+    }
     for (idx, handle) in handles_cell.borrow().iter().enumerate() {
         let code = handle
             .response_code()
@@ -1573,14 +1735,14 @@ fn run_segmented_libcurl(
             continue;
         }
         if code == 412 {
-            for r in &ranges {
-                let _ = std::fs::remove_file(&r.path);
+            for r in active_cell.borrow().iter() {
+                let _ = std::fs::remove_file(&r.0.path);
             }
             return Err("resource-changed-412".to_owned());
         }
         if code == 416 {
-            for r in &ranges {
-                let _ = std::fs::remove_file(&r.path);
+            for r in active_cell.borrow().iter() {
+                let _ = std::fs::remove_file(&r.0.path);
             }
             return Err("range-not-satisfiable-416".to_owned());
         }
@@ -1589,28 +1751,53 @@ fn run_segmented_libcurl(
                 "Segment {idx} finished with unexpected HTTP status {code}"
             ));
         }
-        if code == 200 && ranges.len() > 1 && is_http_family(&plan.url) {
-            for r in &ranges {
-                let _ = std::fs::remove_file(&r.path);
+        if code == 200 && active_cell.borrow().len() > 1 && is_http_family(&plan.url) {
+            for r in active_cell.borrow().iter() {
+                let _ = std::fs::remove_file(&r.0.path);
             }
             return Err("Server did not honor byte-range requests; retry with one connection or probe the URL again.".to_owned());
         }
     }
+    // H-3: update_curl_task_progress mutates last_total/last_tick to compute
+    // speed and ETA. Read the cells into locals and write them back — the old
+    // `&mut cell.get()` passed a mutable reference to a discarded temporary,
+    // so speed was recomputed against the initial baseline every tick.
+    let mut last_total = progress_total_cell.get();
+    let mut last_tick = progress_tick_cell.get();
     update_curl_task_progress(
         state,
         id,
         plan.total_size,
         &active_cell.borrow(),
-        &mut last_total_cell.get(),
-        &mut last_tick_cell.get(),
+        &mut last_total,
+        &mut last_tick,
     );
+    progress_total_cell.set(last_total);
+    progress_tick_cell.set(last_tick);
     let (captured_validator, encoded) = seg_captures
         .first()
         .and_then(|cap| cap.lock().ok())
         .map_or((None, false), |cap| {
             (cap.validator.clone(), cap.content_encoded)
         });
-    merge_parts(&plan.output_path, &ranges).map(|s| TransferOutcome {
+    // C-1: merge using the CURRENT segment geometry. The original `ranges`
+    // were captured before any adaptive rebuild split/merged segments, so
+    // they may reference stale part files and byte offsets, causing a failed
+    // merge or a silently corrupted output file. Read the live geometry from
+    // active_cell instead.
+    let mut final_ranges: Vec<ByteRange> = active_cell
+        .borrow()
+        .iter()
+        .map(|(range, _, _)| range.clone())
+        .collect();
+    // C-1 (ordering): the adaptive engine stores segments in creation order
+    // (split appends new ids at the end), NOT sorted by start byte. The merge
+    // concatenates part files in the order of this slice, so an unsorted
+    // geometry would produce a byte-swapped output file even though every
+    // part is complete and correct. Sort by start offset — the merge is only
+    // valid when parts are concatenated in ascending byte order.
+    final_ranges.sort_by_key(|r| r.start);
+    merge_parts(&plan.output_path, &final_ranges).map(|s| TransferOutcome {
         size: s,
         validator: captured_validator,
         content_encoded: encoded,
@@ -1638,6 +1825,24 @@ fn engine_segments_for_rebuild(state: &SharedState, id: &str) -> Vec<(u32, u64, 
         .iter()
         .map(|s| (s.id, s.start_byte, s.end_byte, s.downloaded))
         .collect()
+}
+
+/// H-4: RAII lease that registers this download's connection usage with the
+/// DieOrchestrator when created and releases it when dropped, so every exit
+/// path (success, error, cancel, panic unwind) releases the budget exactly
+/// once. Registered once per generation in run_libcurl_download.
+struct DownloadConnectionLease {
+    state: SharedState,
+    host: String,
+    count: u32,
+}
+
+impl Drop for DownloadConnectionLease {
+    fn drop(&mut self) {
+        if let Ok(mut die) = self.state.die_orchestrator.lock() {
+            die.release_connections(&self.host, self.count);
+        }
+    }
 }
 
 fn run_libcurl_download(
@@ -1676,11 +1881,56 @@ fn run_libcurl_download(
         plan.link_mirrors.len(),
         plan.output_path.display()
     );
-    let retry_policy = plan.config.retry_policy();
+    // C-4: when the user did not explicitly configure retry options for this
+    // task, inherit the daemon-wide default retry policy instead of silently
+    // disabling retries (per-task config defaults to attempts=1 = no retries).
+    let retry_policy = if plan.config.retry_count.is_some()
+        || plan.config.retry_delay_sec.is_some()
+        || plan.config.retry_max_time_sec.is_some()
+        || plan.config.retry_all_errors.is_some()
+        || plan.config.retry_max_delay_sec.is_some()
+        || plan.config.retry_jitter.is_some()
+        || plan.config.backoff_multiplier.is_some()
+        || plan.config.retry_conn_refused
+    {
+        plan.config.retry_policy()
+    } else {
+        match state.default_retry_policy.read() {
+            Ok(default) => {
+                let d = default.clone();
+                RetryPolicy {
+                    attempts: u64::from(d.max_retries).saturating_add(1).min(50),
+                    delay: d.base_delay,
+                    max_total_time: None,
+                    retry_all_errors: false,
+                    backoff_multiplier: d.backoff_multiplier,
+                    max_delay: d.max_delay,
+                    jitter: d.jitter,
+                }
+            }
+            Err(_) => plan.config.retry_policy(),
+        }
+    };
     let start_time = std::time::Instant::now();
     let mut last_error = String::new();
     let retry_after = Arc::new(AtomicU64::new(0));
     let streaming_digest_out = Arc::new(Mutex::new(None::<String>));
+    // H-4: account for this download's connection usage in the orchestrator
+    // so concurrent downloads respect the global connection budget. Released
+    // automatically on every exit path via the RAII lease.
+    let lease_host = reqwest::Url::parse(&plan.url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_owned))
+        .unwrap_or_else(|| "unknown".into());
+    let lease_count = plan.connections.max(1);
+    if let Ok(mut die) = state.die_orchestrator.lock() {
+        die.register_connection(&lease_host, lease_count);
+    }
+    let _connection_lease = DownloadConnectionLease {
+        state: state.clone(),
+        host: lease_host,
+        count: lease_count,
+    };
     if plan.segmented && crate::daemon::direct::learned_host_ceiling(&plan.url) == Some(1) {
         plan.segmented = false;
     }
@@ -1924,7 +2174,16 @@ fn run_libcurl_download(
                                     healer_pause = Some(*dur);
                                 }
                                 RecoveryAction::RestartDownload => {
-                                    log::info!("Task {id}: self-healer recommends full restart");
+                                    // M-4: actually restart from scratch —
+                                    // discard the partial file and its parts so
+                                    // the next attempt starts at byte 0 instead
+                                    // of resuming a possibly corrupted partial.
+                                    log::info!(
+                                        "Task {id}: self-healer restarting download from scratch"
+                                    );
+                                    let _ = std::fs::remove_file(&plan.output_path);
+                                    remove_stale_parts_for(&plan.output_path);
+                                    plan.resumable = false;
                                 }
                                 _ => {}
                             }
@@ -2050,6 +2309,19 @@ fn run_libcurl_download(
 
 pub fn mark_curl_task_finished(state: &SharedState, id: &str, final_size: u64, generation: u64) {
     log::info!("Task {id}: download completed (final_size={final_size}, generation={generation})");
+    // C-3: verify the generation BEFORE any side effects. A stale worker that
+    // finished after a newer run started must not release the queue slot or
+    // bump stats that belong to the current run.
+    {
+        let jobs = lock_or_err!(state.curl_jobs);
+        let Some(job) = jobs.get(id) else {
+            return;
+        };
+        if job.run_generation.load(Ordering::Acquire) != generation {
+            log::info!("Task {id}: stale completion (generation {generation}) ignored",);
+            return;
+        }
+    }
     state.priority_queue.stop_download(id);
     // download_stats scoped to this block and released before curl_jobs
     // is acquired below, preventing AB-BA deadlock with persist's
@@ -2096,6 +2368,18 @@ pub fn mark_curl_task_failed(
         log::info!("Task {id}: download cancelled (generation={generation})");
     } else {
         log::error!("Task {id}: download failed: {message} (generation={generation})");
+    }
+    // C-3: verify generation BEFORE any side effects — a stale worker must
+    // not decrement active_downloads or bump failure stats for a newer run.
+    {
+        let jobs = lock_or_err!(state.curl_jobs);
+        let Some(job) = jobs.get(id) else {
+            return;
+        };
+        if job.run_generation.load(Ordering::Acquire) != generation {
+            log::info!("Task {id}: stale failure (generation {generation}) ignored");
+            return;
+        }
     }
     // Always decrement active_downloads — both cancel and error release a slot.
     state.priority_queue.stop_download(id);
@@ -2252,7 +2536,9 @@ pub fn start_curl_process(state: &SharedState, id: &str) {
                         log::info!(
                             "Task {id2}: watchdog already set error; preserving instead of marking cancelled"
                         );
-                        state2.priority_queue.stop_download(&id2);
+                        // The watchdog's force_error_status already released the
+                        // queue slot (and bumped stats) — do NOT decrement again,
+                        // otherwise active_downloads is double-released.
                         return;
                     }
                 }
@@ -2336,6 +2622,17 @@ pub fn start_curl_process(state: &SharedState, id: &str) {
                     return;
                 }
 
+                // H-2: global pause must not count toward the stall timeout;
+                // otherwise a long pause would look like a stall and the
+                // watchdog would force-cancel the transfer.
+                if watchdog_state
+                    .bandwidth_manager
+                    .paused_flag()
+                    .load(Ordering::Relaxed)
+                {
+                    last_progress_time = Instant::now();
+                }
+
                 if downloaded > last_downloaded {
                     last_downloaded = downloaded;
                     last_progress_time = Instant::now();
@@ -2403,6 +2700,24 @@ pub fn start_curl_process(state: &SharedState, id: &str) {
 /// from overwriting a restarted task's state.
 fn force_error_status(state: &SharedState, id: &str, generation: u64, message: String) {
     log::error!("Watchdog force-error for task {id}: {message}");
+    // C-3: verify generation before side effects — a stale watchdog from an
+    // old run must not release the slot or bump stats for the current run.
+    {
+        let jobs = lock_or_err!(state.curl_jobs);
+        let Some(job) = jobs.get(id) else {
+            return;
+        };
+        if job.task.status == "completed" || job.task.status == "paused" {
+            return;
+        }
+        if generation > 0 && job.run_generation.load(Ordering::Acquire) != generation {
+            log::info!(
+                "Watchdog for {id}: generation mismatch (ours={generation}, current={}), skipping",
+                job.run_generation.load(Ordering::Acquire)
+            );
+            return;
+        }
+    }
     state.priority_queue.stop_download(id);
     {
         if let Ok(mut stats) = state.download_stats.lock() {
@@ -2415,10 +2730,6 @@ fn force_error_status(state: &SharedState, id: &str, generation: u64, message: S
             return;
         }
         if generation > 0 && job.run_generation.load(Ordering::Acquire) != generation {
-            log::info!(
-                "Watchdog for {id}: generation mismatch (ours={generation}, current={}), skipping",
-                job.run_generation.load(Ordering::Acquire)
-            );
             return;
         }
         job.task.status = "error".to_owned();
@@ -2590,6 +2901,89 @@ mod tests {
                             ),
                             &payload,
                         ),
+                    }
+                });
+            }
+        });
+        addr
+    }
+
+    /// Like `spawn_range_server` but dribbles the body out in small chunks
+    /// with a sleep between writes, so a transfer takes long enough for the
+    /// adaptive engine to evaluate and rebuild geometry mid-flight.
+    fn spawn_slow_range_server(
+        payload: std::sync::Arc<Vec<u8>>,
+        chunk: usize,
+        sleep_ms: u64,
+    ) -> std::net::SocketAddr {
+        use std::io::{Read, Write};
+        use std::net::{Shutdown, TcpListener};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let payload = payload.clone();
+                std::thread::spawn(move || {
+                    let mut buf = [0u8; 8192];
+                    let n = stream.read(&mut buf).unwrap_or(0);
+                    let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let total = payload.len() as u64;
+                    let mut range = None;
+                    for line in req.lines() {
+                        if let Some(rest) = line.to_ascii_lowercase().strip_prefix("range: bytes=")
+                        {
+                            range = Some(rest.trim().to_string());
+                            break;
+                        }
+                    }
+                    match range {
+                        Some(r) => {
+                            let (s, e) = r.split_once('-').unwrap_or((r.as_str(), ""));
+                            let start: u64 = s.trim().parse().unwrap_or(0);
+                            if start >= total {
+                                let _ = stream.write_all(
+                                    format!(
+                                        "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{total}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                                    )
+                                    .as_bytes(),
+                                );
+                                let _ = stream.shutdown(Shutdown::Write);
+                                return;
+                            }
+                            let end: u64 = if e.is_empty() {
+                                total - 1
+                            } else {
+                                e.trim().parse().unwrap_or(total - 1)
+                            };
+                            let end = end.min(total - 1);
+                            let body = &payload[start as usize..=end as usize];
+                            let head = format!(
+                                "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{end}/{total}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nETag: \"nova-test\"\r\nConnection: close\r\n\r\n",
+                                body.len()
+                            );
+                            let _ = stream.write_all(head.as_bytes());
+                            for piece in body.chunks(chunk.max(1)) {
+                                if stream.write_all(piece).is_err() {
+                                    return;
+                                }
+                                std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
+                            }
+                            let _ = stream.shutdown(Shutdown::Write);
+                        }
+                        None => {
+                            let head = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Length: {total}\r\nAccept-Ranges: bytes\r\nETag: \"nova-test\"\r\nConnection: close\r\n\r\n"
+                            );
+                            let _ = stream.write_all(head.as_bytes());
+                            for piece in payload.chunks(chunk.max(1)) {
+                                if stream.write_all(piece).is_err() {
+                                    return;
+                                }
+                                std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
+                            }
+                            let _ = stream.shutdown(Shutdown::Write);
+                        }
                     }
                 });
             }
@@ -3257,6 +3651,118 @@ mod tests {
         assert_eq!(task.status, "completed");
         let written = std::fs::read(&out).unwrap();
         assert_eq!(written, payload, "adaptive download is corrupt");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn adaptive_rebuild_mid_transfer_grows_geometry_and_merges_cleanly() {
+        // C-1 hardening: force a REAL geometry rebuild while bytes are still
+        // flowing. The adaptive engine starts at 2 connections on a throttled
+        // server; its profile recommends more connections for a 16 MiB file,
+        // so the first evaluation emits AdjustConnections 2→4. The drive loop
+        // then tears down and recreates every easy handle from the NEW engine
+        // geometry (ids/ranges that no longer match the initial part files),
+        // resumes from the on-disk truth, and must merge a byte-for-byte
+        // identical file. This exercises the rebuild path the fast localhost
+        // tests never reach (engine seeding, exclusive→inclusive ends, stale
+        // part truncation, disk-truth resume).
+        let payload: Vec<u8> = (0..(16 * 1024 * 1024)).map(|i| (i % 251) as u8).collect();
+        let addr = spawn_slow_range_server(std::sync::Arc::new(payload.clone()), 16 * 1024, 4);
+        let url = format!("http://{addr}/rebuild.zip");
+        let dir = std::env::temp_dir().join(format!("nova_test_rebuild_{}", std::process::id()));
+        let out = dir.join("rebuild.zip");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let state = std::sync::Arc::new(crate::daemon::persist::tests::test_state(
+            &dir.to_string_lossy(),
+        ));
+        let id = "rebuild-test";
+        let body = download_body(&url, "rebuild.zip", payload.len() as u64, 2);
+        let mut direct_options = std::collections::HashMap::new();
+        direct_options.insert(
+            "adaptiveEvalMs".to_string(),
+            serde_json::Value::from(100u64),
+        );
+        // Shorten the rebuild debounce so the first geometry change happens
+        // mid-transfer instead of being swallowed by the 10s default.
+        direct_options.insert(
+            "adaptiveRebuildMs".to_string(),
+            serde_json::Value::from(100u64),
+        );
+        let mut job = task_from_body(
+            &body,
+            id,
+            "rebuild.zip".to_string(),
+            &out,
+            direct_options,
+            Vec::new(),
+        );
+        job.task.connections = 2;
+        {
+            let mut jobs = state.curl_jobs.lock().unwrap();
+            jobs.insert(id.to_string(), job);
+        }
+        state.mark_dirty();
+
+        let st = state.clone();
+        std::thread::spawn(move || start_curl_process(&st, id));
+
+        // Watch the engine live while the transfer runs: the segment count
+        // must grow beyond the initial 2 (proof a rebuild actually happened).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        let mut max_segments = 2usize;
+        let task = loop {
+            if let Ok(trackers) = state.engine_trackers.read() {
+                if let Some(tracker) = trackers.get(id) {
+                    if let Ok(guard) = tracker.adaptive_engine.lock() {
+                        if let Some(engine) = guard.as_ref() {
+                            max_segments = max_segments.max(engine.segment_ctrl.segment_count());
+                        }
+                    }
+                }
+            }
+            let task = {
+                let jobs = state.curl_jobs.lock().unwrap();
+                jobs.get(id).map(|j| j.task.clone()).unwrap()
+            };
+            match task.status.as_str() {
+                "completed" => break task,
+                "error" => panic!("task failed: {:?}", task.error_message),
+                _ => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "timed out (downloaded={}, size={})",
+                        task.downloaded_bytes,
+                        task.size_bytes
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+            }
+        };
+        assert_eq!(task.status, "completed");
+        assert!(
+            max_segments > 2,
+            "adaptive engine never rebuilt geometry mid-transfer (max segments {max_segments})"
+        );
+        let written = std::fs::read(&out).unwrap();
+        assert_eq!(
+            written.len(),
+            payload.len(),
+            "post-rebuild merge length mismatch (len={}, expected={})",
+            written.len(),
+            payload.len()
+        );
+        if written != payload {
+            let first_diff = written
+                .iter()
+                .zip(payload.iter())
+                .position(|(a, b)| a != b)
+                .unwrap_or(usize::MAX);
+            assert_eq!(
+                written, payload,
+                "post-rebuild merge is corrupt (first diff at byte {first_diff})"
+            );
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

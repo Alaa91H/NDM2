@@ -175,6 +175,10 @@ pub struct CurlTransferConfig {
     pub adaptive: bool,
     /// Adaptive engine evaluation interval in milliseconds.
     pub adaptive_eval_ms: Option<u64>,
+    /// Minimum delay between adaptive geometry rebuilds in milliseconds.
+    /// Defaults to 10_000 (10s) to prevent oscillation; tests set a small
+    /// value (e.g. 100) so a real split/merge rebuild happens mid-transfer.
+    pub adaptive_rebuild_ms: Option<u64>,
 }
 
 impl Default for CurlTransferConfig {
@@ -747,6 +751,9 @@ impl From<&HashMap<String, Value>> for CurlTransferConfig {
                 .unwrap_or(true),
             adaptive_eval_ms: map
                 .get("adaptiveEvalMs")
+                .and_then(serde_json::Value::as_u64),
+            adaptive_rebuild_ms: map
+                .get("adaptiveRebuildMs")
                 .and_then(serde_json::Value::as_u64),
         }
     }

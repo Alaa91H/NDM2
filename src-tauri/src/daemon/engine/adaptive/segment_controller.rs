@@ -97,6 +97,37 @@ impl SegmentController {
         }
     }
 
+    /// Replace the controller's geometry with the exact plan the transfer
+    /// planner created for the part files on disk (same ids and byte
+    /// ranges). The default constructor seeds a single whole-file segment,
+    /// but a segmented transfer writes N part files with ids 0..N-1; if the
+    /// engine's ids/ranges do not match, per-segment progress updates for
+    /// ids > 0 are silently dropped and the first adaptive rebuild produces
+    /// a geometry that does not correspond to the files on disk — the root
+    /// cause of post-rebuild corruption. Seeding from the plan keeps engine
+    /// ids/ranges ≡ part files on disk, so progress lands on the right
+    /// segments and rebuilds resume/merge from the true geometry.
+    pub fn seed_from_ranges(&mut self, total_size: u64, ranges: &[(u32, u64, u64)]) {
+        let now = Instant::now();
+        self.total_size = total_size;
+        self.segments = ranges
+            .iter()
+            .map(|&(id, start, end_inclusive)| LiveSegment {
+                id,
+                start_byte: start,
+                end_byte: end_inclusive.saturating_add(1),
+                downloaded: 0,
+                speed: 0,
+                assigned_connection: None,
+                state: SegmentState::Active,
+                created_at: now,
+                last_progress_at: now,
+                stall_since: None,
+                truncate_on_complete: false,
+            })
+            .collect();
+    }
+
     pub fn with_profile(total_size: u64, profile: &ServerProfile) -> Self {
         let min_seg = Self::compute_min_segment(total_size, profile);
         let stall_ms = if profile.p95_rtt_us > 0 {
