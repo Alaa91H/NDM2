@@ -1,4 +1,4 @@
-import { Candidate } from '../contracts/candidate.schema';
+import { type Candidate } from '../contracts/candidate.schema';
 import {
   MAX_CANDIDATE_SUBTITLES,
   MAX_CANDIDATE_URL_CHARS,

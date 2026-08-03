@@ -1,4 +1,4 @@
-import { Candidate } from '../contracts/candidate.schema';
+import { type Candidate } from '../contracts/candidate.schema';
 
 export interface BridgeGateway {
   sendCandidateNow(candidate: Candidate, idempotencyKey: string): Promise<unknown>;

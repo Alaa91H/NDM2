@@ -1,4 +1,4 @@
-import { Candidate } from '../contracts/candidate.schema';
+import { type Candidate } from '../contracts/candidate.schema';
 import { classifyByUrl, mediaTypeFromMime } from './mime-detector';
 
 export function classifyCandidate(c: Candidate): Candidate {

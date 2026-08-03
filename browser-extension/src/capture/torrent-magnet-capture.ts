@@ -1,7 +1,7 @@
-import { Candidate } from '../contracts/candidate.schema';
+import { type Candidate } from '../contracts/candidate.schema';
 import { extensionOf } from '../utils/url';
-import { CaptureContext } from './capture-context';
-import { CapturePlugin } from './capture-plugin';
+import { type CaptureContext } from './capture-context';
+import { type CapturePlugin } from './capture-plugin';
 
 const TORRENT_RE = /(magnet:\?xt=urn:btih:[^"'\s<]+|https?:\/\/[^"'\s<]+\.torrent(?:\?[^"'\s<]*)?)/gi;
 

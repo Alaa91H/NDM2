@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { NovaExtensionError, parseErrorBody, toNovaExtensionError } from '../core/error-classification';
-import { Transport } from './transport';
+import { type Transport } from './transport';
 import { DEFAULT_NOVA_LOOPBACK_HTTP_URL, buildNovaLoopbackHttpUrl, novaBaseUrlForPort } from './loopback-url-policy';
 import { encodeJsonPayloadWithBudget, readJsonResponseWithBudget } from '../security/transport-payload-budget';
 

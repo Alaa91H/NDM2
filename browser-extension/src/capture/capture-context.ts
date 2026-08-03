@@ -1,5 +1,5 @@
-import { Candidate } from '../contracts/candidate.schema';
-import { ContentScanResponse } from '../contracts/messages.schema';
+import { type Candidate } from '../contracts/candidate.schema';
+import { type ContentScanResponse } from '../contracts/messages.schema';
 
 export type NetworkCaptureEntry = {
   url: string;

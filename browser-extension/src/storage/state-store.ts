@@ -1,4 +1,4 @@
-import { BridgeState, BridgeStateSchema, initialBridgeState } from '../core/app-state';
+import { type BridgeState, BridgeStateSchema, initialBridgeState } from '../core/app-state';
 import { StorageRepository } from './storage-repository';
 
 export class StateStore {

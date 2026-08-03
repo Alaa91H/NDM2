@@ -1,5 +1,5 @@
 import React from 'react';
-import { Candidate } from '../../contracts/candidate.schema';
+import { type Candidate } from '../../contracts/candidate.schema';
 import { redactString } from '../../security/redaction';
 import { useI18n } from '../../i18n/react';
 import type { TranslateFunction } from '../../i18n';

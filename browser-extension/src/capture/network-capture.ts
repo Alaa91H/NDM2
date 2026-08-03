@@ -1,8 +1,8 @@
-import { Candidate } from '../contracts/candidate.schema';
+import { type Candidate } from '../contracts/candidate.schema';
 import { classifyByUrl, mediaTypeFromMime } from '../pipeline/mime-detector';
 import { extensionOf } from '../utils/url';
-import { CaptureContext, NetworkCaptureEntry } from './capture-context';
-import { CapturePlugin } from './capture-plugin';
+import { type CaptureContext, type NetworkCaptureEntry } from './capture-context';
+import { type CapturePlugin } from './capture-plugin';
 import { networkHeaderEvidence, contentDispositionEvidence, redirectEvidence } from '../pipeline/evidence';
 
 const CONTENT_RANGE_RE = /bytes\s+(\d+)-(\d+)\/(\d+|\*)/i;

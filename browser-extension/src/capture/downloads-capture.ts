@@ -1,8 +1,8 @@
-import { Candidate } from '../contracts/candidate.schema';
+import { type Candidate } from '../contracts/candidate.schema';
 import { classifyByUrl, mediaTypeFromMime } from '../pipeline/mime-detector';
 import { extensionOf } from '../utils/url';
-import { CaptureContext, DownloadCaptureEntry } from './capture-context';
-import { CapturePlugin } from './capture-plugin';
+import { type CaptureContext, type DownloadCaptureEntry } from './capture-context';
+import { type CapturePlugin } from './capture-plugin';
 import { downloadsApiEvidence } from '../pipeline/evidence';
 
 export class DownloadsCapturePlugin implements CapturePlugin {

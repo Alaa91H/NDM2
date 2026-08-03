@@ -1,4 +1,4 @@
-import { PlatformAdapter, PlatformMediaResult } from './base-platform-adapter';
+import { PlatformAdapter, type PlatformMediaResult } from './base-platform-adapter';
 import type { Candidate } from '../contracts/candidate.schema';
 import type { ContentScanResponse } from '../contracts/messages.schema';
 

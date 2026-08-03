@@ -1,5 +1,5 @@
-import { Candidate, CandidateSchema } from '../contracts/candidate.schema';
-import { HandoffJob, HandoffJobSchema } from './handoff-job';
+import { type Candidate, CandidateSchema } from '../contracts/candidate.schema';
+import { type HandoffJob, HandoffJobSchema } from './handoff-job';
 import { idempotencyKeyFor } from './idempotency';
 import { assertHandoffPayloadBudget } from '../security/payload-budget';
 import { OutboxStore } from './outbox-store';

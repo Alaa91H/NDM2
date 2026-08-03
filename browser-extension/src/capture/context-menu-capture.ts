@@ -1,9 +1,9 @@
 import { contextMenuEvidence } from '../pipeline/evidence';
-import { Candidate } from '../contracts/candidate.schema';
+import { type Candidate } from '../contracts/candidate.schema';
 import { classifyByUrl } from '../pipeline/mime-detector';
 import { extensionOf } from '../utils/url';
-import { CaptureContext } from './capture-context';
-import { CapturePlugin } from './capture-plugin';
+import { type CaptureContext } from './capture-context';
+import { type CapturePlugin } from './capture-plugin';
 
 export class ContextMenuCapturePlugin implements CapturePlugin {
   id = 'context-menu-capture';

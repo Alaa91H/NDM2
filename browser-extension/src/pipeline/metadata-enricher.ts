@@ -1,4 +1,4 @@
-import { Candidate } from '../contracts/candidate.schema';
+import { type Candidate } from '../contracts/candidate.schema';
 import { filenameFromContentDisposition, filenameFromUrl } from './filename-extractor';
 import { sizeFromHeaders } from './size-detector';
 import { classifyCandidate } from './classifier';

@@ -1,4 +1,4 @@
-import { Candidate } from '../contracts/candidate.schema';
+import { type Candidate } from '../contracts/candidate.schema';
 import { calculateCandidateScore, confidenceLevelOf } from './evidence';
 
 /**

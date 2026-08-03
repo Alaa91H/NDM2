@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AnalyzeFormat, AnalyzeResponse } from '../../contracts/nova.protocol.v4';
+import { type AnalyzeFormat, type AnalyzeResponse } from '../../contracts/nova.protocol.v4';
 import { formatFileSize } from '../../pipeline/quality-detector';
 import { Download, AlertCircle } from 'lucide-react';
 

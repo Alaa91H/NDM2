@@ -1,4 +1,4 @@
-import { Candidate, CandidateSchema } from '../contracts/candidate.schema';
+import { type Candidate, CandidateSchema } from '../contracts/candidate.schema';
 import { MetadataEnricher } from '../pipeline/metadata-enricher';
 import { dedupeCandidates } from '../pipeline/dedupe';
 import { DomLinkCapturePlugin } from './dom-capture';
@@ -13,8 +13,8 @@ import { TorrentMagnetCapturePlugin } from './torrent-magnet-capture';
 import { ContextMenuCapturePlugin } from './context-menu-capture';
 import { WebSocketWebRtcCapturePlugin } from './websocket-webrtc-capture';
 import { PlatformCapturePlugin } from '../platforms/platform-capture-plugin';
-import { CaptureContext } from './capture-context';
-import { CapturePlugin } from './capture-plugin';
+import { type CaptureContext } from './capture-context';
+import { type CapturePlugin } from './capture-plugin';
 import { RuleEngine } from '../rules/rule-engine';
 import { SettingsStore } from '../storage/settings-store';
 import { SiteRulesStore } from '../storage/site-rules-store';

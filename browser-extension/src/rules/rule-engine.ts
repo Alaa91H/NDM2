@@ -1,5 +1,5 @@
-import { Candidate } from '../contracts/candidate.schema';
-import { SiteRule } from './site-rules';
+import { type Candidate } from '../contracts/candidate.schema';
+import { type SiteRule } from './site-rules';
 
 export class RuleEngine {
   constructor(private readonly rules: SiteRule[] = []) {}

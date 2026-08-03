@@ -1,9 +1,9 @@
 import React from 'react';
-import { Candidate } from '../../contracts/candidate.schema';
+import { type Candidate } from '../../contracts/candidate.schema';
 import { handoffPolicyDecision } from '../../security/handoff-policy';
 import { capabilitiesForCandidate } from '../../contracts/capabilities.schema';
 import { formatFileSize, formatDuration, qualityBadge } from '../../pipeline/quality-detector';
-import { BridgeState } from '../../core/app-state';
+import { type BridgeState } from '../../core/app-state';
 import { Download, Send, Search } from 'lucide-react';
 
 function mediaIcon(type: Candidate['mediaType']): string {

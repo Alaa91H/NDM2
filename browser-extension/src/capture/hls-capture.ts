@@ -1,8 +1,8 @@
 import { hlsManifestEvidence } from '../pipeline/evidence';
 import { Parser as M3u8Parser } from 'm3u8-parser';
-import { Candidate, VariantSchema } from '../contracts/candidate.schema';
-import { CaptureContext } from './capture-context';
-import { CapturePlugin } from './capture-plugin';
+import { type Candidate, VariantSchema } from '../contracts/candidate.schema';
+import { type CaptureContext } from './capture-context';
+import { type CapturePlugin } from './capture-plugin';
 import { collectEmbeddedMediaUrls } from './embedded-media-capture';
 import { detectDrmIndicatorsFromManifestText, drmInfoFromIndicators } from '../security/drm-guard';
 

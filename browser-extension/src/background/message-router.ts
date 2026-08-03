@@ -1,7 +1,7 @@
 import browser from 'webextension-polyfill';
 import { bridgeManager } from '../bridge/bridge-manager';
 import { CandidatePipeline } from '../capture/candidate-pipeline';
-import { RuntimeMessage, RuntimeMessageSchema, SiteRulesImportSchema } from '../contracts/messages.schema';
+import { type RuntimeMessage, RuntimeMessageSchema, SiteRulesImportSchema } from '../contracts/messages.schema';
 import { AGGRESSIVE_MAX_SCAN_HTML_CHARS, AGGRESSIVE_MAX_SCAN_JSON_LD_ITEMS, AGGRESSIVE_MAX_SCAN_JSON_LD_SCRIPT_CHARS, AGGRESSIVE_MAX_SCAN_JSON_LD_TOTAL_CHARS, AGGRESSIVE_MAX_SCAN_LINKS, AGGRESSIVE_MAX_SCAN_MEDIA, AGGRESSIVE_MAX_SCAN_OPEN_GRAPH, AGGRESSIVE_MAX_SCAN_REQUESTS_PER_TAB_PER_MINUTE, IDEMPOTENCY_SCHEMA_VERSION, MAX_CANDIDATES_PER_TAB, MAX_CANDIDATE_CACHE_BYTES_PER_TAB, MAX_DIAGNOSTICS_EXPORT_BYTES, MAX_EVENT_MESSAGE_BYTES, MAX_EVENT_PARSE_ERRORS_PER_CONNECTION, MAX_HANDOFF_CANDIDATES, MAX_HANDOFF_PAYLOAD_BYTES, MAX_HTTP_REQUEST_PAYLOAD_BYTES, MAX_HTTP_RESPONSE_BYTES, MAX_NATIVE_MESSAGE_BYTES, MAX_OUTBOX_JOBS, MAX_SCAN_HTML_CHARS, MAX_SCAN_JSON_LD_ITEMS, MAX_SCAN_JSON_LD_SCRIPT_CHARS, MAX_SCAN_JSON_LD_TOTAL_CHARS, MAX_SCAN_LINKS, MAX_SCAN_MEDIA, MAX_SCAN_OPEN_GRAPH, MAX_SCAN_REQUESTS_PER_TAB_PER_MINUTE, MAX_SETTINGS_IMPORT_BYTES, MAX_SITE_RULES, MAX_SITE_RULES_IMPORT_BYTES, MAX_SSE_BUFFER_BYTES, MAX_RUNTIME_MESSAGE_BYTES, MAX_TASK_ID_CHARS, OUTBOX_DEAD_LETTER_RETENTION_DAYS, OUTBOX_SENT_RETENTION_DAYS } from '../contracts/limits';
 import { SettingsSchema } from '../contracts/settings.schema';
 import { ListTasksResponseSchema } from '../contracts/runtime-response.schema';
@@ -22,7 +22,7 @@ import { redact } from '../security/redaction';
 import { updateBadge } from './badge';
 import { getActiveTabId, scanTab } from './tab-scanner';
 import { platformRegistry } from '../platforms/platform-registry';
-import { assertScanRateLimit, assertUserActivatedScan, RuntimeMessageSenderLike } from '../security/page-scan-policy';
+import { assertScanRateLimit, assertUserActivatedScan, type RuntimeMessageSenderLike } from '../security/page-scan-policy';
 import { assertRuntimeMessageAllowed } from '../security/runtime-message-policy';
 import { assertStorageBudget } from '../security/storage-budget';
 import { catchAndLog } from '../core/safe-catch';

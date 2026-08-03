@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { Candidate } from '../../contracts/candidate.schema';
+import { type Candidate } from '../../contracts/candidate.schema';
 import { RuleEngine } from '../../rules/rule-engine';
-import { createDefaultSiteRule, SiteRule } from '../../rules/site-rules';
+import { createDefaultSiteRule, type SiteRule } from '../../rules/site-rules';
 
 const baseCandidate: Candidate = {
   id: 'c1',

@@ -1,4 +1,4 @@
-import { NovaEvent, NovaEventSchema } from '../contracts/events.schema';
+import { type NovaEvent, NovaEventSchema } from '../contracts/events.schema';
 import { MAX_EVENT_MESSAGE_BYTES, MAX_EVENT_PARSE_ERRORS_PER_CONNECTION, MAX_SSE_BUFFER_BYTES } from '../contracts/limits';
 import { NovaExtensionError } from '../core/error-classification';
 import { byteLength } from '../utils/text';

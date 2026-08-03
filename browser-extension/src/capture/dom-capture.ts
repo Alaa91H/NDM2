@@ -1,10 +1,10 @@
-import { Candidate } from '../contracts/candidate.schema';
-import { ContentLinkSnapshot } from '../contracts/messages.schema';
+import { type Candidate } from '../contracts/candidate.schema';
+import { type ContentLinkSnapshot } from '../contracts/messages.schema';
 import { classifyByUrl } from '../pipeline/mime-detector';
 import { extensionOf, safeAbsoluteUrl } from '../utils/url';
-import { CaptureContext } from './capture-context';
+import { type CaptureContext } from './capture-context';
 import { domLinkEvidence } from '../pipeline/evidence';
-import { CapturePlugin } from './capture-plugin';
+import { type CapturePlugin } from './capture-plugin';
 
 const ATTR_RE = /\b(?:href|src|data-src|data-href|data-file|data-media|data-video|data-stream|poster|data-url|data-download)=['"]([^'"]+)['"]/gi;
 const DOWNLOAD_ATTR_RE = /<a\b[^>]*\bdownload(?:=['"]?([^'"\s>]+)['"]?)?[^>]*\bhref=['"]([^'"]+)['"][^>]*>/gi;

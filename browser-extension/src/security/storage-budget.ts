@@ -1,4 +1,4 @@
-import { Candidate } from '../contracts/candidate.schema';
+import { type Candidate } from '../contracts/candidate.schema';
 import {
   MAX_CANDIDATE_CACHE_BYTES_PER_TAB,
   MAX_CANDIDATE_METADATA_BYTES,

@@ -1,4 +1,4 @@
-import { ErrorCode, ErrorCodeSchema } from '../contracts/errors.schema';
+import { type ErrorCode, ErrorCodeSchema } from '../contracts/errors.schema';
 
 export type ErrorLikeBody = {
   code?: unknown;

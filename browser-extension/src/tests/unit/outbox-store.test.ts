@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { OutboxStore } from '../../outbox/outbox-store';
-import { HandoffJob } from '../../outbox/handoff-job';
+import { type HandoffJob } from '../../outbox/handoff-job';
 
 function job(overrides: Partial<HandoffJob> = {}): HandoffJob {
   // Use a current timestamp so terminal (sent/dead-letter) jobs are not purged by

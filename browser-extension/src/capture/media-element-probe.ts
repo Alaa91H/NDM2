@@ -1,6 +1,6 @@
-import { Candidate } from '../contracts/candidate.schema';
-import { CaptureContext } from './capture-context';
-import { CapturePlugin } from './capture-plugin';
+import { type Candidate } from '../contracts/candidate.schema';
+import { type CaptureContext } from './capture-context';
+import { type CapturePlugin } from './capture-plugin';
 import { extensionOf } from '../utils/url';
 
 export class MediaElementProbePlugin implements CapturePlugin {

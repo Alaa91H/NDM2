@@ -1,5 +1,5 @@
 import type { BridgeGateway } from '../core/bridge-gateway';
-import { Candidate, CandidateSchema } from '../contracts/candidate.schema';
+import { type Candidate, CandidateSchema } from '../contracts/candidate.schema';
 import { errorMessage, isRetryableHandoffError } from '../core/error-classification';
 import { OutboxStore } from './outbox-store';
 

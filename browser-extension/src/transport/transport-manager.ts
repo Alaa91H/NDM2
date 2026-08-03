@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { NativeTransport } from './native-transport';
-import { HttpTransport, HttpTransportOptions } from './http-transport';
+import { HttpTransport, type HttpTransportOptions } from './http-transport';
 import { SseTransport } from './sse-transport';
 import { WebSocketTransport } from './websocket-transport';
 

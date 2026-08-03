@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { NativeRequestSchema, NativeResponseSchema } from '../contracts/nova.protocol.v4';
 import { NovaExtensionError, parseErrorBody, toNovaExtensionError } from '../core/error-classification';
 import { assertNativeMessageBudget } from '../security/transport-payload-budget';
-import { Transport } from './transport';
+import { type Transport } from './transport';
 
 /** sendNativeMessage has no built-in timeout: a hung or slow-starting host
  *  would otherwise stall discovery (and with it the whole connect flow)

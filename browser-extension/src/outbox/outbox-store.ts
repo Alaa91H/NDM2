@@ -1,7 +1,7 @@
-import Dexie, { Table } from 'dexie';
+import Dexie, { type Table } from 'dexie';
 import { MAX_OUTBOX_JOBS, OUTBOX_DEAD_LETTER_RETENTION_DAYS, OUTBOX_SENT_RETENTION_DAYS } from '../contracts/limits';
 import { NovaExtensionError } from '../core/error-classification';
-import { HandoffJob } from './handoff-job';
+import { type HandoffJob } from './handoff-job';
 
 class OutboxDb extends Dexie {
   jobs!: Table<HandoffJob, string>;

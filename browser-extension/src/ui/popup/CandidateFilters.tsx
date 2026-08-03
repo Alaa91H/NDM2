@@ -1,5 +1,5 @@
 import React from 'react';
-import { Candidate } from '../../contracts/candidate.schema';
+import { type Candidate } from '../../contracts/candidate.schema';
 import { useI18n } from '../../i18n/react';
 
 type Filter = Candidate['mediaType'] | 'all';

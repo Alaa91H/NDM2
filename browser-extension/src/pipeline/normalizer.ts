@@ -1,4 +1,4 @@
-import { Candidate } from '../contracts/candidate.schema';
+import { type Candidate } from '../contracts/candidate.schema';
 import { normalizeUrl, extensionOf } from '../utils/url';
 
 export function normalizeCandidate(c: Candidate): Candidate {

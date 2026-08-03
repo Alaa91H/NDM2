@@ -1,4 +1,4 @@
-import { Candidate } from '../contracts/candidate.schema';
+import { type Candidate } from '../contracts/candidate.schema';
 import { mergeEvidence } from './evidence';
 import { normalizeUrl } from '../utils/url';
 

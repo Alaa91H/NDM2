@@ -1,4 +1,4 @@
-import { defaultSettings, Settings, SettingsSchema } from '../contracts/settings.schema';
+import { defaultSettings, type Settings, SettingsSchema } from '../contracts/settings.schema';
 import { StorageRepository } from './storage-repository';
 
 const SETTINGS_KEY = 'nova.settings';

@@ -1,8 +1,8 @@
-import { Candidate } from '../contracts/candidate.schema';
+import { type Candidate } from '../contracts/candidate.schema';
 import { classifyByUrl } from '../pipeline/mime-detector';
 import { extensionOf } from '../utils/url';
-import { CaptureContext } from './capture-context';
-import { CapturePlugin } from './capture-plugin';
+import { type CaptureContext } from './capture-context';
+import { type CapturePlugin } from './capture-plugin';
 import { openGraphEvidence } from '../pipeline/evidence';
 
 const OG_RE = /<meta\s+[^>]*(?:property|name)=['"]og:(video|audio|image)(?::url)?['"][^>]*content=['"]([^'"]+)['"][^>]*>/gi;

@@ -1,5 +1,5 @@
 import { IDEMPOTENCY_SCHEMA_VERSION } from '../contracts/limits';
-import { Candidate } from '../contracts/candidate.schema';
+import { type Candidate } from '../contracts/candidate.schema';
 import { normalizeUrl } from '../utils/url';
 
 type CanonicalCandidate = {

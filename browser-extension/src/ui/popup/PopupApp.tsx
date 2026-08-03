@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState, useMemo, useRef } from 'react';
-import { BridgeState } from '../../core/app-state';
-import { Candidate } from '../../contracts/candidate.schema';
+import { type BridgeState } from '../../core/app-state';
+import { type Candidate } from '../../contracts/candidate.schema';
 import { MAX_HANDOFF_CANDIDATES } from '../../contracts/limits';
 import { handoffPolicyDecision } from '../../security/handoff-policy';
 import { capabilitiesForCandidate } from '../../contracts/capabilities.schema';
@@ -9,10 +9,10 @@ import { X, Download, ChevronUp, List, Table2, Loader2 } from 'lucide-react';
 import { messageFromError, runtimeRequest } from '../runtime-request';
 import CandidateList from './CandidateList';
 import CandidateFilters from './CandidateFilters';
-import { QualityTable, StreamQualityItem } from './QualityTable';
+import { QualityTable, type StreamQualityItem } from './QualityTable';
 import DenseCandidateList from './DenseCandidateList';
 import { AnalyzeResultPanel } from './AnalyzeResultPanel';
-import { AnalyzeResponse } from '../../contracts/nova.protocol.v4';
+import { type AnalyzeResponse } from '../../contracts/nova.protocol.v4';
 
 type Notice = { kind: 'info' | 'error' | 'success'; message: string };
 type CandidateFilter = Candidate['mediaType'] | 'all';

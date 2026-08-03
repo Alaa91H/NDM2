@@ -27,7 +27,7 @@ const harness = vi.hoisted(() => {
 vi.mock('webextension-polyfill', () => ({ default: harness.browser }));
 
 import { BridgeManager } from '../../bridge/bridge-manager';
-import { BridgeState, initialBridgeState } from '../../core/app-state';
+import { type BridgeState, initialBridgeState } from '../../core/app-state';
 
 function fakeStateStore() {
   let state: BridgeState = initialBridgeState;

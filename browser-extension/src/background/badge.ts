@@ -1,5 +1,5 @@
 import browser from 'webextension-polyfill';
-import { BridgeState } from '../core/app-state';
+import { type BridgeState } from '../core/app-state';
 import { SettingsStore } from '../storage/settings-store';
 
 export async function updateBadge(state: BridgeState): Promise<void> {

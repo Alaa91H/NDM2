@@ -1,7 +1,7 @@
 import browser from 'webextension-polyfill';
 import { z } from 'zod';
-import { BridgeState, initialBridgeState } from '../core/app-state';
-import { BridgeGateway } from '../core/bridge-gateway';
+import { type BridgeState, initialBridgeState } from '../core/app-state';
+import { type BridgeGateway } from '../core/bridge-gateway';
 import { Logger } from '../core/logger';
 import { SingleFlight } from '../core/single-flight';
 import { isAuthError, toNovaExtensionError } from '../core/error-classification';
@@ -26,8 +26,8 @@ import {
   type YtdlpProbeResponse,
   type AnalyzeResponse,
 } from '../contracts/nova.protocol.v4';
-import { Candidate } from '../contracts/candidate.schema';
-import { NovaEvent } from '../contracts/events.schema';
+import { type Candidate } from '../contracts/candidate.schema';
+import { type NovaEvent } from '../contracts/events.schema';
 import { OutboxService } from '../outbox/outbox-service';
 import { OutboxStore } from '../outbox/outbox-store';
 import { OutboxRetryWorker } from '../outbox/retry-worker';

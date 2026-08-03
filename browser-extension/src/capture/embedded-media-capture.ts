@@ -1,8 +1,8 @@
-import { Candidate } from '../contracts/candidate.schema';
+import { type Candidate } from '../contracts/candidate.schema';
 import { classifyByUrl } from '../pipeline/mime-detector';
 import { extensionOf, safeAbsoluteUrl } from '../utils/url';
-import { CaptureContext } from './capture-context';
-import { CapturePlugin } from './capture-plugin';
+import { type CaptureContext } from './capture-context';
+import { type CapturePlugin } from './capture-plugin';
 
 const EMBEDDED_MEDIA_EXTENSIONS = [
   'm3u8',
