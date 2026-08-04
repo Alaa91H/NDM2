@@ -1,5 +1,5 @@
 /* src/pages/BatchImportPage.tsx */
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { ArrowLeft, Layers, Clipboard, AlertCircle, Sliders } from 'lucide-react';
 import {
   useDialogActions,
@@ -12,7 +12,9 @@ import {
 } from '../store/selectors';
 import { Button, SelectField, TextField } from '../components/primitives';
 import { readClipboardText } from '../utils/clipboard';
-import { expandUrlList } from '../utils/urlPatternExpander';
+import { expandUrlList, countUrlList, MAX_EXPANDED_URLS } from '../utils/urlPatternExpander';
+
+const TOO_MANY_URLS_MESSAGE = `Too many URLs — reduce the range size or number of lines (max ${String(MAX_EXPANDED_URLS)}).`;
 import { useEngineCapabilities } from '../capabilities/EngineCapabilityContext';
 
 export const BatchImportPage: React.FC = () => {
@@ -26,6 +28,18 @@ export const BatchImportPage: React.FC = () => {
   const engineCapabilities = useEngineCapabilities();
 
   const [inputText, setInputText] = useState('');
+
+  // Expansion is capped (see urlPatternExpander) — memoize and surface overflow
+  // as a hint instead of re-running on every render and crashing the page. The
+  // count-only API avoids materializing every URL on each keystroke.
+  const expansionPreview = useMemo(() => {
+    if (!inputText.includes('[')) return null;
+    try {
+      return { count: countUrlList(inputText), overflow: false };
+    } catch {
+      return { count: 0, overflow: true };
+    }
+  }, [inputText]);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [queueId, setQueueId] = useState('main');
   const [saveDirectory, setSaveDirectory] = useState(
@@ -61,7 +75,13 @@ export const BatchImportPage: React.FC = () => {
 
   const handleImport = () => {
     // Expand URL patterns (e.g. file[1-10].zip → file1.zip … file10.zip)
-    const expandedUrls = expandUrlList(inputText);
+    let expandedUrls: string[];
+    try {
+      expandedUrls = expandUrlList(inputText);
+    } catch {
+      addToast('error', t('toast_error_title'), TOO_MANY_URLS_MESSAGE);
+      return;
+    }
     const urls = expandedUrls.filter((line) => engineCapabilities.supportsDirectProtocol(line));
 
     if (!engineCapabilities.directReady) {
@@ -183,11 +203,14 @@ export const BatchImportPage: React.FC = () => {
               className="w-full bg-[var(--bg-input)] border border-[var(--border-color)] rounded-lg p-3 text-xs font-mono transition-all focus:border-[var(--accent-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--accent-primary)] text-left"
               style={{ direction: 'ltr' }}
             />
-            {inputText.includes('[') && (
-              <div className="text-[10px] text-[var(--accent-primary)] font-bold pt-1">
-                Pattern detected: {expandUrlList(inputText).length} URLs will be generated
-              </div>
-            )}
+            {expansionPreview &&
+              (expansionPreview.overflow ? (
+                <div className="text-[10px] text-[var(--warning)] font-bold pt-1">{TOO_MANY_URLS_MESSAGE}</div>
+              ) : (
+                <div className="text-[10px] text-[var(--accent-primary)] font-bold pt-1">
+                  Pattern detected: {expansionPreview.count} URLs will be generated
+                </div>
+              ))}
           </div>
 
           {showAdvanced && (

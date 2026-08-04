@@ -70,11 +70,7 @@ function formatBackendMs(ms: number): string {
   return `${hh}:${mm}:${ss}.${mmm}`;
 }
 
-export const LoggingSettings: React.FC<Props> = ({
-  settings,
-  updateSetting,
-  onAddToast,
-}) => {
+export const LoggingSettings: React.FC<Props> = ({ settings, updateSetting, onAddToast }) => {
   const t = useI18n();
   const [source, setSource] = useState<LogSource>('frontend');
   const [logs, setLogs] = useState(() => logger.getBufferSlice(undefined, undefined, 300));
@@ -101,11 +97,7 @@ export const LoggingSettings: React.FC<Props> = ({
   const [taskTrace, setTaskTrace] = useState<BackendTaskTrace | null>(null);
 
   const refreshLogs = useCallback(() => {
-    const filtered = logger.getBufferSlice(
-      filterLevel || undefined,
-      filterSource || undefined,
-      500,
-    );
+    const filtered = logger.getBufferSlice(filterLevel || undefined, filterSource || undefined, 500);
     setLogs(filtered);
   }, [filterLevel, filterSource]);
 
@@ -349,9 +341,7 @@ export const LoggingSettings: React.FC<Props> = ({
           />
         </FormRow>
 
-        <p className="text-[10px] text-[var(--text-muted)] leading-relaxed -mt-1">
-          {t('settings_logging_desc')}
-        </p>
+        <p className="text-[10px] text-[var(--text-muted)] leading-relaxed -mt-1">{t('settings_logging_desc')}</p>
 
         {settings.advanced.loggingEnabled && (
           <div className="space-y-2 animate-in fade-in duration-150">
@@ -478,21 +468,15 @@ export const LoggingSettings: React.FC<Props> = ({
                   Daemon logs unavailable: {backendError}
                 </div>
               )}
-              {source === 'backend' &&
-                filteredBackendLogs.length === 0 &&
-                !backendError && (
-                  <div className="p-4 text-center text-[var(--text-muted)] italic">
-                    {t('settings_logging_empty')}
-                  </div>
-                )}
+              {source === 'backend' && filteredBackendLogs.length === 0 && !backendError && (
+                <div className="p-4 text-center text-[var(--text-muted)] italic">{t('settings_logging_empty')}</div>
+              )}
               {source === 'backend' &&
                 filteredBackendLogs.map((entry, idx) => {
                   const full = `${entry.message} ${renderContext(entry)}`;
                   const isExpanded = expandedMessages.has(idx);
                   const needsTruncation = full.length > TRUNCATE_LENGTH;
-                  const displayMessage = needsTruncation && !isExpanded
-                    ? full.slice(0, TRUNCATE_LENGTH) + '...'
-                    : full;
+                  const displayMessage = needsTruncation && !isExpanded ? full.slice(0, TRUNCATE_LENGTH) + '...' : full;
 
                   return (
                     <div
@@ -526,19 +510,15 @@ export const LoggingSettings: React.FC<Props> = ({
                   );
                 })}
 
-              {source === 'frontend' &&
-                filteredLogs.length === 0 && (
-                  <div className="p-4 text-center text-[var(--text-muted)] italic">
-                    {t('settings_logging_empty')}
-                  </div>
-                )}
+              {source === 'frontend' && filteredLogs.length === 0 && (
+                <div className="p-4 text-center text-[var(--text-muted)] italic">{t('settings_logging_empty')}</div>
+              )}
               {source === 'frontend' &&
                 filteredLogs.map((entry, idx) => {
                   const isExpanded = expandedMessages.has(idx);
                   const needsTruncation = entry.message.length > TRUNCATE_LENGTH;
-                  const displayMessage = needsTruncation && !isExpanded
-                    ? entry.message.slice(0, TRUNCATE_LENGTH) + '...'
-                    : entry.message;
+                  const displayMessage =
+                    needsTruncation && !isExpanded ? entry.message.slice(0, TRUNCATE_LENGTH) + '...' : entry.message;
 
                   return (
                     <div
@@ -575,242 +555,234 @@ export const LoggingSettings: React.FC<Props> = ({
                     <FileSearch className="w-4 h-4 text-[var(--info)]" />
                     <h4 className="text-[10px] font-extrabold text-[var(--info)]">Log files (daemon)</h4>
                   </div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <select
-                    value={logFileName}
-                    onChange={(e) => {
-                      setLogFileName(e.target.value);
-                    }}
-                    className="bg-[var(--bg-input)] border border-[var(--border-color)] rounded px-2 py-1 text-[10px] font-bold text-[var(--text-primary)] cursor-pointer max-w-[220px]"
-                  >
-                    {!logFile || logFile.files.length === 0 ? (
-                      <option value="">nova.log</option>
-                    ) : (
-                      logFile.files.map((f) => (
-                        <option key={f} value={f}>
-                          {f}
-                        </option>
-                      ))
-                    )}
-                  </select>
-                  <input
-                    value={grepText}
-                    onChange={(e) => {
-                      setGrepText(e.target.value);
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') void loadLogFile();
-                    }}
-                    placeholder="Grep (substring, e.g. ERROR-PATH)"
-                    className="bg-[var(--bg-input)] border border-[var(--border-color)] rounded px-2 py-1 text-[10px] font-mono text-[var(--text-primary)] placeholder:text-[var(--text-muted)] w-44"
-                    style={{ direction: 'ltr' }}
-                  />
-                  <select
-                    value={fileContext}
-                    onChange={(e) => {
-                      setFileContext(Number(e.target.value));
-                    }}
-                    className="bg-[var(--bg-input)] border border-[var(--border-color)] rounded px-2 py-1 text-[10px] font-bold text-[var(--text-primary)] cursor-pointer"
-                  >
-                    <option value={0}>0 ctx</option>
-                    <option value={2}>2 ctx</option>
-                    <option value={3}>3 ctx</option>
-                    <option value={5}>5 ctx</option>
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() => void loadLogFile()}
-                    disabled={fileLoading}
-                    className="px-2 py-1 text-[10px] font-bold text-[var(--text-secondary)] bg-[var(--bg-hover)] border border-[var(--border-color)] rounded hover:opacity-80 cursor-pointer flex items-center gap-1 disabled:opacity-50"
-                  >
-                    <RefreshCw className={`w-3 h-3 ${fileLoading ? 'animate-spin' : ''}`} />
-                    {grepText.trim() ? 'Search' : 'Refresh'}
-                  </button>
-                </div>
-
-                {fileError && (
-                  <div className="text-[10px] text-[var(--danger)] bg-[var(--danger-bg)] border border-[var(--danger-border)] rounded px-2 py-1">
-                    {fileError}
-                  </div>
-                )}
-
-                {logFile && (
-                  <>
-                    <div className="flex items-center gap-2 text-[10px] text-[var(--text-muted)] font-bold flex-wrap">
-                      <span className="font-mono" style={{ direction: 'ltr' }}>
-                        {logFile.path}
-                      </span>
-                      <span>|</span>
-                      <span>{logFile.totalLines} lines</span>
-                      {grepText.trim() && (
-                        <>
-                          <span>|</span>
-                          <span>
-                            {logFile.matches.length} matches
-                            {logFile.truncatedMatches > 0
-                              ? ` (+${String(logFile.truncatedMatches)} more)`
-                              : ''}
-                          </span>
-                        </>
-                      )}
-                    </div>
-                    <div className="bg-[var(--bg-input)] border border-[var(--border-color)] rounded-lg overflow-auto font-mono text-[10px] leading-tight p-2">
-                      {grepText.trim() ? (
-                        logFile.matches.length === 0 ? (
-                          <div className="text-center text-[var(--text-muted)] italic py-4">
-                            No matches for &quot;{grepText.trim()}&quot;
-                          </div>
-                        ) : (
-                          logFile.matches.map((m, i) => (
-                            <div key={i} className="mb-2">
-                              <div className="text-[var(--info)] font-bold">── {m.file}:{m.line} ──</div>
-                              {m.before.map((b, j) => (
-                                <div key={`b-${String(j)}`} className="text-[var(--text-muted)]">
-                                  {b}
-                                </div>
-                              ))}
-                              <div className="text-[var(--danger)] bg-[var(--danger-bg)]">{m.text}</div>
-                              {m.after.map((a, j) => (
-                                <div key={`a-${String(j)}`} className="text-[var(--text-muted)]">
-                                  {a}
-                                </div>
-                              ))}
-                            </div>
-                          ))
-                        )
-                      ) : logFile.tail.length === 0 ? (
-                        <div className="text-center text-[var(--text-muted)] italic py-4">
-                          File is empty
-                        </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <select
+                      value={logFileName}
+                      onChange={(e) => {
+                        setLogFileName(e.target.value);
+                      }}
+                      className="bg-[var(--bg-input)] border border-[var(--border-color)] rounded px-2 py-1 text-[10px] font-bold text-[var(--text-primary)] cursor-pointer max-w-[220px]"
+                    >
+                      {!logFile || logFile.files.length === 0 ? (
+                        <option value="">nova.log</option>
                       ) : (
-                        logFile.tail.map((line, i) => (
-                          <div key={i} className="whitespace-pre-wrap break-all">
-                            {line}
-                          </div>
+                        logFile.files.map((f) => (
+                          <option key={f} value={f}>
+                            {f}
+                          </option>
                         ))
                       )}
-                    </div>
-                  </>
-                )}
-              </div>
-              <div className="space-y-2 border-t border-[var(--border-color)] pt-2 mt-2">
-                <div className="flex items-center gap-2">
-                  <GitBranch className="w-4 h-4 text-[var(--info)]" />
-                  <h4 className="text-[10px] font-extrabold text-[var(--info)]">Task trace (daemon)</h4>
-                </div>
-                {tasksError && (
-                  <div className="text-[10px] text-[var(--danger)] bg-[var(--danger-bg)] border border-[var(--danger-border)] rounded px-2 py-1">
-                    {tasksError}
+                    </select>
+                    <input
+                      value={grepText}
+                      onChange={(e) => {
+                        setGrepText(e.target.value);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') void loadLogFile();
+                      }}
+                      placeholder="Grep (substring, e.g. ERROR-PATH)"
+                      className="bg-[var(--bg-input)] border border-[var(--border-color)] rounded px-2 py-1 text-[10px] font-mono text-[var(--text-primary)] placeholder:text-[var(--text-muted)] w-44"
+                      style={{ direction: 'ltr' }}
+                    />
+                    <select
+                      value={fileContext}
+                      onChange={(e) => {
+                        setFileContext(Number(e.target.value));
+                      }}
+                      className="bg-[var(--bg-input)] border border-[var(--border-color)] rounded px-2 py-1 text-[10px] font-bold text-[var(--text-primary)] cursor-pointer"
+                    >
+                      <option value={0}>0 ctx</option>
+                      <option value={2}>2 ctx</option>
+                      <option value={3}>3 ctx</option>
+                      <option value={5}>5 ctx</option>
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => void loadLogFile()}
+                      disabled={fileLoading}
+                      className="px-2 py-1 text-[10px] font-bold text-[var(--text-secondary)] bg-[var(--bg-hover)] border border-[var(--border-color)] rounded hover:opacity-80 cursor-pointer flex items-center gap-1 disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${fileLoading ? 'animate-spin' : ''}`} />
+                      {grepText.trim() ? 'Search' : 'Refresh'}
+                    </button>
                   </div>
-                )}
-                <div className="flex items-center gap-2 flex-wrap">
-                  <select
-                    value={selectedTask}
-                    onChange={(e) => {
-                      setSelectedTask(e.target.value);
-                    }}
-                    className="bg-[var(--bg-input)] border border-[var(--border-color)] rounded px-2 py-1 text-[10px] font-bold text-[var(--text-primary)] cursor-pointer max-w-[260px]"
-                  >
-                    <option value="">— select task —</option>
-                    {taskSummaries.map((s) => (
-                      <option key={s.taskId} value={s.taskId}>
-                        {s.taskId} · {s.entries} entries{s.errors > 0 ? ` · ${String(s.errors)} ERR` : ''}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    onClick={() => void loadTaskTrace(selectedTask)}
-                    className="px-2 py-1 text-[10px] font-bold text-[var(--text-secondary)] bg-[var(--bg-hover)] border border-[var(--border-color)] rounded hover:opacity-80 cursor-pointer flex items-center gap-1"
-                  >
-                    <RefreshCw className="w-3 h-3" />
-                    Reload
-                  </button>
-                </div>
-                {taskTrace && (
-                  <>
-                    <div className="flex items-center gap-2 text-[10px] text-[var(--text-muted)] font-bold flex-wrap">
-                      <span className="text-[var(--accent-primary)] font-mono">{taskTrace.taskId}</span>
-                      <span>|</span>
-                      <span>{taskTrace.entries.length} entries</span>
-                      {taskTrace.errors.length > 0 && (
-                        <span className="text-[var(--danger)]">{taskTrace.errors.length} errors</span>
-                      )}
-                      <span>|</span>
-                      <span>{(taskTrace.lastMs - taskTrace.firstMs).toFixed(0)}ms span</span>
-                      <span>|</span>
-                      <span>{taskTrace.threads.join(', ')}</span>
+
+                  {fileError && (
+                    <div className="text-[10px] text-[var(--danger)] bg-[var(--danger-bg)] border border-[var(--danger-border)] rounded px-2 py-1">
+                      {fileError}
                     </div>
-                    {taskTrace.errorPath && (
-                      <div className="text-[10px] text-[var(--danger)] bg-[var(--danger-bg)] border border-[var(--danger-border)] rounded px-2 py-1 font-mono break-all">
-                        [ERROR-PATH] {taskTrace.errorPath.message}
-                      </div>
-                    )}
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {taskTrace.phases.map((p) => (
-                        <span
-                          key={p.phase}
-                          className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${
-                            p.phase === 'error-path'
-                              ? 'text-[var(--danger)] border-[var(--danger-border)] bg-[var(--danger-bg)]'
-                              : 'text-[var(--info)] border-[var(--border-color)] bg-[var(--bg-hover)]'
-                          }`}
-                        >
-                          {p.phase} ×{p.entries} · {(p.lastMs - p.firstMs).toFixed(0)}ms
+                  )}
+
+                  {logFile && (
+                    <>
+                      <div className="flex items-center gap-2 text-[10px] text-[var(--text-muted)] font-bold flex-wrap">
+                        <span className="font-mono" style={{ direction: 'ltr' }}>
+                          {logFile.path}
                         </span>
-                      ))}
-                    </div>
-                    <div className="bg-[var(--bg-input)] border border-[var(--border-color)] rounded-lg overflow-auto font-mono text-[10px] leading-tight p-2 max-h-56">
-                      {taskTrace.entries.length === 0 ? (
-                        <div className="text-center text-[var(--text-muted)] italic py-4">No entries</div>
-                      ) : (
-                        taskTrace.entries.map((e, i) => {
-                          const isError = e.level.toLowerCase() === 'error';
-                          const isErrorPath = e.message.includes('[ERROR-PATH]');
-                          return (
-                            <div
-                              key={i}
-                              className={`flex gap-2 px-1 py-0.5 border-b border-[var(--border-color)]/30 ${
-                                isErrorPath
-                                  ? 'bg-[var(--danger-bg)]'
-                                  : isError
-                                    ? 'bg-[var(--danger-bg)]/40'
-                                    : ''
-                              }`}
-                            >
-                              <span
-                                className="text-[var(--text-muted)] shrink-0 w-[80px]"
-                                style={{ direction: 'ltr' }}
-                              >
-                                {formatBackendMs(e.timestampMs ?? 0)}
-                              </span>
-                              <span
-                                className="text-[var(--text-muted)] shrink-0 w-[60px]"
-                                style={{ direction: 'ltr' }}
-                              >
-                                +{(e.timestampMs ?? 0) - (taskTrace.firstMs || 0)}ms
-                              </span>
-                              <span
-                                className={`shrink-0 w-[40px] font-bold uppercase ${levelColor(toUiLevel(e.level))} border rounded px-1 text-center ${levelBadgeBg(toUiLevel(e.level))}`}
-                              >
-                                {e.level}
-                              </span>
-                              <span
-                                className="text-[var(--accent-primary)] shrink-0 w-[120px] truncate"
-                                title={e.target}
-                              >
-                                {e.target}
-                              </span>
-                              <span className="text-[var(--text-primary)] flex-1 min-w-0 break-all">
-                                {e.message}
-                              </span>
+                        <span>|</span>
+                        <span>{logFile.totalLines} lines</span>
+                        {grepText.trim() && (
+                          <>
+                            <span>|</span>
+                            <span>
+                              {logFile.matches.length} matches
+                              {logFile.truncatedMatches > 0 ? ` (+${String(logFile.truncatedMatches)} more)` : ''}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                      <div className="bg-[var(--bg-input)] border border-[var(--border-color)] rounded-lg overflow-auto font-mono text-[10px] leading-tight p-2">
+                        {grepText.trim() ? (
+                          logFile.matches.length === 0 ? (
+                            <div className="text-center text-[var(--text-muted)] italic py-4">
+                              No matches for &quot;{grepText.trim()}&quot;
                             </div>
-                          );
-                        })
-                      )}
+                          ) : (
+                            logFile.matches.map((m, i) => (
+                              <div key={i} className="mb-2">
+                                <div className="text-[var(--info)] font-bold">
+                                  ── {m.file}:{m.line} ──
+                                </div>
+                                {m.before.map((b, j) => (
+                                  <div key={`b-${String(j)}`} className="text-[var(--text-muted)]">
+                                    {b}
+                                  </div>
+                                ))}
+                                <div className="text-[var(--danger)] bg-[var(--danger-bg)]">{m.text}</div>
+                                {m.after.map((a, j) => (
+                                  <div key={`a-${String(j)}`} className="text-[var(--text-muted)]">
+                                    {a}
+                                  </div>
+                                ))}
+                              </div>
+                            ))
+                          )
+                        ) : logFile.tail.length === 0 ? (
+                          <div className="text-center text-[var(--text-muted)] italic py-4">File is empty</div>
+                        ) : (
+                          logFile.tail.map((line, i) => (
+                            <div key={i} className="whitespace-pre-wrap break-all">
+                              {line}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+                <div className="space-y-2 border-t border-[var(--border-color)] pt-2 mt-2">
+                  <div className="flex items-center gap-2">
+                    <GitBranch className="w-4 h-4 text-[var(--info)]" />
+                    <h4 className="text-[10px] font-extrabold text-[var(--info)]">Task trace (daemon)</h4>
+                  </div>
+                  {tasksError && (
+                    <div className="text-[10px] text-[var(--danger)] bg-[var(--danger-bg)] border border-[var(--danger-border)] rounded px-2 py-1">
+                      {tasksError}
                     </div>
-                  </>
-                )}
+                  )}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <select
+                      value={selectedTask}
+                      onChange={(e) => {
+                        setSelectedTask(e.target.value);
+                      }}
+                      className="bg-[var(--bg-input)] border border-[var(--border-color)] rounded px-2 py-1 text-[10px] font-bold text-[var(--text-primary)] cursor-pointer max-w-[260px]"
+                    >
+                      <option value="">— select task —</option>
+                      {taskSummaries.map((s) => (
+                        <option key={s.taskId} value={s.taskId}>
+                          {s.taskId} · {s.entries} entries{s.errors > 0 ? ` · ${String(s.errors)} ERR` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => void loadTaskTrace(selectedTask)}
+                      className="px-2 py-1 text-[10px] font-bold text-[var(--text-secondary)] bg-[var(--bg-hover)] border border-[var(--border-color)] rounded hover:opacity-80 cursor-pointer flex items-center gap-1"
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                      Reload
+                    </button>
+                  </div>
+                  {taskTrace && (
+                    <>
+                      <div className="flex items-center gap-2 text-[10px] text-[var(--text-muted)] font-bold flex-wrap">
+                        <span className="text-[var(--accent-primary)] font-mono">{taskTrace.taskId}</span>
+                        <span>|</span>
+                        <span>{taskTrace.entries.length} entries</span>
+                        {taskTrace.errors.length > 0 && (
+                          <span className="text-[var(--danger)]">{taskTrace.errors.length} errors</span>
+                        )}
+                        <span>|</span>
+                        <span>{(taskTrace.lastMs - taskTrace.firstMs).toFixed(0)}ms span</span>
+                        <span>|</span>
+                        <span>{taskTrace.threads.join(', ')}</span>
+                      </div>
+                      {taskTrace.errorPath && (
+                        <div className="text-[10px] text-[var(--danger)] bg-[var(--danger-bg)] border border-[var(--danger-border)] rounded px-2 py-1 font-mono break-all">
+                          [ERROR-PATH] {taskTrace.errorPath.message}
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {taskTrace.phases.map((p) => (
+                          <span
+                            key={p.phase}
+                            className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${
+                              p.phase === 'error-path'
+                                ? 'text-[var(--danger)] border-[var(--danger-border)] bg-[var(--danger-bg)]'
+                                : 'text-[var(--info)] border-[var(--border-color)] bg-[var(--bg-hover)]'
+                            }`}
+                          >
+                            {p.phase} ×{p.entries} · {(p.lastMs - p.firstMs).toFixed(0)}ms
+                          </span>
+                        ))}
+                      </div>
+                      <div className="bg-[var(--bg-input)] border border-[var(--border-color)] rounded-lg overflow-auto font-mono text-[10px] leading-tight p-2 max-h-56">
+                        {taskTrace.entries.length === 0 ? (
+                          <div className="text-center text-[var(--text-muted)] italic py-4">No entries</div>
+                        ) : (
+                          taskTrace.entries.map((e, i) => {
+                            const isError = e.level.toLowerCase() === 'error';
+                            const isErrorPath = e.message.includes('[ERROR-PATH]');
+                            return (
+                              <div
+                                key={i}
+                                className={`flex gap-2 px-1 py-0.5 border-b border-[var(--border-color)]/30 ${
+                                  isErrorPath ? 'bg-[var(--danger-bg)]' : isError ? 'bg-[var(--danger-bg)]/40' : ''
+                                }`}
+                              >
+                                <span
+                                  className="text-[var(--text-muted)] shrink-0 w-[80px]"
+                                  style={{ direction: 'ltr' }}
+                                >
+                                  {formatBackendMs(e.timestampMs ?? 0)}
+                                </span>
+                                <span
+                                  className="text-[var(--text-muted)] shrink-0 w-[60px]"
+                                  style={{ direction: 'ltr' }}
+                                >
+                                  +{(e.timestampMs ?? 0) - (taskTrace.firstMs || 0)}ms
+                                </span>
+                                <span
+                                  className={`shrink-0 w-[40px] font-bold uppercase ${levelColor(toUiLevel(e.level))} border rounded px-1 text-center ${levelBadgeBg(toUiLevel(e.level))}`}
+                                >
+                                  {e.level}
+                                </span>
+                                <span
+                                  className="text-[var(--accent-primary)] shrink-0 w-[120px] truncate"
+                                  title={e.target}
+                                >
+                                  {e.target}
+                                </span>
+                                <span className="text-[var(--text-primary)] flex-1 min-w-0 break-all">{e.message}</span>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    </>
+                  )}
                 </div>
               </>
             )}

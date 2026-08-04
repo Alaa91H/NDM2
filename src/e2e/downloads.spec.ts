@@ -1,6 +1,29 @@
 import { test, expect } from '@playwright/test';
 
+const HEALTH_PAYLOAD = {
+  status: 'connected',
+  name: 'nova-e2e',
+  version: 'test',
+  pid: 1234,
+  buildVersion: 'test',
+  engines: {
+    curl: { available: true, version: 'test' },
+    ytdlp: { available: true, version: 'test' },
+  },
+  allEnginesReady: true,
+};
+
 const goto = async (page: import('@playwright/test').Page) => {
+  // The app blocks on a "connecting" splash until the daemon health check
+  // resolves, but no daemon runs during e2e. Stub a healthy daemon so the
+  // bridge connects and the task table actually renders deterministically.
+  await page.route('**/api/health', (route) => {
+    void route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(HEALTH_PAYLOAD),
+    });
+  });
   await page.goto('/');
   await page.waitForLoadState('networkidle');
 };

@@ -21,6 +21,7 @@ import {
   useTaskSelectors,
   useTaskActions,
   useSettingsData,
+  useThemeData,
   useToastActions,
   useDialogActions,
   useSearchQuery,
@@ -37,6 +38,7 @@ import ColumnConfigPanel from './ColumnConfigPanel';
 import { useColumnState } from '../hooks/useColumnState';
 import { useMultiSelection } from '../hooks/useMultiSelection';
 import { useTaskSortFilter } from '../hooks/useTaskSortFilter';
+import { useScrollWindow, useCssLengthVar } from '../hooks/useScrollWindow';
 import { formatBytes } from '../initialData';
 import {
   getColAlign,
@@ -87,6 +89,48 @@ export const TaskTable: React.FC = () => {
   } = useColumnState();
 
   const { sortBy, sortOrder, sortedTasks, handleSort } = useTaskSortFilter(tasks, searchQuery, workspaceView);
+
+  // ── Windowed rendering ───────────────────────────────────────────────────
+  // Desktop rows are fixed-height (`height: var(--row-height)`, 20/24/28px by
+  // density), which makes exact scroll-window math possible. Lists at or below
+  // the thresholds render fully (keeps select-all and e2e row counts simple);
+  // larger lists only render the visible slice plus overscan, with spacer rows
+  // preserving the total scroll height.
+  const { density } = useThemeData();
+  const { containerRef, getWindow } = useScrollWindow();
+
+  // The --row-height token tracks the active density. It's read reactively
+  // (observing data-density/data-theme attribute changes) because applyTheme
+  // sets those attributes in an effect after first paint — a one-shot read
+  // would keep a stale slot for a persisted non-default density. Fall back to
+  // the density map when the token is unavailable (jsdom).
+  const measuredRowHeight = useCssLengthVar('--row-height');
+  const desktopRowHeight = useMemo(
+    () => measuredRowHeight || (density === 'compact' ? 20 : density === 'dense' ? 24 : 28),
+    [measuredRowHeight, density],
+  );
+
+  // Mobile cards: ~140px intrinsic height + 12px space-y gap per slot. The
+  // overscan is small (4 cards ≈ 600px) so we don't over-render on mobile.
+  const MOBILE_CARD_SLOT = 152;
+
+  const desktopWindow = useMemo(
+    () => getWindow(sortedTasks.length, desktopRowHeight, 10, 150),
+    [getWindow, sortedTasks.length, desktopRowHeight],
+  );
+  const mobileWindow = useMemo(
+    () => getWindow(sortedTasks.length, MOBILE_CARD_SLOT, 4, 80),
+    [getWindow, sortedTasks.length],
+  );
+
+  const visibleTasks = useMemo(
+    () => (desktopWindow.windowed ? sortedTasks.slice(desktopWindow.start, desktopWindow.end) : sortedTasks),
+    [sortedTasks, desktopWindow],
+  );
+  const mobileTasks = useMemo(
+    () => (mobileWindow.windowed ? sortedTasks.slice(mobileWindow.start, mobileWindow.end) : sortedTasks),
+    [sortedTasks, mobileWindow],
+  );
 
   // Memoize the list of task IDs so useMultiSelection's effect only re-runs
   // when the actual set of visible tasks changes, not on every re-render.
@@ -202,7 +246,9 @@ export const TaskTable: React.FC = () => {
       label: t('menu_copy_url'),
       icon: <Copy className="w-3.5 h-3.5" />,
       onClick: () => {
-        void writeClipboardText(task.url).catch((e: unknown) => { logger.warn('TaskTable', 'writeClipboardText failed', e); });
+        void writeClipboardText(task.url).catch((e: unknown) => {
+          logger.warn('TaskTable', 'writeClipboardText failed', e);
+        });
       },
     });
     // Refresh URL: open the source URL in the system browser to capture a
@@ -277,7 +323,7 @@ export const TaskTable: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 bg-[var(--bg-app)] overflow-auto select-none relative">
+    <div ref={containerRef} className="flex-1 bg-[var(--bg-app)] overflow-auto select-none relative">
       {/* Desktop Table View */}
       <table className="hidden md:table w-full border-collapse text-ui font-medium min-w-[800px] table-fixed">
         <colgroup>
@@ -470,12 +516,14 @@ export const TaskTable: React.FC = () => {
               </td>
             </tr>
           ) : (
-            // VIRTUAL SCROLLING: If task list grows large (100+ items), replace
-            // sortedTasks.map() with a virtualized list using react-virtuoso or
-            // react-window. Both are lightweight (~5kB) and support dynamic row
-            // heights. Wire the container to a fixed height and pass sortedTasks
-            // as the item data source.
-            sortedTasks.map((task) => {
+            <>
+              {/* Top spacer preserves scroll height for the unrendered slice. */}
+              {desktopWindow.padTop > 0 && (
+                <tr aria-hidden="true" style={{ height: desktopWindow.padTop }}>
+                  <td colSpan={visibleColsCount} />
+                </tr>
+              )}
+              {visibleTasks.map((task) => {
               const progressPercent =
                 task.sizeBytes > 0 ? Math.round((task.downloadedBytes / task.sizeBytes) * 100) : 0;
               const isSelected = selectedTaskId === task.id;
@@ -717,7 +765,14 @@ export const TaskTable: React.FC = () => {
                   />
                 </tr>
               );
-            })
+              })}
+              {/* Bottom spacer preserves scroll height for the unrendered slice. */}
+              {desktopWindow.padBottom > 0 && (
+                <tr aria-hidden="true" style={{ height: desktopWindow.padBottom }}>
+                  <td colSpan={visibleColsCount} />
+                </tr>
+              )}
+            </>
           )}
         </tbody>
       </table>
@@ -733,9 +788,11 @@ export const TaskTable: React.FC = () => {
         />
       )}
 
-      {/* Mobile Card List View */}
+      {/* Mobile Card List View — windowed like the desktop table. */}
       <TaskCardList
-        tasks={sortedTasks}
+        tasks={mobileTasks}
+        padTop={mobileWindow.padTop}
+        padBottom={mobileWindow.padBottom}
         checkedTaskIds={checkedTaskIds}
         handleToggleCheckTask={handleToggleCheckTask}
         pauseTask={(id: string) => {

@@ -14,6 +14,10 @@ import { useEngineStore } from './engineStore';
 const isNativeEngineTask = (task: DownloadItem) =>
   task.engine === 'curl' || task.engine === 'libcurl-multi' || task.engine === 'yt-dlp';
 
+// Cap concurrent createDownload calls when importing a large batch so a 10k-URL
+// batch doesn't serialize every round-trip through the daemon one at a time.
+const MAX_BATCH_CONCURRENCY = 8;
+
 /**
  * Merge daemon tasks into the local store, preserving object identity for
  * tasks that haven't changed since the last sync. This is critical for
@@ -22,16 +26,28 @@ const isNativeEngineTask = (task: DownloadItem) =>
  */
 export const mergeDaemonTasks = (daemonTasks: DownloadItem[]): DownloadItem[] => {
   const prev = taskStore.getState().tasks;
+  if (daemonTasks === prev) return prev;
+
   const prevMap = new Map<string, DownloadItem>();
   for (const t of prev) prevMap.set(t.id, t);
 
-  return daemonTasks.map((task) => {
+  let unchanged = prev.length === daemonTasks.length;
+  const merged = new Array<DownloadItem>(daemonTasks.length);
+  for (let i = 0; i < daemonTasks.length; i++) {
+    const task = daemonTasks[i];
     const existing = prevMap.get(task.id);
     if (existing && shallowEqualTask(existing, task)) {
-      return existing;
+      merged[i] = existing;
+      if (existing !== prev[i]) unchanged = false;
+    } else {
+      merged[i] = { ...task };
+      unchanged = false;
     }
-    return { ...task };
-  });
+  }
+  // When nothing changed, return the previous array by reference so callers
+  // (appStore) can skip setTasks entirely and avoid waking every subscriber
+  // (TaskTable sort/filter, sidebar counts) on every 2-second poll.
+  return unchanged ? prev : merged;
 };
 
 /** Compare two tasks for shallow equality (the fields that change during
@@ -58,7 +74,14 @@ function shallowEqualTask(a: DownloadItem, b: DownloadItem): boolean {
   for (let i = 0; i < a.segments.length; i++) {
     const sa = a.segments[i];
     const sb = b.segments[i];
-    if (sa.id !== sb.id || sa.progress !== sb.progress || sa.downloadedBytes !== sb.downloadedBytes || sa.totalBytes !== sb.totalBytes || sa.active !== sb.active || sa.speed !== sb.speed) {
+    if (
+      sa.id !== sb.id ||
+      sa.progress !== sb.progress ||
+      sa.downloadedBytes !== sb.downloadedBytes ||
+      sa.totalBytes !== sb.totalBytes ||
+      sa.active !== sb.active ||
+      sa.speed !== sb.speed
+    ) {
       return false;
     }
   }
@@ -77,6 +100,7 @@ interface TaskState {
       'id' | 'dateAdded' | 'downloadedBytes' | 'speedBytesPerSec' | 'timeLeftSeconds' | 'segments'
     >,
     downloadImmediately: boolean,
+    silent?: boolean,
   ) => Promise<DownloadItem | null>;
   pauseTask: (id: string) => Promise<void>;
   resumeTask: (id: string) => Promise<void>;
@@ -119,7 +143,7 @@ export const taskStore = create<TaskState>()((set, get) => ({
     set({ hasSyncedDownloads: v });
   },
 
-  addTask: async (newItem, downloadImmediately) => {
+  addTask: async (newItem, downloadImmediately, silent = false) => {
     const { status: bridgeStatus } = bridgeStore.getState();
     if (bridgeStatus === 'connecting' || bridgeStatus === 'disconnected') {
       uiStore
@@ -136,16 +160,22 @@ export const taskStore = create<TaskState>()((set, get) => ({
       uiStore.getState().setSelectedTaskId(normalizedTask.id);
       bridgeStore.getState().setIsDegradedMode(false);
       if (newItem.queueId) queueStore.getState().addTaskToQueueOrder(normalizedTask.id, newItem.queueId);
-      uiStore
-        .getState()
-        .addToast('success', 'Download added', `"${normalizedTask.name}" was added to the download queue.`);
+      // Batch imports pass silent=true so a 10k-URL batch doesn't fire 10k
+      // toasts (each scheduling its own auto-dismiss timer).
+      if (!silent) {
+        uiStore
+          .getState()
+          .addToast('success', 'Download added', `"${normalizedTask.name}" was added to the download queue.`);
+      }
       if (downloadImmediately) {
         playAppSound(settingsStore.getState().settings, 'start');
         uiStore.getState().openDialog('activeProgress', normalizedTask);
       }
       return normalizedTask;
     } catch (error) {
-      logger.error('TaskStore', `Failed to create download: ${newItem.url}`, { error: extractErrorMessage(error, 'Unknown error') });
+      logger.error('TaskStore', `Failed to create download: ${newItem.url}`, {
+        error: extractErrorMessage(error, 'Unknown error'),
+      });
       bridgeStore.getState().setIsDegradedMode(true);
       uiStore
         .getState()
@@ -166,7 +196,9 @@ export const taskStore = create<TaskState>()((set, get) => ({
       set((p) => ({ tasks: p.tasks.map((item) => (item.id === id ? normalizedTask : item)) }));
       uiStore.getState().addToast('info', 'Download stopped', `"${normalizedTask.name}" was stopped.`);
     } catch (error) {
-      logger.error('TaskStore', `Failed to pause download ${id}`, { error: extractErrorMessage(error, 'Unknown error') });
+      logger.error('TaskStore', `Failed to pause download ${id}`, {
+        error: extractErrorMessage(error, 'Unknown error'),
+      });
       uiStore
         .getState()
         .addToast('error', 'NOVA daemon', extractErrorMessage(error, 'The local engine could not stop the download.'));
@@ -220,6 +252,9 @@ export const taskStore = create<TaskState>()((set, get) => ({
       if (uiStore.getState().selectedTaskId === id) uiStore.getState().setSelectedTaskId(null);
       // Clean up per-task telemetry to prevent unbounded memory growth.
       useEngineStore.getState().removeTaskTelemetry(id);
+      // Prune the id from every queue's downloadOrder so stale ids never
+      // accumulate unboundedly across many add/delete cycles.
+      queueStore.getState().removeTaskFromQueue(id);
       uiStore
         .getState()
         .addToast('warning', 'Download removed', `"${targetItem.name}" was removed from the daemon.${diskMessage}`);
@@ -346,30 +381,37 @@ export const taskStore = create<TaskState>()((set, get) => ({
   triggerBatchDownload: async (urls, options) => {
     const { settings } = settingsStore.getState();
     const accepted: DownloadItem[] = [];
-    for (const url of urls) {
-      if (!url.trim()) continue;
-      const parsedName = url.substring(url.lastIndexOf('/') + 1) || 'download';
-      const targetDirectory = options?.saveDirectory || settings.saveAndCategories.categoryFolders.other || '';
-      const task = await get().addTask(
-        {
-          name: parsedName,
-          url,
-          fileType: 'other',
-          status: 'queued',
-          sizeBytes: 0,
-          category: 'other',
-          queueId: options?.queueId || 'main',
-          connections: options?.connections ?? 0,
-          resumable: true,
-          savePath: targetDirectory ? `${targetDirectory.replace(/[\\/]+$/, '')}\\${parsedName}` : parsedName,
-          description: options?.description || 'Batch import',
-          directOptions: options?.directOptions,
-          elapsedSeconds: 0,
-        },
-        false,
-      );
-      if (task) accepted.push(task);
-    }
+    let nextUrl = 0;
+    const worker = async () => {
+      while (nextUrl < urls.length) {
+        const url = urls[nextUrl];
+        nextUrl += 1;
+        if (!url.trim()) continue;
+        const parsedName = url.substring(url.lastIndexOf('/') + 1) || 'download';
+        const targetDirectory = options?.saveDirectory || settings.saveAndCategories.categoryFolders.other || '';
+        const task = await get().addTask(
+          {
+            name: parsedName,
+            url,
+            fileType: 'other',
+            status: 'queued',
+            sizeBytes: 0,
+            category: 'other',
+            queueId: options?.queueId || 'main',
+            connections: options?.connections ?? 0,
+            resumable: true,
+            savePath: targetDirectory ? `${targetDirectory.replace(/[\\/]+$/, '')}\\${parsedName}` : parsedName,
+            description: options?.description || 'Batch import',
+            directOptions: options?.directOptions,
+            elapsedSeconds: 0,
+          },
+          false,
+          true, // silent: no per-task toasts for batch imports
+        );
+        if (task) accepted.push(task);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(MAX_BATCH_CONCURRENCY, urls.length) }, () => worker()));
     if (accepted.length > 0) {
       uiStore
         .getState()

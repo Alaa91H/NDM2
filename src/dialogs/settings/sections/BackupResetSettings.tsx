@@ -10,11 +10,7 @@ interface Props {
   onFactoryReset: () => void;
 }
 
-export const BackupResetSettings: React.FC<Props> = ({
-  settings,
-  onAddToast,
-  onFactoryReset,
-}) => {
+export const BackupResetSettings: React.FC<Props> = ({ settings, onAddToast, onFactoryReset }) => {
   const t = useI18n();
   const { updateSettings } = useSettingsActions();
   const fileInputRef = useRef<HTMLInputElement>(null);

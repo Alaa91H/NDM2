@@ -955,13 +955,8 @@ export const novaClient = {
   async getTaskTrace(taskId: string, limit?: number): Promise<{ trace: BackendTaskTrace | null }> {
     const query = new URLSearchParams({ task: taskId });
     if (limit !== undefined) query.set('limit', String(limit));
-    return request<{ trace: BackendTaskTrace | null }>(
-      `/api/logs/trace?${query.toString()}`,
-      undefined,
-      10000,
-    );
+    return request<{ trace: BackendTaskTrace | null }>(`/api/logs/trace?${query.toString()}`, undefined, 10000);
   },
-
 };
 
 async function request<T>(path: string, init?: RequestInit, timeoutMs = 2500): Promise<T> {

@@ -24,7 +24,10 @@ class EventSourceStub {
 
   removeEventListener(type: string, cb: EventListener) {
     const list = this.listeners.get(type) ?? [];
-    this.listeners.set(type, list.filter((l) => l !== cb));
+    this.listeners.set(
+      type,
+      list.filter((l) => l !== cb),
+    );
   }
 
   dispatch(type: string, data: unknown) {

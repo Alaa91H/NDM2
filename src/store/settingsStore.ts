@@ -4,6 +4,11 @@ import { initialSettings } from '../initialData';
 import { tauriClient } from '../api/tauriClient';
 import { LANGUAGE_METADATA } from '../lib/i18n/languageMetadata';
 import { type Language } from '../lib/i18n/translations';
+// uiStore is statically imported by appStore/queueStore/selectors/taskStore, so
+// a dynamic import here could never split it into a separate chunk (Vite warns
+// INEFFECTIVE_DYNAMIC_IMPORT). The static import is safe: settingsStore only
+// touches uiStore inside updateSettings (runtime), never at module evaluation.
+import { uiStore } from './uiStore';
 
 const supportedLanguages = new Set<string>(LANGUAGE_METADATA.map((l) => l.value));
 const normalizeLanguageTag = (v: string) => v.trim().replace(/_/g, '-');
@@ -150,9 +155,7 @@ export const settingsStore = create<SettingsState>()((set) => ({
     set({ settings: sanitized });
     void tauriClient.saveConfigToDisk(sanitized);
     if (!silent) {
-      void import('./uiStore').then(({ uiStore }) => {
-        uiStore.getState().addToast('success', 'Settings Saved', 'Preferences and settings were saved.');
-      });
+      uiStore.getState().addToast('success', 'Settings Saved', 'Preferences and settings were saved.');
     }
   },
 

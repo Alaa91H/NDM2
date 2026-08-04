@@ -13,36 +13,42 @@ interface Props {
 }
 
 const DNS_PRESETS: Record<string, { primary: string; secondary: string; description: string } | undefined> = {
-  system:       { primary: '',           secondary: '',           description: 'Use operating system DNS settings' },
-  cloudflare:   { primary: '1.1.1.1',    secondary: '1.0.0.1',    description: 'Fast & privacy-focused (1.1.1.1)' },
-  google:       { primary: '8.8.8.8',    secondary: '8.8.4.4',    description: 'Reliable public DNS by Google' },
-  opendns:      { primary: '208.67.222.222', secondary: '208.67.220.220', description: 'Cisco Umbrella / Parental controls' },
-  quad9:        { primary: '9.9.9.9',    secondary: '149.112.112.112', description: 'Security-focused, blocks threats' },
-  comodo:       { primary: '8.26.56.26',  secondary: '8.20.247.20',  description: 'Comodo Secure DNS with malware filtering' },
-  adguard:      { primary: '94.140.14.14', secondary: '94.140.15.15', description: 'AdGuard DNS — ad/tracker blocking' },
-  cleanbrowsing: { primary: '185.228.168.9', secondary: '185.228.169.9', description: 'CleanBrowsing — family-friendly filter' },
-  custom:       { primary: '',           secondary: '',           description: 'Manually specify DNS servers' },
+  system: { primary: '', secondary: '', description: 'Use operating system DNS settings' },
+  cloudflare: { primary: '1.1.1.1', secondary: '1.0.0.1', description: 'Fast & privacy-focused (1.1.1.1)' },
+  google: { primary: '8.8.8.8', secondary: '8.8.4.4', description: 'Reliable public DNS by Google' },
+  opendns: {
+    primary: '208.67.222.222',
+    secondary: '208.67.220.220',
+    description: 'Cisco Umbrella / Parental controls',
+  },
+  quad9: { primary: '9.9.9.9', secondary: '149.112.112.112', description: 'Security-focused, blocks threats' },
+  comodo: { primary: '8.26.56.26', secondary: '8.20.247.20', description: 'Comodo Secure DNS with malware filtering' },
+  adguard: { primary: '94.140.14.14', secondary: '94.140.15.15', description: 'AdGuard DNS — ad/tracker blocking' },
+  cleanbrowsing: {
+    primary: '185.228.168.9',
+    secondary: '185.228.169.9',
+    description: 'CleanBrowsing — family-friendly filter',
+  },
+  custom: { primary: '', secondary: '', description: 'Manually specify DNS servers' },
 };
 
 const DNS_MODE_OPTIONS = [
-  { value: 'system',        label: 'System Default' },
-  { value: 'cloudflare',    label: 'Cloudflare (1.1.1.1)' },
-  { value: 'google',        label: 'Google DNS (8.8.8.8)' },
-  { value: 'opendns',       label: 'OpenDNS (208.67.222.222)' },
-  { value: 'quad9',         label: 'Quad9 (9.9.9.9)' },
-  { value: 'comodo',        label: 'Comodo Secure (8.26.56.26)' },
-  { value: 'adguard',       label: 'AdGuard DNS (94.140.14.14)' },
+  { value: 'system', label: 'System Default' },
+  { value: 'cloudflare', label: 'Cloudflare (1.1.1.1)' },
+  { value: 'google', label: 'Google DNS (8.8.8.8)' },
+  { value: 'opendns', label: 'OpenDNS (208.67.222.222)' },
+  { value: 'quad9', label: 'Quad9 (9.9.9.9)' },
+  { value: 'comodo', label: 'Comodo Secure (8.26.56.26)' },
+  { value: 'adguard', label: 'AdGuard DNS (94.140.14.14)' },
   { value: 'cleanbrowsing', label: 'CleanBrowsing (185.228.168.9)' },
-  { value: 'custom',        label: 'Custom — manual entry' },
+  { value: 'custom', label: 'Custom — manual entry' },
 ];
 
 export const NetworkAndPerformance: React.FC<Props> = ({ settings, updateSetting, onAddToast }) => {
   const t = useI18n();
   const [proxyTestStatus, setProxyTestStatus] = useState<'idle' | 'testing' | 'pass' | 'fail'>('idle');
   const [proxyErrorMessage, setProxyErrorMessage] = useState('');
-  const [dnsCustomPrimary, setDnsCustomPrimary] = useState(
-    () => settings.extra.dnsCustomResolver.split(',')[0] ?? '',
-  );
+  const [dnsCustomPrimary, setDnsCustomPrimary] = useState(() => settings.extra.dnsCustomResolver.split(',')[0] ?? '');
   const [dnsCustomSecondary, setDnsCustomSecondary] = useState(
     () => settings.extra.dnsCustomResolver.split(',')[1] ?? '',
   );
@@ -76,9 +82,7 @@ export const NetworkAndPerformance: React.FC<Props> = ({ settings, updateSetting
       const data = await novaClient.pingDnsProviders();
       const resolver = settings.extra.dnsResolver;
       const preset = DNS_PRESETS[resolver];
-      const currentIp = resolver === 'custom'
-        ? settings.extra.dnsCustomResolver.split(',')[0]
-        : (preset?.primary || '');
+      const currentIp = resolver === 'custom' ? settings.extra.dnsCustomResolver.split(',')[0] : preset?.primary || '';
       const match = currentIp ? data.results.find((r) => r.ip === currentIp) : null;
       if (match && match.latencyMs !== null) {
         onAddToast('success', 'DNS Test', `${resolver}: ${match.ip} — ${match.latencyMs.toFixed(1)} ms`);
@@ -92,7 +96,9 @@ export const NetworkAndPerformance: React.FC<Props> = ({ settings, updateSetting
     }
   };
 
-  const [pingResults, setPingResults] = useState<Array<{ name: string; ip: string; latencyMs: number | null }> | null>(null);
+  const [pingResults, setPingResults] = useState<Array<{ name: string; ip: string; latencyMs: number | null }> | null>(
+    null,
+  );
   const [pingLoading, setPingLoading] = useState(false);
 
   const handlePingAll = async () => {
@@ -359,7 +365,9 @@ export const NetworkAndPerformance: React.FC<Props> = ({ settings, updateSetting
           <SelectField
             label="DNS Provider"
             value={settings.extra.dnsResolver}
-            onChange={(e) => { handleDnsModeChange(e.target.value); }}
+            onChange={(e) => {
+              handleDnsModeChange(e.target.value);
+            }}
             options={DNS_MODE_OPTIONS}
           />
 
@@ -379,14 +387,18 @@ export const NetworkAndPerformance: React.FC<Props> = ({ settings, updateSetting
                   <TextField
                     label="Primary DNS"
                     value={dnsCustomPrimary}
-                    onChange={(e) => { setDnsCustomPrimary(e.target.value); }}
+                    onChange={(e) => {
+                      setDnsCustomPrimary(e.target.value);
+                    }}
                     placeholder="e.g. 1.1.1.1"
                     style={{ direction: 'ltr', textAlign: 'left' }}
                   />
                   <TextField
                     label="Secondary DNS"
                     value={dnsCustomSecondary}
-                    onChange={(e) => { setDnsCustomSecondary(e.target.value); }}
+                    onChange={(e) => {
+                      setDnsCustomSecondary(e.target.value);
+                    }}
                     placeholder="e.g. 1.0.0.1"
                     style={{ direction: 'ltr', textAlign: 'left' }}
                   />
@@ -406,7 +418,9 @@ export const NetworkAndPerformance: React.FC<Props> = ({ settings, updateSetting
                 <FormRow label="DNS over HTTPS">
                   <Switch
                     checked={settings.extra.dnsOverHttps}
-                    onChange={(v) => { updateSetting('extra', 'dnsOverHttps', v); }}
+                    onChange={(v) => {
+                      updateSetting('extra', 'dnsOverHttps', v);
+                    }}
                   />
                 </FormRow>
                 <FormRow label="Cache timeout (sec)">
@@ -428,7 +442,9 @@ export const NetworkAndPerformance: React.FC<Props> = ({ settings, updateSetting
               <div className="flex items-center gap-2 pt-1">
                 <button
                   type="button"
-                  onClick={() => { void handleDnsTest(); }}
+                  onClick={() => {
+                    void handleDnsTest();
+                  }}
                   className="px-3 py-1.5 bg-[var(--info-bg)] border border-[var(--info-border)] text-[var(--info)] rounded text-[10px] font-bold hover:bg-[var(--info-bg)] transition-all cursor-pointer flex items-center gap-1"
                 >
                   <Server className="w-3 h-3" />
@@ -450,22 +466,33 @@ export const NetworkAndPerformance: React.FC<Props> = ({ settings, updateSetting
                   <table className="w-full text-[10px] font-mono border-collapse">
                     <thead>
                       <tr className="border-b border-[var(--border-color)]/50">
-                        <th className="text-left py-1.5 pr-2 text-[var(--text-muted)] font-bold uppercase tracking-wider">Provider</th>
-                        <th className="text-left py-1.5 pr-2 text-[var(--text-muted)] font-bold uppercase tracking-wider">IP</th>
-                        <th className="text-right py-1.5 text-[var(--text-muted)] font-bold uppercase tracking-wider">Latency</th>
+                        <th className="text-left py-1.5 pr-2 text-[var(--text-muted)] font-bold uppercase tracking-wider">
+                          Provider
+                        </th>
+                        <th className="text-left py-1.5 pr-2 text-[var(--text-muted)] font-bold uppercase tracking-wider">
+                          IP
+                        </th>
+                        <th className="text-right py-1.5 text-[var(--text-muted)] font-bold uppercase tracking-wider">
+                          Latency
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
                       {pingResults.map((r) => {
                         const isBest = bestPing && r.name === bestPing.name && r.latencyMs !== null;
                         return (
-                          <tr key={r.name} className={`border-b border-[var(--border-color)]/20 ${isBest ? 'bg-[var(--success-bg)]/20' : ''}`}>
+                          <tr
+                            key={r.name}
+                            className={`border-b border-[var(--border-color)]/20 ${isBest ? 'bg-[var(--success-bg)]/20' : ''}`}
+                          >
                             <td className="py-1.5 pr-2 text-[var(--text-primary)] flex items-center gap-1">
                               {isBest && <Zap className="w-2.5 h-2.5 text-[var(--success)]" />}
                               {r.name}
                             </td>
                             <td className="py-1.5 pr-2 text-[var(--text-muted)]">{r.ip}</td>
-                            <td className={`py-1.5 text-right ${r.latencyMs === null ? 'text-[var(--danger)]' : r.latencyMs < 50 ? 'text-[var(--success)]' : r.latencyMs < 150 ? 'text-[var(--warning)]' : 'text-[var(--danger)]'}`}>
+                            <td
+                              className={`py-1.5 text-right ${r.latencyMs === null ? 'text-[var(--danger)]' : r.latencyMs < 50 ? 'text-[var(--success)]' : r.latencyMs < 150 ? 'text-[var(--warning)]' : 'text-[var(--danger)]'}`}
+                            >
                               {r.latencyMs !== null ? (
                                 <span className="flex items-center justify-end gap-1">
                                   <Clock className="w-2.5 h-2.5" />

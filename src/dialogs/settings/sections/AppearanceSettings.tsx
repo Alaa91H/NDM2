@@ -4,7 +4,6 @@ import type { AppSettings, AppThemeSettings } from '../../../types/desktop-ui.ty
 import { SelectField } from '../../../components/primitives';
 import { Settings, Palette } from 'lucide-react';
 
-
 interface Props {
   settings: AppSettings;
   updateSetting: (section: keyof AppSettings, key: string, value: unknown) => void;
@@ -13,7 +12,6 @@ interface Props {
 }
 
 export const AppearanceSettings: React.FC<Props> = ({ themeSettings, onUpdateThemeSettings }) => {
-
   const themes: Array<{ value: AppThemeSettings['theme']; label: string; icon: string }> = [
     { value: 'dark', label: 'Dark', icon: '\u{1F319}' },
     { value: 'light', label: 'Light', icon: '\u{2600}\u{FE0F}' },
@@ -47,7 +45,9 @@ export const AppearanceSettings: React.FC<Props> = ({ themeSettings, onUpdateThe
               <button
                 key={theme.value}
                 type="button"
-                onClick={() => { onUpdateThemeSettings('theme', theme.value); }}
+                onClick={() => {
+                  onUpdateThemeSettings('theme', theme.value);
+                }}
                 className={`flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-all cursor-pointer text-left ${
                   themeSettings.theme === theme.value
                     ? 'bg-[var(--accent-primary)]/10 border-[var(--accent-primary)]/40 text-[var(--accent-primary)]'
@@ -76,7 +76,9 @@ export const AppearanceSettings: React.FC<Props> = ({ themeSettings, onUpdateThe
           <SelectField
             label="Density"
             value={themeSettings.density}
-            onChange={(e) => { onUpdateThemeSettings('density', e.target.value); }}
+            onChange={(e) => {
+              onUpdateThemeSettings('density', e.target.value);
+            }}
             options={[
               { value: 'compact', label: 'Compact' },
               { value: 'normal', label: 'Normal' },
@@ -87,7 +89,9 @@ export const AppearanceSettings: React.FC<Props> = ({ themeSettings, onUpdateThe
           <SelectField
             label="Accent Color"
             value={themeSettings.accent}
-            onChange={(e) => { onUpdateThemeSettings('accent', e.target.value); }}
+            onChange={(e) => {
+              onUpdateThemeSettings('accent', e.target.value);
+            }}
             options={accentColors.map((c) => ({
               value: c.value,
               label: `${c.label}  `,
@@ -99,7 +103,9 @@ export const AppearanceSettings: React.FC<Props> = ({ themeSettings, onUpdateThe
                 key={c.value}
                 type="button"
                 title={c.label}
-                onClick={() => { onUpdateThemeSettings('accent', c.value); }}
+                onClick={() => {
+                  onUpdateThemeSettings('accent', c.value);
+                }}
                 className={`w-5 h-5 rounded-full border-2 transition-all cursor-pointer ${
                   themeSettings.accent === c.value
                     ? 'border-[var(--text-primary)] scale-125'
@@ -113,7 +119,9 @@ export const AppearanceSettings: React.FC<Props> = ({ themeSettings, onUpdateThe
           <SelectField
             label="Progress Display"
             value={themeSettings.progress}
-            onChange={(e) => { onUpdateThemeSettings('progress', e.target.value); }}
+            onChange={(e) => {
+              onUpdateThemeSettings('progress', e.target.value);
+            }}
             options={[
               { value: 'bar', label: 'Bar' },
               { value: 'circle', label: 'Circle' },
@@ -124,7 +132,9 @@ export const AppearanceSettings: React.FC<Props> = ({ themeSettings, onUpdateThe
           <SelectField
             label="Contrast"
             value={themeSettings.contrast}
-            onChange={(e) => { onUpdateThemeSettings('contrast', e.target.value); }}
+            onChange={(e) => {
+              onUpdateThemeSettings('contrast', e.target.value);
+            }}
             options={[
               { value: 'normal', label: 'Normal' },
               { value: 'high', label: 'High' },

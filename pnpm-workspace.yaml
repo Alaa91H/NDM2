@@ -19,6 +19,15 @@ resolvePeersFromWorkspaceRoot: false
 
 overrides:
   "uuid@^8.3.0": "11.1.1"
+  # Security patches for dev-only transitive toolchain deps (vite/jsdom/eslint).
+  # postcss <8.5.23 (GHSA-6g55-p6wh-862q incomplete fix), undici <8.9.0
+  # (cross-user disclosure/CRLF injection), brace-expansion <5.0.9 (DoS).
+  # jsdom 30+ vendors its undici usage against the 8.x public API, so the
+  # pin lives on the patched 8.x line now (jsdom 29 needed the removed-in-8
+  # internal `undici/lib/handler/wrap-handler.js`, hence the previous <8 pin).
+  postcss: ">=8.5.23"
+  undici: ">=8.9.0"
+  brace-expansion: ">=5.0.9"
 
 allowBuilds:
   esbuild: true

@@ -26,7 +26,10 @@ const getAudioContext = () => {
   const audioWindow = window as unknown as BrowserAudioWindow;
   const AudioContextCtor = audioWindow.AudioContext ?? audioWindow.webkitAudioContext;
   if (!AudioContextCtor) return null;
-  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  if (idleTimer) {
+    clearTimeout(idleTimer);
+    idleTimer = null;
+  }
   if (!audioContext) {
     audioContext = new AudioContextCtor();
   }
@@ -106,7 +109,7 @@ export const playAppSound = (settings: AppSettings, event: SoundEvent) => {
     const dataUrl = customSoundForEvent(settings, event);
     if (dataUrl) {
       const MAX_CUSTOM_SOUND_BYTES = 512_000;
-      const estimatedBytes = Math.ceil((dataUrl.length - dataUrl.indexOf(',') - 1) * 3 / 4);
+      const estimatedBytes = Math.ceil(((dataUrl.length - dataUrl.indexOf(',') - 1) * 3) / 4);
       if (estimatedBytes > MAX_CUSTOM_SOUND_BYTES) {
         playTone('soft', volume);
         return;

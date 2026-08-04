@@ -124,19 +124,59 @@ export const SettingsDialog: React.FC = () => {
   };
 
   const mainTabs: TabDef[] = [
-    { id: 'general', label: 'General', icon: Settings, keywords: ['general', 'startup', 'language', 'update', 'timezone', 'tray'] },
-    { id: 'downloads', label: 'Downloads', icon: Globe, keywords: ['download', 'folder', 'category', 'file type', 'duplicate', 'sound', 'reset'] },
-    { id: 'network', label: 'Network', icon: Globe, keywords: ['network', 'proxy', 'vpn', 'connection', 'dns', 'speed', 'bandwidth'] },
-    { id: 'appearance', label: 'Appearance', icon: Palette, keywords: ['appearance', 'theme', 'density', 'accent', 'color', 'contrast', 'progress'] },
-    { id: 'browser', label: 'Browser', icon: Monitor, keywords: ['browser', 'extension', 'chrome', 'edge', 'firefox', 'clipboard', 'intercept', 'hls', 'dash'] },
+    {
+      id: 'general',
+      label: 'General',
+      icon: Settings,
+      keywords: ['general', 'startup', 'language', 'update', 'timezone', 'tray'],
+    },
+    {
+      id: 'downloads',
+      label: 'Downloads',
+      icon: Globe,
+      keywords: ['download', 'folder', 'category', 'file type', 'duplicate', 'sound', 'reset'],
+    },
+    {
+      id: 'network',
+      label: 'Network',
+      icon: Globe,
+      keywords: ['network', 'proxy', 'vpn', 'connection', 'dns', 'speed', 'bandwidth'],
+    },
+    {
+      id: 'appearance',
+      label: 'Appearance',
+      icon: Palette,
+      keywords: ['appearance', 'theme', 'density', 'accent', 'color', 'contrast', 'progress'],
+    },
+    {
+      id: 'browser',
+      label: 'Browser',
+      icon: Monitor,
+      keywords: ['browser', 'extension', 'chrome', 'edge', 'firefox', 'clipboard', 'intercept', 'hls', 'dash'],
+    },
     { id: 'media', label: 'Media', icon: Video, keywords: ['media', 'video', 'quality', 'subtitle', 'ffmpeg'] },
     { id: 'torrent', label: 'Torrent', icon: Magnet, keywords: ['torrent', 'magnet', 'dht', 'pex', 'seeding', 'peer'] },
-    { id: 'integrations', label: 'Integrations', icon: Webhook, keywords: ['integration', 'webhook', 'smtp', 'email', 'notification'] },
+    {
+      id: 'integrations',
+      label: 'Integrations',
+      icon: Webhook,
+      keywords: ['integration', 'webhook', 'smtp', 'email', 'notification'],
+    },
     { id: 'telegram', label: 'Telegram Bot', icon: Bot, keywords: ['telegram', 'bot', 'tg', 'chat', 'command', 'cli'] },
-    { id: 'external_tools', label: 'External Tools', icon: Package, keywords: ['external', 'tool', 'yt-dlp', 'ytdlp', 'ffmpeg', 'install', 'update'] },
+    {
+      id: 'external_tools',
+      label: 'External Tools',
+      icon: Package,
+      keywords: ['external', 'tool', 'yt-dlp', 'ytdlp', 'ffmpeg', 'install', 'update'],
+    },
 
     { id: 'logging', label: 'Logging', icon: ScrollText, keywords: ['logging', 'log', 'debug', 'trace', 'error'] },
-    { id: 'backup', label: 'Backup & Reset', icon: Database, keywords: ['backup', 'restore', 'export', 'import', 'factory', 'reset'] },
+    {
+      id: 'backup',
+      label: 'Backup & Reset',
+      icon: Database,
+      keywords: ['backup', 'restore', 'export', 'import', 'factory', 'reset'],
+    },
   ];
 
   const filteredTabs = searchQuery
@@ -210,9 +250,7 @@ export const SettingsDialog: React.FC = () => {
         </div>
 
         <div className="flex-1 overflow-y-auto pr-1 pl-1 scrollbar-thin" dir="ltr">
-          {activeTab === 'general' && (
-            <GeneralSettings settings={localSettings} updateSetting={updateLocalSetting} />
-          )}
+          {activeTab === 'general' && <GeneralSettings settings={localSettings} updateSetting={updateLocalSetting} />}
           {activeTab === 'downloads' && (
             <DownloadSettings
               settings={localSettings}
@@ -233,15 +271,9 @@ export const SettingsDialog: React.FC = () => {
               onUpdateThemeSettings={updateThemeSettings}
             />
           )}
-          {activeTab === 'browser' && (
-            <BrowserSettings settings={localSettings} updateSetting={updateLocalSetting} />
-          )}
-          {activeTab === 'media' && (
-            <MediaSettings settings={localSettings} updateSetting={updateLocalSetting} />
-          )}
-          {activeTab === 'torrent' && (
-            <TorrentSettings settings={localSettings} updateSetting={updateLocalSetting} />
-          )}
+          {activeTab === 'browser' && <BrowserSettings settings={localSettings} updateSetting={updateLocalSetting} />}
+          {activeTab === 'media' && <MediaSettings settings={localSettings} updateSetting={updateLocalSetting} />}
+          {activeTab === 'torrent' && <TorrentSettings settings={localSettings} updateSetting={updateLocalSetting} />}
           {activeTab === 'integrations' && (
             <IntegrationsSettings settings={localSettings} updateSetting={updateLocalSetting} />
           )}
@@ -254,11 +286,7 @@ export const SettingsDialog: React.FC = () => {
             <LoggingSettings settings={localSettings} updateSetting={updateLocalSetting} onAddToast={addToast} />
           )}
           {activeTab === 'backup' && (
-            <BackupResetSettings
-              settings={localSettings}
-              onAddToast={addToast}
-              onFactoryReset={handleResetAllSilent}
-            />
+            <BackupResetSettings settings={localSettings} onAddToast={addToast} onFactoryReset={handleResetAllSilent} />
           )}
         </div>
       </div>

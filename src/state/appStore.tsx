@@ -15,6 +15,11 @@ import { settingsStore } from '../store/settingsStore';
 import { bridgeStore } from '../store/bridgeStore';
 import { uiStore } from '../store/uiStore';
 
+// Per-sync cap on completion side-effects (notification, virus scan, file
+// open). Tasks beyond the cap are queued and drained incrementally on later
+// syncs so every user-configured action still runs — just not all at once.
+const COMPLETION_ACTIONS_PER_SYNC = 100;
+
 const buildNovaDefaultPaths = (downloadsDir: string): AppSettings['saveAndCategories'] => {
   const sep = downloadsDir.includes('\\') ? '\\' : '/';
   const base = `${downloadsDir.replace(/[\\/]+$/, '')}${sep}NOVA`;
@@ -255,7 +260,9 @@ function EffectsProvider({ children }: { children: ReactNode }) {
             const delay = Math.min(100 * Math.pow(2, attempt), 2000);
             await new Promise((r) => setTimeout(r, delay));
           } else {
-            logger.error('AppStore', 'Daemon connection failed after 40 attempts', { error: e instanceof Error ? e.message : String(e) });
+            logger.error('AppStore', 'Daemon connection failed after 40 attempts', {
+              error: e instanceof Error ? e.message : String(e),
+            });
             bridgeStore
               .getState()
               .setBridge({ status: 'degraded', version: 'NOVA daemon unavailable', pid: 0, speedLimit: null });
@@ -348,7 +355,9 @@ function EffectsProvider({ children }: { children: ReactNode }) {
               logger.warn('appStore', 'updateTelegramConfig failed', e);
             });
         }, 300);
-        pendingCleanup = () => { window.clearTimeout(timer); };
+        pendingCleanup = () => {
+          window.clearTimeout(timer);
+        };
       }
     });
     return () => {
@@ -367,6 +376,26 @@ function EffectsProvider({ children }: { children: ReactNode }) {
     let fallbackTick = 0;
     let stopEvents: (() => void) | null = null;
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    // Completion side-effect queue: burst of thousands of completions must not
+    // fire thousands of native notifications / file-opens in one tick, but
+    // every task's configured actions (openOnComplete, virusScan, …) must still
+    // run eventually — so we drain a bounded batch per sync and carry the rest.
+    const pendingCompletion: DownloadItem[] = [];
+    const pendingCompletionIds = new Set<string>();
+
+    const drainCompletions = (settings: AppSettings) => {
+      if (pendingCompletion.length === 0) return;
+      const batch = pendingCompletion.splice(0, COMPLETION_ACTIONS_PER_SYNC);
+      for (const task of batch) {
+        pendingCompletionIds.delete(task.id);
+        logger.info('AppStore', `Download completed: ${task.name}`, { id: task.id, size: task.sizeBytes });
+        void tauriClient.triggerNativeNotification('Download complete', `"${task.name}" finished downloading.`);
+        if (!task.savePath) continue;
+        if (settings.extra.virusScan) void tauriClient.scanDownloadedFile(task.savePath);
+        if (settings.extra.openOnComplete) void tauriClient.openDownloadedFile(task.savePath);
+        if (settings.extra.openFolderOnComplete) void tauriClient.revealDownloadedFile(task.savePath);
+      }
+    };
 
     const applyDownloadsImmediate = (daemonTasks: DownloadItem[], fromStream = false) => {
       if (cancelled) return;
@@ -383,26 +412,41 @@ function EffectsProvider({ children }: { children: ReactNode }) {
 
       if (shouldRunCompletionActions) {
         const currentSettings = settingsStore.getState().settings;
-        newlyCompletedTasks.forEach((task) => {
-          logger.info('AppStore', `Download completed: ${task.name}`, { id: task.id, size: task.sizeBytes });
-          if (currentSettings.sounds.enabled) {
-            playAppSound(currentSettings, 'complete');
-          }
-          void tauriClient.triggerNativeNotification('Download complete', `"${task.name}" finished downloading.`);
-          if (!task.savePath) return;
-          if (currentSettings.extra.virusScan) void tauriClient.scanDownloadedFile(task.savePath);
-          if (currentSettings.extra.openOnComplete) void tauriClient.openDownloadedFile(task.savePath);
-          if (currentSettings.extra.openFolderOnComplete) void tauriClient.revealDownloadedFile(task.savePath);
-        });
-        if (
-          newlyCompletedTasks.length > 0 &&
-          !daemonTasks.some((t) => t.status === 'downloading' || t.status === 'queued')
-        ) {
+        const totalCompleted = newlyCompletedTasks.length;
+        // Play the completion sound once per sync regardless of burst size, so
+        // a huge batch finishing at once can't stack thousands of simultaneous
+        // sound effects.
+        if (totalCompleted > 0 && currentSettings.sounds.enabled) {
+          playAppSound(currentSettings, 'complete');
+        }
+        // Enqueue every newly completed task, then drain a bounded batch this
+        // sync. Tasks beyond the batch stay queued and are processed on later
+        // syncs — so a 10k completion burst can't flood the OS, but no task
+        // silently loses its configured open/scan/notification actions.
+        for (const task of newlyCompletedTasks) {
+          if (pendingCompletionIds.has(task.id)) continue;
+          pendingCompletionIds.add(task.id);
+          pendingCompletion.push(task);
+        }
+        drainCompletions(currentSettings);
+        if (pendingCompletion.length > 0) {
+          logger.info('AppStore', 'Completion side-effects queued', {
+            pending: pendingCompletion.length,
+            perSync: COMPLETION_ACTIONS_PER_SYNC,
+          });
+        }
+        if (totalCompleted > 0 && !daemonTasks.some((t) => t.status === 'downloading' || t.status === 'queued')) {
           playAppSound(currentSettings, 'queueFinished');
         }
       }
 
-      taskStore.getState().setTasks(mergeDaemonTasks(daemonTasks));
+      // mergeDaemonTasks returns the previous array by reference when nothing
+      // changed, so skip setTasks entirely — no subscriber (TaskTable, sidebar
+      // counts, search/filter) is woken on a no-op poll.
+      const merged = mergeDaemonTasks(daemonTasks);
+      if (merged !== taskStore.getState().tasks) {
+        taskStore.getState().setTasks(merged);
+      }
       bridgeStore.getState().setIsDegradedMode(bridgeStore.getState().status === 'degraded');
     };
 
@@ -548,7 +592,9 @@ function EffectsProvider({ children }: { children: ReactNode }) {
         if (cd.active && cd.active !== 'activeProgress') return;
         uiStore.getState().openDialog('activeProgress', nextProgressTask);
       }, 0);
-      pendingCleanup = () => { window.clearTimeout(timer); };
+      pendingCleanup = () => {
+        window.clearTimeout(timer);
+      };
     });
     return () => {
       pendingCleanup?.();

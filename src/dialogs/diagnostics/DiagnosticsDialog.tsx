@@ -125,7 +125,7 @@ export const DiagnosticsDialog: React.FC = () => {
                   typeof net === 'string'
                     ? {
                         name: net.split('=')[0] || net,
-                        ip: net.split('=').slice(1).join('=') || '—',
+                        ip: net.split('=').slice(1).join('=') || 'â€”',
                         speedMbps: undefined,
                       }
                     : net;

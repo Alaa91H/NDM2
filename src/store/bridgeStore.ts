@@ -30,11 +30,7 @@ export const bridgeStore = create<BridgeState>()((set) => ({
     // status was degraded (never clobber a real 'disconnected').
     set((state) => ({
       isDegradedMode: d,
-      status: d
-        ? 'degraded'
-        : state.status === 'degraded'
-          ? 'connected'
-          : state.status,
+      status: d ? 'degraded' : state.status === 'degraded' ? 'connected' : state.status,
     }));
   },
 }));

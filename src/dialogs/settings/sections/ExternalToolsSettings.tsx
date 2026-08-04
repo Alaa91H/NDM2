@@ -51,7 +51,9 @@ export const ExternalToolsSettings: React.FC<Props> = ({ onAddToast }) => {
     void loadToolsRef.current();
   }, []);
 
-  const setAction = (toolId: string, action: string) => { setActionStates((prev) => ({ ...prev, [`${toolId}:${action}`]: 'running' })); };
+  const setAction = (toolId: string, action: string) => {
+    setActionStates((prev) => ({ ...prev, [`${toolId}:${action}`]: 'running' }));
+  };
   const clearAction = (toolId: string, action: string) => {
     setActionStates((prev) => {
       const key = `${toolId}:${action}`;
@@ -59,8 +61,7 @@ export const ExternalToolsSettings: React.FC<Props> = ({ onAddToast }) => {
       return rest;
     });
   };
-  const isActionRunning = (toolId: string, action: string) =>
-    actionStates[`${toolId}:${action}`] === 'running';
+  const isActionRunning = (toolId: string, action: string) => actionStates[`${toolId}:${action}`] === 'running';
 
   const handleDiscover = async (toolId: string) => {
     setAction(toolId, 'discover');
@@ -194,7 +195,9 @@ export const ExternalToolsSettings: React.FC<Props> = ({ onAddToast }) => {
           <h3 className="text-sm font-extrabold text-[var(--accent-primary)]">External Tools</h3>
           <button
             type="button"
-            onClick={() => { void handleHealthCheckAll(); }}
+            onClick={() => {
+              void handleHealthCheckAll();
+            }}
             disabled={isActionRunning('all', 'healthall') || tools.length === 0}
             className="ml-auto px-2 py-1 bg-[var(--bg-hover)] border border-[var(--border-color)] text-[var(--text-secondary)] rounded text-[10px] font-bold hover:bg-[var(--bg-hover)] transition-all cursor-pointer flex items-center gap-1 disabled:opacity-50"
           >
@@ -240,18 +243,14 @@ export const ExternalToolsSettings: React.FC<Props> = ({ onAddToast }) => {
                   </span>
                 </div>
                 {tool.version && (
-                  <span className="text-[10px] font-mono text-[var(--text-muted)] block">
-                    v{tool.version}
-                  </span>
+                  <span className="text-[10px] font-mono text-[var(--text-muted)] block">v{tool.version}</span>
                 )}
                 {tool.path && (
                   <span className="text-[10px] font-mono text-[var(--text-muted)] block truncate" title={tool.path}>
                     {tool.path}
                   </span>
                 )}
-                {tool.error && (
-                  <span className="text-[10px] font-mono text-[var(--danger)] block">{tool.error}</span>
-                )}
+                {tool.error && <span className="text-[10px] font-mono text-[var(--danger)] block">{tool.error}</span>}
               </div>
             </div>
 
@@ -298,7 +297,11 @@ export const ExternalToolsSettings: React.FC<Props> = ({ onAddToast }) => {
                 disabled={isActionRunning(tool.id, 'discover')}
                 className="px-2 py-1 bg-[var(--bg-hover)] border border-[var(--border-color)] text-[var(--text-secondary)] rounded text-[10px] font-bold hover:bg-[var(--border-color)]/20 transition-all cursor-pointer flex items-center gap-1 disabled:opacity-50"
               >
-                {isActionRunning(tool.id, 'discover') ? <RefreshCw className="w-3 h-3 animate-spin" /> : <FolderSearch className="w-3 h-3" />}
+                {isActionRunning(tool.id, 'discover') ? (
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                ) : (
+                  <FolderSearch className="w-3 h-3" />
+                )}
                 Discover
               </button>
               <button
@@ -307,7 +310,11 @@ export const ExternalToolsSettings: React.FC<Props> = ({ onAddToast }) => {
                 disabled={isActionRunning(tool.id, 'health')}
                 className="px-2 py-1 bg-[var(--bg-hover)] border border-[var(--border-color)] text-[var(--text-secondary)] rounded text-[10px] font-bold hover:bg-[var(--border-color)]/20 transition-all cursor-pointer flex items-center gap-1 disabled:opacity-50"
               >
-                {isActionRunning(tool.id, 'health') ? <RefreshCw className="w-3 h-3 animate-spin" /> : <CheckCircle className="w-3 h-3" />}
+                {isActionRunning(tool.id, 'health') ? (
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                ) : (
+                  <CheckCircle className="w-3 h-3" />
+                )}
                 Health Check
               </button>
               <button
@@ -316,7 +323,11 @@ export const ExternalToolsSettings: React.FC<Props> = ({ onAddToast }) => {
                 disabled={isActionRunning(tool.id, 'updates')}
                 className="px-2 py-1 bg-[var(--bg-hover)] border border-[var(--border-color)] text-[var(--text-secondary)] rounded text-[10px] font-bold hover:bg-[var(--border-color)]/20 transition-all cursor-pointer flex items-center gap-1 disabled:opacity-50"
               >
-                {isActionRunning(tool.id, 'updates') ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
+                {isActionRunning(tool.id, 'updates') ? (
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                ) : (
+                  <Download className="w-3 h-3" />
+                )}
                 Check Updates
               </button>
               <button
@@ -325,7 +336,11 @@ export const ExternalToolsSettings: React.FC<Props> = ({ onAddToast }) => {
                 disabled={isActionRunning(tool.id, 'uninstall')}
                 className="px-2 py-1 bg-[var(--danger-bg)] border border-[var(--danger-border)] text-[var(--danger)] rounded text-[10px] font-bold hover:bg-[var(--danger-bg)] transition-all cursor-pointer flex items-center gap-1 disabled:opacity-50"
               >
-                {isActionRunning(tool.id, 'uninstall') ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                {isActionRunning(tool.id, 'uninstall') ? (
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                ) : (
+                  <Trash2 className="w-3 h-3" />
+                )}
                 Uninstall
               </button>
             </div>
@@ -339,7 +354,9 @@ export const ExternalToolsSettings: React.FC<Props> = ({ onAddToast }) => {
                 <input
                   type="text"
                   value={customPaths[tool.id] || ''}
-                  onChange={(e) => { setCustomPaths((prev) => ({ ...prev, [tool.id]: e.target.value })); }}
+                  onChange={(e) => {
+                    setCustomPaths((prev) => ({ ...prev, [tool.id]: e.target.value }));
+                  }}
                   placeholder="Enter custom path to binary"
                   className="w-full bg-[var(--bg-input)] border border-[var(--border-color)] rounded px-2 py-1.5 text-[10px] font-mono text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:border-[var(--accent-primary)] focus:outline-none"
                   style={{ direction: 'ltr', textAlign: 'left' }}

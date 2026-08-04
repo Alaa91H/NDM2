@@ -63,7 +63,9 @@ export const TelegramBotSettings: React.FC<Props> = ({ settings, updateSetting, 
             <span className="text-xs font-bold text-[var(--text-primary)]">Enable Telegram Bot</span>
             <Switch
               checked={settings.extra.tgEnabled}
-              onChange={(v) => { updateSetting('extra', 'tgEnabled', v); }}
+              onChange={(v) => {
+                updateSetting('extra', 'tgEnabled', v);
+              }}
             />
           </div>
 
@@ -72,7 +74,9 @@ export const TelegramBotSettings: React.FC<Props> = ({ settings, updateSetting, 
               <TextField
                 label="Bot Token"
                 value={settings.extra.tgBotToken}
-                onChange={(e) => { updateSetting('extra', 'tgBotToken', e.target.value); }}
+                onChange={(e) => {
+                  updateSetting('extra', 'tgBotToken', e.target.value);
+                }}
                 placeholder="123456:ABC-DEF..."
                 type="password"
                 style={{ direction: 'ltr', textAlign: 'left' }}
@@ -80,21 +84,27 @@ export const TelegramBotSettings: React.FC<Props> = ({ settings, updateSetting, 
               <TextField
                 label="Chat ID"
                 value={settings.extra.tgChatId}
-                onChange={(e) => { updateSetting('extra', 'tgChatId', e.target.value); }}
+                onChange={(e) => {
+                  updateSetting('extra', 'tgChatId', e.target.value);
+                }}
                 placeholder="e.g. 123456789"
                 style={{ direction: 'ltr', textAlign: 'left' }}
               />
               <TextField
                 label="API Base URL"
                 value={settings.extra.tgApiBase}
-                onChange={(e) => { updateSetting('extra', 'tgApiBase', e.target.value); }}
+                onChange={(e) => {
+                  updateSetting('extra', 'tgApiBase', e.target.value);
+                }}
                 placeholder="https://api.telegram.org"
                 style={{ direction: 'ltr', textAlign: 'left' }}
               />
               <TextField
                 label="File Upload Limit (MB)"
                 value={String(settings.extra.tgFileUploadLimitMb)}
-                onChange={(e) => { updateSetting('extra', 'tgFileUploadLimitMb', Number(e.target.value) || 50); }}
+                onChange={(e) => {
+                  updateSetting('extra', 'tgFileUploadLimitMb', Number(e.target.value) || 50);
+                }}
                 placeholder="50"
                 style={{ direction: 'ltr', textAlign: 'left' }}
               />
@@ -116,28 +126,36 @@ export const TelegramBotSettings: React.FC<Props> = ({ settings, updateSetting, 
               <span className="text-xs font-bold text-[var(--text-primary)]">Download Started</span>
               <Switch
                 checked={settings.extra.tgEventStarted}
-                onChange={(v) => { updateSetting('extra', 'tgEventStarted', v); }}
+                onChange={(v) => {
+                  updateSetting('extra', 'tgEventStarted', v);
+                }}
               />
             </div>
             <div className="flex items-center justify-between py-2">
               <span className="text-xs font-bold text-[var(--text-primary)]">Download Completed</span>
               <Switch
                 checked={settings.extra.tgEventCompleted}
-                onChange={(v) => { updateSetting('extra', 'tgEventCompleted', v); }}
+                onChange={(v) => {
+                  updateSetting('extra', 'tgEventCompleted', v);
+                }}
               />
             </div>
             <div className="flex items-center justify-between py-2">
               <span className="text-xs font-bold text-[var(--text-primary)]">Download Failed</span>
               <Switch
                 checked={settings.extra.tgEventFailed}
-                onChange={(v) => { updateSetting('extra', 'tgEventFailed', v); }}
+                onChange={(v) => {
+                  updateSetting('extra', 'tgEventFailed', v);
+                }}
               />
             </div>
             <div className="flex items-center justify-between py-2">
               <span className="text-xs font-bold text-[var(--text-primary)]">Queue Completed</span>
               <Switch
                 checked={settings.extra.tgEventQueueCompleted}
-                onChange={(v) => { updateSetting('extra', 'tgEventQueueCompleted', v); }}
+                onChange={(v) => {
+                  updateSetting('extra', 'tgEventQueueCompleted', v);
+                }}
               />
             </div>
           </div>
@@ -162,7 +180,9 @@ export const TelegramBotSettings: React.FC<Props> = ({ settings, updateSetting, 
               </div>
               <Switch
                 checked={settings.extra.tgFullControl}
-                onChange={(v) => { updateSetting('extra', 'tgFullControl', v); }}
+                onChange={(v) => {
+                  updateSetting('extra', 'tgFullControl', v);
+                }}
               />
             </div>
 
@@ -195,7 +215,9 @@ export const TelegramBotSettings: React.FC<Props> = ({ settings, updateSetting, 
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => { void handleTestConnection(); }}
+                onClick={() => {
+                  void handleTestConnection();
+                }}
                 disabled={testing || !isConfigured}
                 className="px-3 py-1.5 bg-[var(--info-bg)] border border-[var(--info-border)] text-[var(--info)] rounded text-xs font-bold hover:bg-[var(--info-bg)] transition-all cursor-pointer flex items-center gap-1 disabled:opacity-50"
               >
@@ -203,9 +225,7 @@ export const TelegramBotSettings: React.FC<Props> = ({ settings, updateSetting, 
                 {testing ? 'Sending...' : 'Test Connection'}
               </button>
               {!isConfigured && (
-                <span className="text-[10px] text-[var(--text-muted)]">
-                  Set Bot Token and Chat ID first.
-                </span>
+                <span className="text-[10px] text-[var(--text-muted)]">Set Bot Token and Chat ID first.</span>
               )}
             </div>
           </div>

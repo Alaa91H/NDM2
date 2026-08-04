@@ -115,19 +115,25 @@ export function useColumnState() {
   useEffect(() => {
     debouncedSave(STORAGE_KEYS.colWidths, colWidths);
     const timers = saveTimers.current;
-    return () => { clearTimeout(timers[STORAGE_KEYS.colWidths]); };
+    return () => {
+      clearTimeout(timers[STORAGE_KEYS.colWidths]);
+    };
   }, [colWidths, debouncedSave]);
 
   useEffect(() => {
     debouncedSave(STORAGE_KEYS.visibleCols, visibleCols);
     const timers = saveTimers.current;
-    return () => { clearTimeout(timers[STORAGE_KEYS.visibleCols]); };
+    return () => {
+      clearTimeout(timers[STORAGE_KEYS.visibleCols]);
+    };
   }, [visibleCols, debouncedSave]);
 
   useEffect(() => {
     debouncedSave(STORAGE_KEYS.colOrder, colOrder);
     const timers = saveTimers.current;
-    return () => { clearTimeout(timers[STORAGE_KEYS.colOrder]); };
+    return () => {
+      clearTimeout(timers[STORAGE_KEYS.colOrder]);
+    };
   }, [colOrder, debouncedSave]);
 
   useEffect(() => {

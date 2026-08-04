@@ -8,6 +8,10 @@ import { StatusPill } from './primitives';
 
 interface TaskCardListProps {
   tasks: DownloadItem[];
+  /** Height of the top spacer (windowed mode) — preserves scroll position. */
+  padTop?: number;
+  /** Height of the bottom spacer (windowed mode) — preserves scroll height. */
+  padBottom?: number;
   checkedTaskIds: Set<string>;
   handleToggleCheckTask: (id: string, e: React.MouseEvent) => void;
   pauseTask: (id: string) => void;
@@ -20,6 +24,8 @@ interface TaskCardListProps {
 
 const TaskCardListInner: React.FC<TaskCardListProps> = ({
   tasks,
+  padTop = 0,
+  padBottom = 0,
   checkedTaskIds,
   handleToggleCheckTask,
   pauseTask,
@@ -29,7 +35,7 @@ const TaskCardListInner: React.FC<TaskCardListProps> = ({
   openDialog,
   t,
 }) => {
-  if (tasks.length === 0) {
+  if (tasks.length === 0 && padTop === 0 && padBottom === 0) {
     return (
       <div className="md:hidden p-3 space-y-3">
         <div className="py-12 text-center text-[var(--text-muted)] text-xs">{t('no_downloads')}</div>
@@ -39,9 +45,9 @@ const TaskCardListInner: React.FC<TaskCardListProps> = ({
 
   return (
     <div className="md:hidden p-3 space-y-3">
-      {/* VIRTUAL SCROLLING: For mobile card view with 100+ tasks, wrap the
-          card list in react-virtuoso's Virtuoso component with fixed-height
-          rows (~140px per card). This keeps DOM node count constant. */}
+      {/* Windowed mode: top spacer preserves the scroll position of the
+          unrendered slice of the card list. */}
+      {padTop > 0 && <div aria-hidden="true" style={{ height: padTop }} />}
       {tasks.map((task) => {
         const progressPercent = task.sizeBytes > 0 ? Math.round((task.downloadedBytes / task.sizeBytes) * 100) : 0;
         const isChecked = checkedTaskIds.has(task.id);
@@ -173,6 +179,8 @@ const TaskCardListInner: React.FC<TaskCardListProps> = ({
           </div>
         );
       })}
+      {/* Bottom spacer preserves the total scroll height in windowed mode. */}
+      {padBottom > 0 && <div aria-hidden="true" style={{ height: padBottom }} />}
     </div>
   );
 };

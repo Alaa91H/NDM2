@@ -4,7 +4,6 @@ import type { AppSettings } from '../../../types/desktop-ui.types';
 import { Switch, TextField } from '../../../components/primitives';
 import { Magnet } from 'lucide-react';
 
-
 interface Props {
   settings: AppSettings;
   updateSetting: (section: keyof AppSettings, key: string, value: unknown) => void;
@@ -24,7 +23,9 @@ export const TorrentSettings: React.FC<Props> = ({ settings, updateSetting }) =>
             <span className="text-xs font-bold text-[var(--text-primary)]">Enable Torrent Downloads</span>
             <Switch
               checked={settings.extra.torrentEnabled}
-              onChange={(v) => { updateSetting('extra', 'torrentEnabled', v); }}
+              onChange={(v) => {
+                updateSetting('extra', 'torrentEnabled', v);
+              }}
             />
           </div>
 
@@ -34,21 +35,27 @@ export const TorrentSettings: React.FC<Props> = ({ settings, updateSetting }) =>
                 <span className="text-xs font-bold text-[var(--text-primary)]">Enable DHT</span>
                 <Switch
                   checked={settings.extra.torrentDht}
-                  onChange={(v) => { updateSetting('extra', 'torrentDht', v); }}
+                  onChange={(v) => {
+                    updateSetting('extra', 'torrentDht', v);
+                  }}
                 />
               </div>
               <div className="flex items-center justify-between py-2">
                 <span className="text-xs font-bold text-[var(--text-primary)]">Enable PEX</span>
                 <Switch
                   checked={settings.extra.torrentPex}
-                  onChange={(v) => { updateSetting('extra', 'torrentPex', v); }}
+                  onChange={(v) => {
+                    updateSetting('extra', 'torrentPex', v);
+                  }}
                 />
               </div>
               <div className="flex items-center justify-between py-2">
                 <span className="text-xs font-bold text-[var(--text-primary)]">Encrypt Transfers</span>
                 <Switch
                   checked={settings.extra.torrentEncrypt}
-                  onChange={(v) => { updateSetting('extra', 'torrentEncrypt', v); }}
+                  onChange={(v) => {
+                    updateSetting('extra', 'torrentEncrypt', v);
+                  }}
                 />
               </div>
 
@@ -56,14 +63,18 @@ export const TorrentSettings: React.FC<Props> = ({ settings, updateSetting }) =>
                 <TextField
                   label="Listening Port"
                   value={settings.extra.torrentPort}
-                  onChange={(e) => { updateSetting('extra', 'torrentPort', e.target.value); }}
+                  onChange={(e) => {
+                    updateSetting('extra', 'torrentPort', e.target.value);
+                  }}
                   placeholder="Default: 6881"
                   style={{ direction: 'ltr', textAlign: 'left' }}
                 />
                 <TextField
                   label="Max Peers"
                   value={settings.extra.torrentMaxPeers}
-                  onChange={(e) => { updateSetting('extra', 'torrentMaxPeers', e.target.value); }}
+                  onChange={(e) => {
+                    updateSetting('extra', 'torrentMaxPeers', e.target.value);
+                  }}
                   placeholder="Default: 50"
                   style={{ direction: 'ltr', textAlign: 'left' }}
                 />
@@ -73,14 +84,18 @@ export const TorrentSettings: React.FC<Props> = ({ settings, updateSetting }) =>
                 <span className="text-xs font-bold text-[var(--text-primary)]">Allow Seeding</span>
                 <Switch
                   checked={settings.extra.torrentSeeding}
-                  onChange={(v) => { updateSetting('extra', 'torrentSeeding', v); }}
+                  onChange={(v) => {
+                    updateSetting('extra', 'torrentSeeding', v);
+                  }}
                 />
               </div>
               <div className="flex items-center justify-between py-2">
                 <span className="text-xs font-bold text-[var(--text-primary)]">Stop on Battery</span>
                 <Switch
                   checked={settings.extra.torrentBatteryStop}
-                  onChange={(v) => { updateSetting('extra', 'torrentBatteryStop', v); }}
+                  onChange={(v) => {
+                    updateSetting('extra', 'torrentBatteryStop', v);
+                  }}
                 />
               </div>
 
@@ -88,14 +103,18 @@ export const TorrentSettings: React.FC<Props> = ({ settings, updateSetting }) =>
                 <TextField
                   label="Ratio Limit"
                   value={settings.extra.torrentRatioLimit}
-                  onChange={(e) => { updateSetting('extra', 'torrentRatioLimit', e.target.value); }}
+                  onChange={(e) => {
+                    updateSetting('extra', 'torrentRatioLimit', e.target.value);
+                  }}
                   placeholder="e.g. 1.0"
                   style={{ direction: 'ltr', textAlign: 'left' }}
                 />
                 <TextField
                   label="Upload Speed (KB/s)"
                   value={settings.extra.torrentUploadSpeed}
-                  onChange={(e) => { updateSetting('extra', 'torrentUploadSpeed', e.target.value); }}
+                  onChange={(e) => {
+                    updateSetting('extra', 'torrentUploadSpeed', e.target.value);
+                  }}
                   placeholder="e.g. 100"
                   style={{ direction: 'ltr', textAlign: 'left' }}
                 />

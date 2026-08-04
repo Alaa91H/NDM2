@@ -424,7 +424,6 @@ export const ActiveProgressDialog: React.FC<{ taskId?: string }> = ({ taskId }) 
                 </button>
               </div>
             )}
-
           </div>
 
           {/* Segment Distribution Cards */}

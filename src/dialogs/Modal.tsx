@@ -29,7 +29,7 @@ export const Modal: React.FC<ModalProps> = ({
   const modalRef = useRef<HTMLDivElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
 
-  // Dragging state — `dragging` drives rendering, `isDragging` is read inside
+  // Dragging state â€” `dragging` drives rendering, `isDragging` is read inside
   // window-level mouse handlers without re-subscribing them.
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
@@ -78,7 +78,7 @@ export const Modal: React.FC<ModalProps> = ({
       const newX = e.clientX - dragStart.current.x;
       const newY = e.clientY - dragStart.current.y;
 
-      // App title bar height (px) — keeps dialogs below the drag region.
+      // App title bar height (px) â€” keeps dialogs below the drag region.
       const APP_TITLEBAR = 32;
       // Status bar at the bottom (approx).
       const APP_STATUSBAR = 28;

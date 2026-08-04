@@ -4,7 +4,6 @@ import type { AppSettings } from '../../../types/desktop-ui.types';
 import { Switch, SelectField, TextField } from '../../../components/primitives';
 import { Video, Subtitles, Film } from 'lucide-react';
 
-
 interface Props {
   settings: AppSettings;
   updateSetting: (section: keyof AppSettings, key: string, value: unknown) => void;
@@ -24,7 +23,9 @@ export const MediaSettings: React.FC<Props> = ({ settings, updateSetting }) => {
           <SelectField
             label="Default Video Quality"
             value={settings.extra.videoQuality}
-            onChange={(e) => { updateSetting('extra', 'videoQuality', e.target.value); }}
+            onChange={(e) => {
+              updateSetting('extra', 'videoQuality', e.target.value);
+            }}
             options={[
               { value: 'best', label: 'Best Quality' },
               { value: 'good', label: 'Good (Balanced)' },
@@ -46,13 +47,17 @@ export const MediaSettings: React.FC<Props> = ({ settings, updateSetting }) => {
             <span className="text-xs font-bold text-[var(--text-primary)]">Download Subtitles</span>
             <Switch
               checked={settings.extra.downloadSubtitles}
-              onChange={(v) => { updateSetting('extra', 'downloadSubtitles', v); }}
+              onChange={(v) => {
+                updateSetting('extra', 'downloadSubtitles', v);
+              }}
             />
           </div>
           <TextField
             label="Subtitle Language"
             value={settings.extra.subtitleLanguage}
-            onChange={(e) => { updateSetting('extra', 'subtitleLanguage', e.target.value); }}
+            onChange={(e) => {
+              updateSetting('extra', 'subtitleLanguage', e.target.value);
+            }}
             placeholder="e.g. en, es, fr (leave empty for all)"
             style={{ direction: 'ltr', textAlign: 'left' }}
           />
@@ -73,7 +78,9 @@ export const MediaSettings: React.FC<Props> = ({ settings, updateSetting }) => {
           <TextField
             label="FFmpeg Path"
             value={settings.extra.ffmpegPath}
-            onChange={(e) => { updateSetting('extra', 'ffmpegPath', e.target.value); }}
+            onChange={(e) => {
+              updateSetting('extra', 'ffmpegPath', e.target.value);
+            }}
             placeholder="Leave empty to use bundled FFmpeg"
             style={{ direction: 'ltr', textAlign: 'left' }}
           />
@@ -81,14 +88,18 @@ export const MediaSettings: React.FC<Props> = ({ settings, updateSetting }) => {
             <span className="text-xs font-bold text-[var(--text-primary)]">Auto-Merge Segments</span>
             <Switch
               checked={settings.extra.ffmpegAutoMerge}
-              onChange={(v) => { updateSetting('extra', 'ffmpegAutoMerge', v); }}
+              onChange={(v) => {
+                updateSetting('extra', 'ffmpegAutoMerge', v);
+              }}
             />
           </div>
           <div className="flex items-center justify-between py-2">
             <span className="text-xs font-bold text-[var(--text-primary)]">Delete Segments After Merge</span>
             <Switch
               checked={settings.extra.ffmpegDeleteSegments}
-              onChange={(v) => { updateSetting('extra', 'ffmpegDeleteSegments', v); }}
+              onChange={(v) => {
+                updateSetting('extra', 'ffmpegDeleteSegments', v);
+              }}
             />
           </div>
           <p className="text-[10px] text-[var(--text-muted)] leading-relaxed">

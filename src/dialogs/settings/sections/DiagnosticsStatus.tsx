@@ -2,14 +2,7 @@
 import React, { useState } from 'react';
 import type { AppSettings } from '../../../types/desktop-ui.types';
 import { FormRow, Switch } from '../../../components/primitives';
-import {
-  Activity,
-  Cpu,
-  Shield,
-  Zap,
-  Globe,
-  RefreshCw,
-} from 'lucide-react';
+import { Activity, Cpu, Shield, Zap, Globe, RefreshCw } from 'lucide-react';
 import { useBridgeData, useSettingsActions, useI18n } from '../../../store/selectors';
 import { novaClient } from '../../../api/novaClient';
 import { useEngineCapabilities } from '../../../capabilities/EngineCapabilityContext';
@@ -20,10 +13,7 @@ interface Props {
   onAddToast: (type: 'success' | 'error' | 'info' | 'warning', title: string, msg: string) => void;
 }
 
-export const DiagnosticsStatus: React.FC<Props> = ({
-  settings,
-  onAddToast,
-}) => {
+export const DiagnosticsStatus: React.FC<Props> = ({ settings, onAddToast }) => {
   const t = useI18n();
   const bridge = useBridgeData();
   const { updateSettings } = useSettingsActions();
@@ -67,9 +57,7 @@ export const DiagnosticsStatus: React.FC<Props> = ({
         </div>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <div className="bg-[var(--bg-hover)]/30 border border-[var(--border-color)] rounded-lg p-3">
-            <span className="text-[10px] text-[var(--text-muted)] block font-bold">
-              {t('settings_bridge_service')}
-            </span>
+            <span className="text-[10px] text-[var(--text-muted)] block font-bold">{t('settings_bridge_service')}</span>
             <span className="text-xs font-mono text-[var(--success)]">{bridge.status}</span>
           </div>
           <div className="bg-[var(--bg-hover)]/30 border border-[var(--border-color)] rounded-lg p-3">
@@ -77,9 +65,7 @@ export const DiagnosticsStatus: React.FC<Props> = ({
             <span className="text-xs font-mono">{bridge.pid || '-'}</span>
           </div>
           <div className="bg-[var(--bg-hover)]/30 border border-[var(--border-color)] rounded-lg p-3">
-            <span className="text-[10px] text-[var(--text-muted)] block font-bold">
-              {t('settings_bridge_version')}
-            </span>
+            <span className="text-[10px] text-[var(--text-muted)] block font-bold">{t('settings_bridge_version')}</span>
             <span className="text-xs font-mono">{bridge.version || '-'}</span>
           </div>
           <div className="bg-[var(--bg-hover)]/30 border border-[var(--border-color)] rounded-lg p-3">

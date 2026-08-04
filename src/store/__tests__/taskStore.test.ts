@@ -2,19 +2,42 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { taskStore, mergeDaemonTasks } from '../taskStore';
 import type { DownloadItem } from '../../types/desktop-ui.types';
 
+const { uiStoreMocks, queueStoreMocks, novaMock } = vi.hoisted(() => {
+  let taskCounter = 0;
+  return {
+    uiStoreMocks: {
+      selectedTaskId: null as string | null,
+      setSelectedTaskId: vi.fn(),
+      addToast: vi.fn(),
+      openDialog: vi.fn(),
+    },
+    queueStoreMocks: {
+      addTaskToQueueOrder: vi.fn(),
+      removeTaskFromQueue: vi.fn(),
+    },
+    novaMock: {
+      resetCounter: () => {
+        taskCounter = 0;
+      },
+      createDownload: vi.fn().mockImplementation((item: Record<string, unknown>) => {
+        taskCounter += 1;
+        return Promise.resolve({
+          ...item,
+          id: `new_task_${String(taskCounter)}`,
+          dateAdded: new Date().toISOString(),
+          downloadedBytes: 0,
+          speedBytesPerSec: 0,
+          timeLeftSeconds: 0,
+          segments: [],
+        });
+      }),
+    },
+  };
+});
+
 vi.mock('../../api/novaClient', () => ({
   novaClient: {
-    createDownload: vi.fn().mockImplementation((item: Record<string, unknown>) =>
-      Promise.resolve({
-        ...item,
-        id: 'new_task_1',
-        dateAdded: new Date().toISOString(),
-        downloadedBytes: 0,
-        speedBytesPerSec: 0,
-        timeLeftSeconds: 0,
-        segments: [],
-      }),
-    ),
+    createDownload: novaMock.createDownload,
     pauseDownload: vi
       .fn()
       .mockImplementation((id: string) => Promise.resolve({ id, status: 'paused', name: 'Paused File' })),
@@ -33,12 +56,7 @@ vi.mock('../../api/tauriClient', () => ({
 vi.mock('../../utils/sound', () => ({ playAppSound: vi.fn() }));
 vi.mock('../uiStore', () => ({
   uiStore: {
-    getState: () => ({
-      selectedTaskId: null,
-      setSelectedTaskId: vi.fn(),
-      addToast: vi.fn(),
-      openDialog: vi.fn(),
-    }),
+    getState: () => uiStoreMocks,
   },
 }));
 vi.mock('../bridgeStore', () => ({
@@ -51,9 +69,7 @@ vi.mock('../bridgeStore', () => ({
 }));
 vi.mock('../queueStore', () => ({
   queueStore: {
-    getState: () => ({
-      addTaskToQueueOrder: vi.fn(),
-    }),
+    getState: () => queueStoreMocks,
   },
 }));
 vi.mock('../settingsStore', () => ({
@@ -66,6 +82,27 @@ vi.mock('../settingsStore', () => ({
   },
 }));
 
+const makeTask = (id: string, status: DownloadItem['status']): DownloadItem => ({
+  id,
+  name: `${id}.zip`,
+  url: `http://example.com/${id}.zip`,
+  fileType: 'other',
+  status,
+  sizeBytes: 1024,
+  downloadedBytes: status === 'completed' ? 1024 : 0,
+  speedBytesPerSec: 0,
+  timeLeftSeconds: 0,
+  elapsedSeconds: 0,
+  dateAdded: '2024-01-01T00:00:00Z',
+  category: 'other',
+  queueId: 'main',
+  connections: 1,
+  resumable: true,
+  savePath: `/downloads/${id}.zip`,
+  description: '',
+  segments: [],
+});
+
 describe('mergeDaemonTasks', () => {
   it('returns shallow copies of each task', () => {
     const tasks = [
@@ -77,10 +114,44 @@ describe('mergeDaemonTasks', () => {
     expect(result[0]).not.toBe(tasks[0]);
     expect(result[0].id).toBe('1');
   });
+
+  it('returns the previous array by reference when nothing changed', () => {
+    taskStore.setState({ tasks: [makeTask('task1', 'downloading')] });
+    const prev = taskStore.getState().tasks;
+    const result = mergeDaemonTasks([makeTask('task1', 'downloading')]);
+    expect(result).toBe(prev);
+  });
+
+  it('returns a new array when any task changed', () => {
+    taskStore.setState({ tasks: [makeTask('task1', 'downloading')] });
+    const prev = taskStore.getState().tasks;
+    const result = mergeDaemonTasks([makeTask('task1', 'completed')]);
+    expect(result).not.toBe(prev);
+    expect(result[0].status).toBe('completed');
+  });
+
+  it('returns a new array when the list changed size', () => {
+    taskStore.setState({ tasks: [makeTask('task1', 'downloading')] });
+    const prev = taskStore.getState().tasks;
+    const result = mergeDaemonTasks([makeTask('task1', 'downloading'), makeTask('task2', 'queued')]);
+    expect(result).not.toBe(prev);
+    expect(result).toHaveLength(2);
+  });
+
+  it('returns a new array when the order changed', () => {
+    const a = makeTask('task1', 'downloading');
+    const b = makeTask('task2', 'queued');
+    taskStore.setState({ tasks: [a, b] });
+    const prev = taskStore.getState().tasks;
+    const result = mergeDaemonTasks([b, a]);
+    expect(result).not.toBe(prev);
+    expect(result).toHaveLength(2);
+  });
 });
 
 describe('taskStore', () => {
   beforeEach(() => {
+    novaMock.resetCounter();
     taskStore.setState({
       tasks: [
         {
@@ -239,6 +310,36 @@ describe('taskStore', () => {
       await taskStore.getState().deleteTask('task1', true);
       // eslint-disable-next-line @typescript-eslint/unbound-method
       expect(novaClient.deleteDownload).toHaveBeenCalledWith('task1', true);
+    });
+
+    it('prunes the task id from all queue downloadOrder lists', async () => {
+      await taskStore.getState().deleteTask('task1', false);
+      expect(queueStoreMocks.removeTaskFromQueue).toHaveBeenCalledWith('task1');
+    });
+  });
+
+  describe('triggerBatchDownload', () => {
+    beforeEach(() => {
+      taskStore.setState({ tasks: [] });
+      uiStoreMocks.addToast.mockClear();
+      novaMock.resetCounter();
+    });
+
+    it('accepts all URLs with a single summary toast (silent per-task adds)', async () => {
+      await taskStore.getState().triggerBatchDownload([
+        'http://example.com/a.zip',
+        'http://example.com/b.zip',
+        'http://example.com/c.zip',
+      ]);
+      expect(taskStore.getState().tasks).toHaveLength(3);
+      // One toast for the batch summary, none per individual task.
+      expect(uiStoreMocks.addToast).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips empty lines and still reports accepted count', async () => {
+      await taskStore.getState().triggerBatchDownload(['http://example.com/a.zip', '', '  ']);
+      expect(taskStore.getState().tasks).toHaveLength(1);
+      expect(uiStoreMocks.addToast).toHaveBeenCalledTimes(1);
     });
   });
 

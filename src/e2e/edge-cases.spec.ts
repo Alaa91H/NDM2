@@ -214,7 +214,7 @@ test.describe('Edge Cases — accessibility regression', () => {
       if (await btn.isVisible().catch(() => false)) {
         const hasName = await btn.evaluate((el) => {
           return (
-            (el.textContent?.trim() || '').length > 0 ||
+            el.textContent.trim().length > 0 ||
             (el.getAttribute('aria-label') || '').length > 0 ||
             (el.getAttribute('title') || '').length > 0 ||
             (el.getAttribute('aria-labelledby') || '').length > 0

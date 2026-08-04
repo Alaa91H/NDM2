@@ -191,8 +191,7 @@ export function exportLogsAsText(entries: LogEntry[], filters: { level: string; 
     '='.repeat(120),
     '',
     ...entries.map(
-      (e) =>
-        `[${formatLogTimestamp(e.timestamp)}] [${e.level.toUpperCase().padEnd(5)}] [${e.source}] ${e.message}`,
+      (e) => `[${formatLogTimestamp(e.timestamp)}] [${e.level.toUpperCase().padEnd(5)}] [${e.source}] ${e.message}`,
     ),
   ];
   return lines.join('\n');
