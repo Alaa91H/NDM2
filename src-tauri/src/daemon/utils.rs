@@ -890,12 +890,12 @@ pub fn validate_proxy_url(proxy_url: &str) -> Result<(), String> {
 /// `..`) would otherwise let a remote server write files anywhere the daemon
 /// can. Returns a bare file name with no path components, no separators, no
 /// traversal, no Windows-reserved names, bounded length, and a safe fallback.
-pub fn sanitize_derived_file_name(raw: &str) -> String {
-    // Defense in depth: some upstream paths pass the name percent-encoded
-    // (e.g. `%2F` for `/`, `%5C` for `\`, `%2E%2E` for `..`). Decode only
-    // the separator-relevant escapes so a remote server cannot smuggle a
-    // traversal through encoding, regardless of which decoder ran before.
-    // Iterates by UTF-8 char (not byte) so multi-byte names survive intact.
+/// Decode only the separator-relevant percent escapes (`%2F` for `/`, `%5C`
+/// for `\`, `%2E` for `.`) across a whole path. A remote server can smuggle a
+/// path traversal through encoding, so we normalize these before any
+/// component parsing. Iterates by UTF-8 char (not byte) so multi-byte names
+/// survive intact.
+pub fn decode_separator_escapes(raw: &str) -> String {
     let mut decoded = String::with_capacity(raw.len());
     let mut i = 0;
     while i < raw.len() {
@@ -913,6 +913,15 @@ pub fn sanitize_derived_file_name(raw: &str) -> String {
         decoded.push(ch);
         i += ch.len_utf8();
     }
+    decoded
+}
+
+pub fn sanitize_derived_file_name(raw: &str) -> String {
+    // Defense in depth: some upstream paths pass the name percent-encoded
+    // (e.g. `%2F` for `/`, `%5C` for `\`, `%2E%2E` for `..`). Decode only
+    // the separator-relevant escapes so a remote server cannot smuggle a
+    // traversal through encoding, regardless of which decoder ran before.
+    let decoded = decode_separator_escapes(raw);
     // Strip any directory components — never trust path separators from the
     // source. This neutralizes both `/` and `\` and any `..`/`.` traversal.
     let base = decoded.rsplit(['/', '\\']).next().unwrap_or("").trim();
@@ -997,7 +1006,13 @@ fn is_windows_reserved_device_name(name: &str) -> bool {
 /// derived from an untrusted server name — is forced to be a bare safe name.
 pub fn sanitize_output_path(output: &std::path::Path) -> std::path::PathBuf {
     use std::path::Component;
-    let safe_name = output
+    // Decode separator escapes across the WHOLE path first — not just the
+    // file-name component — so percent-encoded traversal in directory
+    // components (`..%2F..%2F`) is recognized and dropped, not left as a
+    // literal directory name that survives on disk.
+    let decoded = decode_separator_escapes(&output.to_string_lossy());
+    let decoded_path = std::path::Path::new(&decoded);
+    let safe_name = decoded_path
         .file_name()
         .map(|f| sanitize_derived_file_name(&f.to_string_lossy()))
         .unwrap_or_else(|| "download".to_owned());
@@ -1006,7 +1021,7 @@ pub fn sanitize_output_path(output: &std::path::Path) -> std::path::PathBuf {
     // chosen folder. The raw file-name component is intentionally excluded
     // from the rebuild and replaced by `safe_name` below.
     let mut dir = std::path::PathBuf::new();
-    if let Some(parent) = output.parent() {
+    if let Some(parent) = decoded_path.parent() {
         for comp in parent.components() {
             match comp {
                 Component::CurDir | Component::ParentDir => {}

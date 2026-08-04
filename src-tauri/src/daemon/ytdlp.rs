@@ -440,11 +440,17 @@ pub fn update_ytdlp_progress(state: &SharedState, id: &str, text: &str) {
     for line in text.lines() {
         if let Some(dest) = line.strip_prefix("Destination: ") {
             record.task.save_path = dest.trim().to_owned();
+            // The reported destination derives from the server-controlled
+            // media title, so the display name is sanitized to a bare safe
+            // name (control chars, Windows reserved devices, length bound —
+            // mirrors the curl engine path). `save_path` itself is kept
+            // verbatim: it is the real on-disk path yt-dlp reported, which
+            // `media_output_produced` validates against for completion.
             if let Some(name) = std::path::Path::new(dest.trim())
                 .file_name()
                 .and_then(|n| n.to_str())
             {
-                record.task.name = name.to_owned();
+                record.task.name = crate::daemon::utils::sanitize_derived_file_name(name);
             }
         }
 
@@ -641,7 +647,11 @@ pub fn build_ytdlp_args_with_engines(
     ];
 
     if let Some(sp) = &body.save_path {
-        if let Some(parent) = std::path::Path::new(sp).parent() {
+        // Neutralize traversal in the yt-dlp output directory (mirrors the
+        // curl engine path) so a server-controlled title or save path cannot
+        // make yt-dlp write outside the chosen folder.
+        let safe_sp = crate::daemon::utils::sanitize_output_path(std::path::Path::new(sp));
+        if let Some(parent) = safe_sp.parent() {
             let dir = parent.to_string_lossy().to_string();
             if !dir.is_empty() {
                 push_arg(&mut args, "-P", &dir);
@@ -949,7 +959,13 @@ pub async fn create_ytdlp_task(
     body: &CreateDownloadBody,
 ) -> Result<Task, String> {
     let url = body.url.as_deref().unwrap_or("");
-    let name = body.name.clone().unwrap_or_else(|| "media".to_owned());
+    // The task name may be derived from a server-controlled media title;
+    // sanitize it to a bare file name (mirrors the curl engine path in
+    // args::destination_from_body) so a crafted title with path separators
+    // or `..` traversal cannot become a path on disk.
+    let name = crate::daemon::utils::sanitize_derived_file_name(
+        &body.name.clone().unwrap_or_else(|| "media".to_owned()),
+    );
     let id = Uuid::new_v4().to_string();
 
     // Block internal/loopback targets to prevent SSRF (matches curl engine path).
@@ -963,7 +979,12 @@ pub async fn create_ytdlp_task(
     }
 
     if let Some(sp) = &body.save_path {
-        if let Some(parent) = std::path::Path::new(sp).parent() {
+        // Neutralize any `..`/`.` traversal components in the user-supplied
+        // save path so a server-controlled title cannot push yt-dlp's output
+        // outside the chosen directory (mirrors sanitize_output_path in the
+        // curl engine). The directory is preserved verbatim.
+        let safe_sp = crate::daemon::utils::sanitize_output_path(std::path::Path::new(sp));
+        if let Some(parent) = safe_sp.parent() {
             let dir = parent.to_string_lossy().to_string();
             if !dir.is_empty() {
                 let _ = std::fs::create_dir_all(&dir);
@@ -1218,6 +1239,127 @@ mod tests {
         assert_eq!(
             args.last().map(String::as_str),
             Some("https://example.com/watch?v=1")
+        );
+    }
+
+    #[test]
+    fn ytdlp_output_dir_neutralizes_path_traversal() {
+        // A server-controlled save path (or title-derived name) with `..`
+        // must never become yt-dlp's output directory (CWE-22, mirror of the
+        // curl engine fix).
+        let mut body = media_body(MediaDownloadOptions::default());
+        body.save_path = Some("C:/Downloads/..%2F..%2F..%2Fevil.mp4".to_owned());
+        let args = build_ytdlp_args_with_engines(&body, None).unwrap();
+        // Compare as Path objects (Windows prints backslash separators).
+        let p_val = args
+            .windows(2)
+            .find(|pair| pair[0] == "-P")
+            .map(|pair| pair[1].clone());
+        assert_eq!(
+            p_val.map(std::path::PathBuf::from),
+            Some(std::path::PathBuf::from("C:/Downloads"))
+        );
+
+        // A bare traversal save path collapses to a safe directory: the
+        // `..` components are dropped (a literal `tmp` component may survive
+        // as a legitimate directory name, but nothing may escape upward).
+        let mut body2 = media_body(MediaDownloadOptions::default());
+        body2.save_path = Some("../../../../tmp/evil.mp4".to_owned());
+        let args2 = build_ytdlp_args_with_engines(&body2, None).unwrap();
+        let p_val = args2
+            .windows(2)
+            .find(|pair| pair[0] == "-P")
+            .map(|pair| pair[1].clone());
+        // The directory may be empty after neutralization (collapses to the
+        // file component's parent-less path) — either way no `..` survives.
+        if let Some(dir) = p_val {
+            assert!(
+                !dir.contains(".."),
+                "traversal survived in yt-dlp output dir: {dir}"
+            );
+            // Relative traversal targets must not survive as path escapes;
+            // a leftover `tmp` component is fine only if it does not begin
+            // with a parent-dir escape.
+            assert!(
+                !std::path::Path::new(&dir).is_absolute() || !dir.contains("tmp"),
+                "traversal target leaked: {dir}"
+            );
+        }
+    }
+
+    #[test]
+    fn ytdlp_destination_name_is_sanitized() {
+        // The `Destination:` line yt-dlp prints derives from the
+        // server-controlled media title; the recorded task name must be a
+        // bare safe name (control chars, Windows reserved devices, `..`).
+        // `save_path` itself stays verbatim because it is the real on-disk
+        // path that `media_output_produced` validates against.
+        let dir = std::env::temp_dir().join(format!("nova-ytdlp-name-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir_str = dir.display().to_string();
+        let state = std::sync::Arc::new(crate::daemon::persist::tests::test_state(&dir_str));
+        let id = "m1".to_string();
+        state.media_jobs.lock().unwrap().insert(
+            id.clone(),
+            MediaJob {
+                task: crate::daemon::types::Task {
+                    id: id.clone(),
+                    name: "placeholder".to_owned(),
+                    url: "https://example.com/v".to_owned(),
+                    file_type: "video".to_owned(),
+                    status: "downloading".to_owned(),
+                    size_bytes: 0,
+                    downloaded_bytes: 0,
+                    speed_bytes_per_sec: 0,
+                    time_left_seconds: 0,
+                    elapsed_seconds: 0,
+                    date_added: String::new(),
+                    category: "video".to_owned(),
+                    queue_id: "main".to_owned(),
+                    connections: 1,
+                    resumable: true,
+                    save_path: String::new(),
+                    description: String::new(),
+                    segments: Vec::new(),
+                    referer: None,
+                    engine: "yt-dlp".to_owned(),
+                    engine_id: id.clone(),
+                    engine_status: None,
+                    error_message: None,
+                },
+                child: None,
+                args: Vec::new(),
+                start_time: std::time::Instant::now(),
+            },
+        );
+        update_ytdlp_progress(
+            &state,
+            &id,
+            "Destination: C:/Downloads/..%2F..%2F..%2FCON.mp4",
+        );
+        let record = state.media_jobs.lock().unwrap();
+        let task = &record.get(&id).unwrap().task;
+        // The name is neutralized to a safe bare name (no `..`, no reserved
+        // device), while the real on-disk path is preserved verbatim.
+        assert_eq!(task.name, "download");
+        assert_eq!(task.save_path, "C:/Downloads/..%2F..%2F..%2FCON.mp4");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn ytdlp_task_name_is_sanitized() {
+        // The media title is server-controlled; a crafted title with path
+        // separators must be reduced to a bare file name.
+        let mut body = media_body(MediaDownloadOptions::default());
+        body.name = Some("..%2F..%2FWindows%2Fevil.mp4".to_owned());
+        let sanitized = crate::daemon::utils::sanitize_derived_file_name(
+            &body.name.clone().unwrap_or_else(|| "media".to_owned()),
+        );
+        assert_eq!(sanitized, "evil.mp4");
+        // The plain-media default stays intact.
+        assert_eq!(
+            crate::daemon::utils::sanitize_derived_file_name("my song.mp4"),
+            "my song.mp4"
         );
     }
 }
