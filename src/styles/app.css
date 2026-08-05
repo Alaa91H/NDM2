@@ -373,12 +373,7 @@ footer .truncate {
   position: absolute;
   inset: 0;
   width: 40%;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    rgba(255, 255, 255, 0.45),
-    transparent
-  );
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.45), transparent);
   animation: progress-indeterminate-slide 1.15s ease-in-out infinite;
 }
 @keyframes progress-indeterminate-slide {

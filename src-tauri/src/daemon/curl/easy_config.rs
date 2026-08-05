@@ -409,18 +409,6 @@ pub fn init_download_ssl() {
     });
 }
 
-fn url_origin(url: &str) -> Option<String> {
-    let (scheme, rest) = url.split_once("://")?;
-    if scheme.is_empty() {
-        return None;
-    }
-    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
-    if host.is_empty() {
-        return None;
-    }
-    Some(format!("{scheme}://{host}/"))
-}
-
 fn if_range_header(plan: &DirectDownloadPlan) -> Option<String> {
     let validator = plan.validator.as_ref()?;
     if plan.validator_is_etag {
@@ -527,12 +515,16 @@ pub fn apply_easy_options<H: Handler>(
     let user_agent = plan.config.str_("userAgent").unwrap_or(DEFAULT_USER_AGENT);
     easy.useragent(user_agent)
         .map_err(|e| format!("Could not configure user-agent: {e}"))?;
+    // Only send a Referer when the caller explicitly provided one. Do NOT
+    // synthesize a self-referer (the download URL itself) or a bare origin
+    // fallback: several real-world servers (e.g. thinkbroadband.com) reject
+    // any request carrying a Referer header with 403, which broke downloads
+    // that work fine in plain curl with no Referer at all. Callers that need
+    // a Referer (hotlink-protected CDNs, browser-captured pages) set
+    // `plan.referer` explicitly.
     if let Some(referer) = plan.referer.as_deref() {
         easy.referer(referer)
             .map_err(|e| format!("Could not configure referer: {e}"))?;
-    } else if let Some(origin) = url_origin(&plan.url) {
-        easy.referer(&origin)
-            .map_err(|e| format!("Could not configure origin referer: {e}"))?;
     }
     if let Some(cookies) = plan.config.str_("cookies") {
         easy.cookie(cookies)

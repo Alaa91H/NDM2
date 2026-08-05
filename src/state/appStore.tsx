@@ -366,16 +366,21 @@ function EffectsProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // Live task sync (SSE + polling fallback)
+  // Live task sync (SSE + polling fallback). The bridge starts in
+  // 'connecting' and only becomes ready after the daemon health check
+  // succeeds, which is async — so this effect must *subscribe* to status
+  // changes instead of gating on the mount-time value, or task sync would
+  // never start on a fresh page load.
   useEffect(() => {
-    const bridgeStatus = bridgeStore.getState().status;
-    if (bridgeStatus !== 'connected' && bridgeStatus !== 'degraded') return;
     let cancelled = false;
     let started = false;
     let sseFailed = false;
     let fallbackTick = 0;
     let stopEvents: (() => void) | null = null;
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    let initialTimer: ReturnType<typeof setTimeout> | null = null;
+    let interval: ReturnType<typeof setInterval> | null = null;
+    let syncActive = false;
     // Completion side-effect queue: burst of thousands of completions must not
     // fire thousands of native notifications / file-opens in one tick, but
     // every task's configured actions (openOnComplete, virusScan, …) must still
@@ -478,50 +483,90 @@ function EffectsProvider({ children }: { children: ReactNode }) {
       }
     };
 
-    const { enableSse } = settingsStore.getState().settings.extra;
-    const canStreamDownloads = enableSse && typeof window.EventSource !== 'undefined';
-    if (canStreamDownloads) {
-      stopEvents = novaClient.streamDownloads(
-        (daemonTasks) => {
-          applyDownloads(daemonTasks, true);
-        },
-        () => {
-          sseFailed = true;
-        },
-      );
-    }
-
-    const initialTimer = setTimeout(() => {
-      if (!cancelled) {
-        started = true;
-        void syncDownloads();
-      }
-    }, 1000);
-    const interval = setInterval(() => {
-      if (document.hidden) return;
-      fallbackTick += 1;
-      if (canStreamDownloads && !sseFailed && fallbackTick % 5 !== 0) return;
-      void syncDownloads();
-    }, 2000);
     const onVisibilityChange = () => {
       if (!document.hidden) void syncDownloads();
     };
-    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    const stopSync = () => {
+      if (!syncActive) return;
+      syncActive = false;
+      if (debounceTimer !== null) {
+        clearTimeout(debounceTimer);
+        debounceTimer = null;
+      }
+      if (initialTimer !== null) {
+        clearTimeout(initialTimer);
+        initialTimer = null;
+      }
+      if (interval !== null) {
+        clearInterval(interval);
+        interval = null;
+      }
+      stopEvents?.();
+      stopEvents = null;
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+
+    const startSync = () => {
+      if (cancelled || syncActive) return;
+      syncActive = true;
+      started = false;
+      sseFailed = false;
+      fallbackTick = 0;
+      const { enableSse } = settingsStore.getState().settings.extra;
+      const canStreamDownloads = enableSse && typeof window.EventSource !== 'undefined';
+      if (canStreamDownloads) {
+        stopEvents = novaClient.streamDownloads(
+          (daemonTasks) => {
+            applyDownloads(daemonTasks, true);
+          },
+          () => {
+            sseFailed = true;
+          },
+        );
+      }
+      initialTimer = setTimeout(() => {
+        if (!cancelled) {
+          started = true;
+          void syncDownloads();
+        }
+      }, 1000);
+      interval = setInterval(() => {
+        if (document.hidden) return;
+        fallbackTick += 1;
+        if (canStreamDownloads && !sseFailed && fallbackTick % 5 !== 0) return;
+        void syncDownloads();
+      }, 2000);
+      document.addEventListener('visibilitychange', onVisibilityChange);
+    };
+
+    // Start syncing when the bridge becomes ready (connected or degraded) and
+    // stop when it drops out — e.g. a daemon restart. The mount-time status is
+    // always 'connecting', so without this subscription task sync would never
+    // run.
+    const unsub = bridgeStore.subscribe((state, prev) => {
+      const ready = state.status === 'connected' || state.status === 'degraded';
+      const wasReady = prev.status === 'connected' || prev.status === 'degraded';
+      if (ready && !wasReady) startSync();
+      else if (!ready && wasReady) stopSync();
+    });
+    const initialStatus = bridgeStore.getState().status;
+    if (initialStatus === 'connected' || initialStatus === 'degraded') startSync();
+
     return () => {
       cancelled = true;
-      if (debounceTimer !== null) clearTimeout(debounceTimer);
-      clearTimeout(initialTimer);
-      clearInterval(interval);
-      stopEvents?.();
-      document.removeEventListener('visibilitychange', onVisibilityChange);
+      unsub();
+      stopSync();
     };
   }, []);
 
-  // Queue scheduler
+  // Queue scheduler. Same mount-time status trap as the task-sync effect: the
+  // bridge starts 'connecting', so a one-shot gate would never tick scheduled
+  // queues on a fresh page load. Subscribe to status transitions instead and
+  // only run the scheduler while the bridge is ready.
   useEffect(() => {
-    const bridgeStatus = bridgeStore.getState().status;
-    if (bridgeStatus !== 'connected' && bridgeStatus !== 'degraded') return;
     if (isDetachedWindow()) return;
+    let interval: number | null = null;
 
     const tickSchedules = () => {
       const now = new Date();
@@ -560,10 +605,30 @@ function EffectsProvider({ children }: { children: ReactNode }) {
       });
     };
 
-    tickSchedules();
-    const interval = window.setInterval(tickSchedules, 30000);
+    const start = () => {
+      if (interval !== null) return;
+      tickSchedules();
+      interval = window.setInterval(tickSchedules, 30000);
+    };
+    const stop = () => {
+      if (interval !== null) {
+        window.clearInterval(interval);
+        interval = null;
+      }
+    };
+
+    const unsub = bridgeStore.subscribe((state, prev) => {
+      const ready = state.status === 'connected' || state.status === 'degraded';
+      const wasReady = prev.status === 'connected' || prev.status === 'degraded';
+      if (ready && !wasReady) start();
+      else if (!ready && wasReady) stop();
+    });
+    const initialStatus = bridgeStore.getState().status;
+    if (initialStatus === 'connected' || initialStatus === 'degraded') start();
+
     return () => {
-      window.clearInterval(interval);
+      unsub();
+      stop();
     };
   }, []);
 

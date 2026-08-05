@@ -92,16 +92,19 @@ test.describe('Windowed rendering (500 tasks)', () => {
   });
 
   test('scroll height scales with itemCount × slot (drift stays bounded)', async ({ page }) => {
-    const metrics = await page.locator('tr.desktop-table-row').first().evaluate((el) => {
-      // The window math uses the CSS --row-height slot; the rendered rect can
-      // be a few px taller (checkbox cell min-height), so compare against the
-      // actual slot the spacers are built from.
-      const raw = getComputedStyle(document.documentElement).getPropertyValue('--row-height').trim();
-      const slot = Number.parseFloat(raw) || 0;
-      const table = el.closest('table');
-      const tableHeight = table ? table.getBoundingClientRect().height : 0;
-      return { slot, tableHeight };
-    });
+    const metrics = await page
+      .locator('tr.desktop-table-row')
+      .first()
+      .evaluate((el) => {
+        // The window math uses the CSS --row-height slot; the rendered rect can
+        // be a few px taller (checkbox cell min-height), so compare against the
+        // actual slot the spacers are built from.
+        const raw = getComputedStyle(document.documentElement).getPropertyValue('--row-height').trim();
+        const slot = Number.parseFloat(raw) || 0;
+        const table = el.closest('table');
+        const tableHeight = table ? table.getBoundingClientRect().height : 0;
+        return { slot, tableHeight };
+      });
     expect(metrics.slot).toBeGreaterThan(0);
     // Total = itemCount × slot + header. If each row leaked 1px beyond the
     // slot (box-sizing drift), the table would exceed the bound by ~500px.

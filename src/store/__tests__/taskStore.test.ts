@@ -326,11 +326,9 @@ describe('taskStore', () => {
     });
 
     it('accepts all URLs with a single summary toast (silent per-task adds)', async () => {
-      await taskStore.getState().triggerBatchDownload([
-        'http://example.com/a.zip',
-        'http://example.com/b.zip',
-        'http://example.com/c.zip',
-      ]);
+      await taskStore
+        .getState()
+        .triggerBatchDownload(['http://example.com/a.zip', 'http://example.com/b.zip', 'http://example.com/c.zip']);
       expect(taskStore.getState().tasks).toHaveLength(3);
       // One toast for the batch summary, none per individual task.
       expect(uiStoreMocks.addToast).toHaveBeenCalledTimes(1);

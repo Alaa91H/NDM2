@@ -320,9 +320,7 @@ export const StatusBar: React.FC = () => {
           >
             <span className="w-1.5 h-1.5 bg-[var(--success)] rounded-full animate-pulse shrink-0" />
             <span className="truncate max-w-[100px]">{minimizedRealTask.name}</span>
-            <span className="text-white font-mono">
-              {minimizedProgress.percentLabel}
-            </span>
+            <span className="text-white font-mono">{minimizedProgress.percentLabel}</span>
           </button>
         )}
 

@@ -525,257 +525,257 @@ export const TaskTable: React.FC = () => {
                 </tr>
               )}
               {visibleTasks.map((task) => {
-              const progress = taskProgressInfo(task);
-              const isSelected = selectedTaskId === task.id;
-              const isChecked = checkedTaskIds.has(task.id);
+                const progress = taskProgressInfo(task);
+                const isSelected = selectedTaskId === task.id;
+                const isChecked = checkedTaskIds.has(task.id);
 
-              return (
-                <tr
-                  key={task.id}
-                  onDoubleClick={() => {
-                    handleRowDoubleClick(task);
-                  }}
-                  onContextMenu={(e) => {
-                    handleContextMenu(e, task);
-                  }}
-                  className={`desktop-table-row border-b border-[var(--border-color)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] whitespace-nowrap cursor-default transition-colors select-none ${
-                    isSelected ? 'selected bg-[var(--bg-hover)]' : ''
-                  } ${isChecked ? 'bg-[var(--accent-primary)]/5 border-r-2 border-r-[var(--accent-primary)]' : ''}`}
-                >
-                  <td
-                    className="px-1.5 py-1 text-center sticky ltr:left-0 rtl:right-0 z-10 bg-[var(--bg-app)] ltr:border-r rtl:border-l border-[var(--border-color)]"
-                    style={{ width: '32px', minWidth: '32px', maxWidth: '32px' }}
+                return (
+                  <tr
+                    key={task.id}
+                    onDoubleClick={() => {
+                      handleRowDoubleClick(task);
+                    }}
+                    onContextMenu={(e) => {
+                      handleContextMenu(e, task);
+                    }}
+                    className={`desktop-table-row border-b border-[var(--border-color)] text-[var(--text-primary)] hover:bg-[var(--bg-hover)] whitespace-nowrap cursor-default transition-colors select-none ${
+                      isSelected ? 'selected bg-[var(--bg-hover)]' : ''
+                    } ${isChecked ? 'bg-[var(--accent-primary)]/5 border-r-2 border-r-[var(--accent-primary)]' : ''}`}
                   >
-                    <div className="flex items-center justify-center min-h-[1.5rem]">
-                      <TaskCheckboxAndIcon
-                        isChecked={isChecked}
-                        fileType={task.fileType}
-                        taskId={task.id}
-                        handleToggleCheckTask={handleToggleCheckTask}
-                        hasSelection={checkedTaskIds.size > 0}
-                      />
-                    </div>
-                  </td>
+                    <td
+                      className="px-1.5 py-1 text-center sticky ltr:left-0 rtl:right-0 z-10 bg-[var(--bg-app)] ltr:border-r rtl:border-l border-[var(--border-color)]"
+                      style={{ width: '32px', minWidth: '32px', maxWidth: '32px' }}
+                    >
+                      <div className="flex items-center justify-center min-h-[1.5rem]">
+                        <TaskCheckboxAndIcon
+                          isChecked={isChecked}
+                          fileType={task.fileType}
+                          taskId={task.id}
+                          handleToggleCheckTask={handleToggleCheckTask}
+                          hasSelection={checkedTaskIds.size > 0}
+                        />
+                      </div>
+                    </td>
 
-                  {colOrder.map((colKey) => {
-                    if (!visibleCols[colKey]) return null;
-                    const width = colWidths[colKey] || 100;
+                    {colOrder.map((colKey) => {
+                      if (!visibleCols[colKey]) return null;
+                      const width = colWidths[colKey] || 100;
 
-                    switch (colKey) {
-                      case 'name':
-                        return (
-                          <td key={colKey} className="px-2 py-0.5 font-sans truncate text-left" style={{ width }}>
-                            <span
-                              className="truncate text-[11px] font-semibold font-mono block text-left"
-                              style={{ direction: 'ltr' }}
-                              title={task.name}
+                      switch (colKey) {
+                        case 'name':
+                          return (
+                            <td key={colKey} className="px-2 py-0.5 font-sans truncate text-left" style={{ width }}>
+                              <span
+                                className="truncate text-[11px] font-semibold font-mono block text-left"
+                                style={{ direction: 'ltr' }}
+                                title={task.name}
+                              >
+                                {task.name}
+                              </span>
+                            </td>
+                          );
+                        case 'size':
+                          return (
+                            <td
+                              key={colKey}
+                              className="px-2 py-0.5 font-mono text-[11px] text-[var(--text-secondary)] truncate text-start"
+                              style={{ width }}
                             >
-                              {task.name}
-                            </span>
-                          </td>
-                        );
-                      case 'size':
-                        return (
-                          <td
-                            key={colKey}
-                            className="px-2 py-0.5 font-mono text-[11px] text-[var(--text-secondary)] truncate text-start"
-                            style={{ width }}
-                          >
-                            {task.sizeBytes > 0
-                              ? formatBytes(task.sizeBytes)
-                              : task.downloadedBytes > 0 && task.status === 'downloading'
-                                ? `${formatBytes(task.downloadedBytes)}…`
-                                : '—'}
-                          </td>
-                        );
-                      case 'progress':
-                        return (
-                          <td key={colKey} className="px-2 py-0.5 font-mono text-[11px] text-start" style={{ width }}>
-                            <div className="flex items-center gap-1.5">
-                              <div className="flex-1 h-1.5 bg-[var(--bg-surface)] dark:bg-[var(--bg-surface-elevated)] rounded-full overflow-hidden border border-[var(--border-color)]">
-                                {progress.indeterminate ? (
-                                  // Unknown total size: animated indeterminate bar
-                                  // instead of a misleading 0% (downloads show real
-                                  // progress as soon as the engine learns the size).
-                                  <div className="progress-indeterminate-bar h-full bg-[var(--accent-primary)] rounded-full" />
-                                ) : (
-                                  <div
-                                    className={`h-full bg-[var(--accent-primary)] rounded-full transition-all duration-300 ${task.status === 'downloading' ? 'accent-glow relative overflow-hidden' : ''}`}
-                                    style={{ width: `${String(progress.percent)}%` }}
-                                  >
-                                    {task.status === 'downloading' && (
-                                      <div className="absolute inset-0 bg-white/20 animate-pulse" />
-                                    )}
-                                  </div>
-                                )}
+                              {task.sizeBytes > 0
+                                ? formatBytes(task.sizeBytes)
+                                : task.downloadedBytes > 0 && task.status === 'downloading'
+                                  ? `${formatBytes(task.downloadedBytes)}…`
+                                  : '—'}
+                            </td>
+                          );
+                        case 'progress':
+                          return (
+                            <td key={colKey} className="px-2 py-0.5 font-mono text-[11px] text-start" style={{ width }}>
+                              <div className="flex items-center gap-1.5">
+                                <div className="flex-1 h-1.5 bg-[var(--bg-surface)] dark:bg-[var(--bg-surface-elevated)] rounded-full overflow-hidden border border-[var(--border-color)]">
+                                  {progress.indeterminate ? (
+                                    // Unknown total size: animated indeterminate bar
+                                    // instead of a misleading 0% (downloads show real
+                                    // progress as soon as the engine learns the size).
+                                    <div className="progress-indeterminate-bar h-full bg-[var(--accent-primary)] rounded-full" />
+                                  ) : (
+                                    <div
+                                      className={`h-full bg-[var(--accent-primary)] rounded-full transition-all duration-300 ${task.status === 'downloading' ? 'accent-glow relative overflow-hidden' : ''}`}
+                                      style={{ width: `${String(progress.percent)}%` }}
+                                    >
+                                      {task.status === 'downloading' && (
+                                        <div className="absolute inset-0 bg-white/20 animate-pulse" />
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                                <span className="text-[9px] text-[var(--text-secondary)] font-bold">
+                                  {progress.percentLabel}
+                                </span>
                               </div>
-                              <span className="text-[9px] text-[var(--text-secondary)] font-bold">
-                                {progress.percentLabel}
-                              </span>
-                            </div>
-                          </td>
-                        );
-                      case 'speed':
-                        return (
-                          <td
-                            key={colKey}
-                            className="px-2 py-0.5 font-mono text-[11px] text-[var(--success)] font-bold truncate text-start"
-                            style={{ width }}
-                          >
-                            {formatSpeed(task.speedBytesPerSec)}
-                          </td>
-                        );
-                      case 'timeLeft':
-                        return (
-                          <td
-                            key={colKey}
-                            className="px-2 py-0.5 font-mono text-[11px] text-[var(--info)] truncate"
-                            style={{ width, textAlign: 'left' }}
-                          >
-                            {formatTimeLeft(task.timeLeftSeconds)}
-                          </td>
-                        );
-                      case 'elapsed':
-                        return (
-                          <td
-                            key={colKey}
-                            className="px-2 py-0.5 font-mono text-[11px] text-[var(--warning)] truncate"
-                            style={{ width, textAlign: 'left' }}
-                          >
-                            {formatElapsed(task.elapsedSeconds)}
-                          </td>
-                        );
-                      case 'date':
-                        return (
-                          <td
-                            key={colKey}
-                            className="px-2 py-0.5 font-mono text-[10px] text-[var(--text-muted)] truncate"
-                            style={{ width, direction: 'ltr', textAlign: 'left' }}
-                          >
-                            {task.dateAdded}
-                          </td>
-                        );
-                      case 'status':
-                        return (
-                          <td key={colKey} className="px-2 py-0.5 truncate text-start" style={{ width }}>
-                            <StatusPill
-                              status={task.status}
-                              engineStatus={task.engineStatus}
-                              errorMessage={task.errorMessage}
-                            />
-                          </td>
-                        );
-                      case 'retries':
-                        return (
-                          <td
-                            key={colKey}
-                            className="px-2 py-0.5 font-mono text-[11px] text-[var(--text-secondary)] truncate text-start"
-                            style={{ width }}
-                          >
-                            {task.retries != null ? String(task.retries) : '--'}
-                          </td>
-                        );
-                      case 'connections':
-                        return (
-                          <td
-                            key={colKey}
-                            className="px-2 py-0.5 font-mono text-[11px] text-[var(--text-secondary)] truncate text-start"
-                            style={{ width }}
-                          >
-                            {task.connections === 0 ? t('table_auto') : task.connections}
-                          </td>
-                        );
-                      case 'crc32':
-                        return (
-                          <td
-                            key={colKey}
-                            className="px-2 py-0.5 font-mono text-[11px] text-[var(--info)] font-semibold truncate text-start"
-                            style={{ width }}
-                          >
-                            {'--'}
-                          </td>
-                        );
-                      case 'priority':
-                        return (
-                          <td
-                            key={colKey}
-                            className="px-2 py-0.5 font-sans text-[11px] truncate text-start"
-                            style={{ width }}
-                          >
-                            <span
-                              className={`px-2 py-0.5 rounded-md text-[9px] font-bold ${
-                                task.queueId === 'fast'
-                                  ? 'bg-[var(--danger-bg)] text-[var(--danger)] border border-[var(--danger-border)]'
-                                  : task.queueId === 'night'
-                                    ? 'bg-[var(--accent-light)] text-[var(--accent-primary)] border border-[var(--accent-border)]'
-                                    : 'bg-[var(--info-bg)] text-[var(--info)] border border-[var(--info-border)]'
-                              }`}
+                            </td>
+                          );
+                        case 'speed':
+                          return (
+                            <td
+                              key={colKey}
+                              className="px-2 py-0.5 font-mono text-[11px] text-[var(--success)] font-bold truncate text-start"
+                              style={{ width }}
                             >
-                              {task.queueId === 'fast'
-                                ? t('prio_high')
-                                : task.queueId === 'night'
-                                  ? t('prio_low')
-                                  : t('prio_normal')}
-                            </span>
-                          </td>
-                        );
-                      case 'completedDate':
-                        return (
-                          <td
-                            key={colKey}
-                            className="px-2 py-0.5 font-mono text-[10px] text-[var(--text-muted)] truncate"
-                            style={{ width, direction: 'ltr', textAlign: 'left' }}
-                          >
-                            {task.status === 'completed' && task.completedAt ? task.completedAt : '--'}
-                          </td>
-                        );
-                      case 'sourceUrl':
-                        return (
-                          <td
-                            key={colKey}
-                            className="px-2 py-0.5 font-mono text-[10px] text-[var(--text-muted)] truncate text-left"
-                            style={{ width, direction: 'ltr' }}
-                            title={task.url}
-                          >
-                            {task.url}
-                          </td>
-                        );
-                      case 'smartCategory':
-                        return (
-                          <td
-                            key={colKey}
-                            className="px-2 py-0.5 font-sans text-[11px] truncate text-start"
-                            style={{ width }}
-                          >
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-[var(--accent-light)] text-[var(--accent-primary)]">
-                              {getFileTypeIcon(task.fileType, 'w-3 h-3')}
-                              <span>
-                                {task.fileType === 'program'
-                                  ? t('cat_programs')
-                                  : task.fileType === 'compressed'
-                                    ? t('cat_archives')
-                                    : task.fileType === 'video'
-                                      ? t('cat_video')
-                                      : task.fileType === 'audio'
-                                        ? t('cat_audio')
-                                        : task.fileType === 'document'
-                                          ? t('cat_documents')
-                                          : t('cat_other')}
+                              {formatSpeed(task.speedBytesPerSec)}
+                            </td>
+                          );
+                        case 'timeLeft':
+                          return (
+                            <td
+                              key={colKey}
+                              className="px-2 py-0.5 font-mono text-[11px] text-[var(--info)] truncate"
+                              style={{ width, textAlign: 'left' }}
+                            >
+                              {formatTimeLeft(task.timeLeftSeconds)}
+                            </td>
+                          );
+                        case 'elapsed':
+                          return (
+                            <td
+                              key={colKey}
+                              className="px-2 py-0.5 font-mono text-[11px] text-[var(--warning)] truncate"
+                              style={{ width, textAlign: 'left' }}
+                            >
+                              {formatElapsed(task.elapsedSeconds)}
+                            </td>
+                          );
+                        case 'date':
+                          return (
+                            <td
+                              key={colKey}
+                              className="px-2 py-0.5 font-mono text-[10px] text-[var(--text-muted)] truncate"
+                              style={{ width, direction: 'ltr', textAlign: 'left' }}
+                            >
+                              {task.dateAdded}
+                            </td>
+                          );
+                        case 'status':
+                          return (
+                            <td key={colKey} className="px-2 py-0.5 truncate text-start" style={{ width }}>
+                              <StatusPill
+                                status={task.status}
+                                engineStatus={task.engineStatus}
+                                errorMessage={task.errorMessage}
+                              />
+                            </td>
+                          );
+                        case 'retries':
+                          return (
+                            <td
+                              key={colKey}
+                              className="px-2 py-0.5 font-mono text-[11px] text-[var(--text-secondary)] truncate text-start"
+                              style={{ width }}
+                            >
+                              {task.retries != null ? String(task.retries) : '--'}
+                            </td>
+                          );
+                        case 'connections':
+                          return (
+                            <td
+                              key={colKey}
+                              className="px-2 py-0.5 font-mono text-[11px] text-[var(--text-secondary)] truncate text-start"
+                              style={{ width }}
+                            >
+                              {task.connections === 0 ? t('table_auto') : task.connections}
+                            </td>
+                          );
+                        case 'crc32':
+                          return (
+                            <td
+                              key={colKey}
+                              className="px-2 py-0.5 font-mono text-[11px] text-[var(--info)] font-semibold truncate text-start"
+                              style={{ width }}
+                            >
+                              {'--'}
+                            </td>
+                          );
+                        case 'priority':
+                          return (
+                            <td
+                              key={colKey}
+                              className="px-2 py-0.5 font-sans text-[11px] truncate text-start"
+                              style={{ width }}
+                            >
+                              <span
+                                className={`px-2 py-0.5 rounded-md text-[9px] font-bold ${
+                                  task.queueId === 'fast'
+                                    ? 'bg-[var(--danger-bg)] text-[var(--danger)] border border-[var(--danger-border)]'
+                                    : task.queueId === 'night'
+                                      ? 'bg-[var(--accent-light)] text-[var(--accent-primary)] border border-[var(--accent-border)]'
+                                      : 'bg-[var(--info-bg)] text-[var(--info)] border border-[var(--info-border)]'
+                                }`}
+                              >
+                                {task.queueId === 'fast'
+                                  ? t('prio_high')
+                                  : task.queueId === 'night'
+                                    ? t('prio_low')
+                                    : t('prio_normal')}
                               </span>
-                            </span>
-                          </td>
-                        );
-                      default:
-                        return null;
-                    }
-                  })}
+                            </td>
+                          );
+                        case 'completedDate':
+                          return (
+                            <td
+                              key={colKey}
+                              className="px-2 py-0.5 font-mono text-[10px] text-[var(--text-muted)] truncate"
+                              style={{ width, direction: 'ltr', textAlign: 'left' }}
+                            >
+                              {task.status === 'completed' && task.completedAt ? task.completedAt : '--'}
+                            </td>
+                          );
+                        case 'sourceUrl':
+                          return (
+                            <td
+                              key={colKey}
+                              className="px-2 py-0.5 font-mono text-[10px] text-[var(--text-muted)] truncate text-left"
+                              style={{ width, direction: 'ltr' }}
+                              title={task.url}
+                            >
+                              {task.url}
+                            </td>
+                          );
+                        case 'smartCategory':
+                          return (
+                            <td
+                              key={colKey}
+                              className="px-2 py-0.5 font-sans text-[11px] truncate text-start"
+                              style={{ width }}
+                            >
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-[var(--accent-light)] text-[var(--accent-primary)]">
+                                {getFileTypeIcon(task.fileType, 'w-3 h-3')}
+                                <span>
+                                  {task.fileType === 'program'
+                                    ? t('cat_programs')
+                                    : task.fileType === 'compressed'
+                                      ? t('cat_archives')
+                                      : task.fileType === 'video'
+                                        ? t('cat_video')
+                                        : task.fileType === 'audio'
+                                          ? t('cat_audio')
+                                          : task.fileType === 'document'
+                                            ? t('cat_documents')
+                                            : t('cat_other')}
+                                </span>
+                              </span>
+                            </td>
+                          );
+                        default:
+                          return null;
+                      }
+                    })}
 
-                  <td
-                    className="px-2 py-1 text-center bg-[var(--bg-app)] sticky ltr:right-0 rtl:left-0 z-10 ltr:border-l rtl:border-r border-[var(--border-color)]"
-                    style={{ width: '48px', minWidth: '48px', maxWidth: '48px' }}
-                  />
-                </tr>
-              );
+                    <td
+                      className="px-2 py-1 text-center bg-[var(--bg-app)] sticky ltr:right-0 rtl:left-0 z-10 ltr:border-l rtl:border-r border-[var(--border-color)]"
+                      style={{ width: '48px', minWidth: '48px', maxWidth: '48px' }}
+                    />
+                  </tr>
+                );
               })}
               {/* Bottom spacer preserves scroll height for the unrendered slice. */}
               {desktopWindow.padBottom > 0 && (

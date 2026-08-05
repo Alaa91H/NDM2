@@ -1094,6 +1094,73 @@ pub async fn handle_mirrors_enable_failover(
     }
 }
 
+/// Extracts the ffmpeg binary from a downloaded archive's bytes into `dest`.
+///
+/// Returns `Ok(true)` when the binary was found and written, `Ok(false)` when
+/// the archive contains no ffmpeg entry (caller reports "binary not found"),
+/// and `Err` on zip parse / IO / path-boundary failures.
+///
+/// Kept as a standalone helper so the zip 4.x extraction contract (central
+/// directory read, entry iteration, zip-slip rejection) is covered by unit
+/// tests without a live download.
+fn extract_ffmpeg_from_zip(
+    bytes: &[u8],
+    dest: &std::path::Path,
+    bin_dir: &std::path::Path,
+) -> Result<bool, String> {
+    let cursor = std::io::Cursor::new(bytes);
+    let mut archive = zip::ZipArchive::new(cursor)
+        .map_err(|e| format!("Failed to open downloaded archive: {e}"))?;
+    let mut found = false;
+    for i in 0..archive.len() {
+        if let Ok(mut file) = archive.by_index(i) {
+            let name = file.name().to_owned();
+            // Zip-slip guard: reject entries whose names contain path
+            // traversal (".."), are absolute, or use a Windows
+            // drive-letter/UNC root.
+            let normalized = name.replace('\\', "/");
+            let is_unsafe = normalized.split('/').any(|seg| seg == "..")
+                || std::path::Path::new(&normalized).is_absolute()
+                || normalized.starts_with('/')
+                || (normalized.len() >= 2 && normalized.as_bytes()[1] == b':');
+            if is_unsafe {
+                log::warn!("Skipping zip entry with unsafe path: {name:?}");
+                continue;
+            }
+            let is_ffmpeg = if cfg!(windows) {
+                name.ends_with("ffmpeg.exe")
+            } else {
+                name.ends_with("/ffmpeg") || name == "ffmpeg"
+            };
+            if is_ffmpeg {
+                // Defense in depth: the resolved destination must stay
+                // inside the bin directory.
+                if !dest.starts_with(bin_dir) {
+                    return Err(
+                        "Refusing to write ffmpeg binary outside the bin directory".to_owned()
+                    );
+                }
+                let mut content = Vec::new();
+                if std::io::Read::read_to_end(&mut file, &mut content).is_ok() {
+                    std::fs::write(dest, &content)
+                        .map_err(|e| format!("Failed to write ffmpeg binary: {e}"))?;
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        if let Ok(mut perms) = std::fs::metadata(dest).map(|m| m.permissions()) {
+                            perms.set_mode(0o755);
+                            let _ = std::fs::set_permissions(dest, perms);
+                        }
+                    }
+                    found = true;
+                    break;
+                }
+            }
+        }
+    }
+    Ok(found)
+}
+
 async fn handle_engine_download(
     State(state): State<SharedState>,
     Json(body): Json<serde_json::Value>,
@@ -1183,74 +1250,18 @@ async fn handle_engine_download(
 
             // For FFmpeg, extract the binary from the zip archive.
             if engine == "ffmpeg" {
-                let cursor = std::io::Cursor::new(&bytes);
-                match zip::ZipArchive::new(cursor) {
-                    Ok(mut archive) => {
-                        let mut found = false;
-                        for i in 0..archive.len() {
-                            if let Ok(mut file) = archive.by_index(i) {
-                                let name = file.name().to_owned();
-                                // Zip-slip guard: reject entries whose names
-                                // contain path traversal (".."), are absolute,
-                                // or use a Windows drive-letter/UNC root.
-                                let normalized = name.replace('\\', "/");
-                                let is_unsafe = normalized.split('/').any(|seg| seg == "..")
-                                    || std::path::Path::new(&normalized).is_absolute()
-                                    || normalized.starts_with('/')
-                                    || (normalized.len() >= 2 && normalized.as_bytes()[1] == b':');
-                                if is_unsafe {
-                                    log::warn!("Skipping zip entry with unsafe path: {name:?}");
-                                    continue;
-                                }
-                                let is_ffmpeg = if cfg!(windows) {
-                                    name.ends_with("ffmpeg.exe")
-                                } else {
-                                    name.ends_with("/ffmpeg") || name == "ffmpeg"
-                                };
-                                if is_ffmpeg {
-                                    // Defense in depth: the resolved destination
-                                    // must stay inside the bin directory.
-                                    if !dest.starts_with(&bin_dir) {
-                                        return Json(serde_json::json!({
-                                            "ok": false,
-                                            "error": "Refusing to write ffmpeg binary outside the bin directory"
-                                        }));
-                                    }
-                                    let mut content = Vec::new();
-                                    if std::io::Read::read_to_end(&mut file, &mut content).is_ok() {
-                                        if let Err(e) = std::fs::write(&dest, &content) {
-                                            return Json(serde_json::json!({
-                                                "ok": false,
-                                                "error": format!("Failed to write ffmpeg binary: {e}")
-                                            }));
-                                        }
-                                        #[cfg(unix)]
-                                        {
-                                            use std::os::unix::fs::PermissionsExt;
-                                            if let Ok(mut perms) =
-                                                std::fs::metadata(&dest).map(|m| m.permissions())
-                                            {
-                                                perms.set_mode(0o755);
-                                                let _ = std::fs::set_permissions(&dest, perms);
-                                            }
-                                        }
-                                        found = true;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        if !found {
-                            return Json(serde_json::json!({
-                                "ok": false,
-                                "error": "ffmpeg binary not found in the downloaded archive"
-                            }));
-                        }
+                match extract_ffmpeg_from_zip(&bytes, &dest, &bin_dir) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        return Json(serde_json::json!({
+                            "ok": false,
+                            "error": "ffmpeg binary not found in the downloaded archive"
+                        }));
                     }
                     Err(e) => {
                         return Json(serde_json::json!({
                             "ok": false,
-                            "error": format!("Failed to open downloaded archive: {e}")
+                            "error": e,
                         }));
                     }
                 }
@@ -1506,4 +1517,123 @@ pub fn register_routes(router: Router<SharedState>) -> Router<SharedState> {
             "/api/plugins/{id}/settings",
             post(handle_plugins_update_settings),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_ffmpeg_from_zip;
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+
+    /// Builds an in-memory zip archive with the given (name, content) entries.
+    /// Uses the zip crate's writer so the test exercises the same zip 4.x code
+    /// path (central directory, entry iteration) that production extraction does.
+    fn build_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut buf);
+            let options: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default();
+            for (name, content) in entries {
+                writer.start_file(*name, options).unwrap();
+                writer.write_all(content).unwrap();
+            }
+            writer.finish().unwrap();
+        }
+        buf.into_inner()
+    }
+
+    fn test_dir(tag: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("nova_engine_zip_test_{tag}_{}", std::process::id()))
+    }
+
+    fn ffmpeg_dest_name() -> &'static str {
+        if cfg!(windows) {
+            "ffmpeg.exe"
+        } else {
+            "ffmpeg"
+        }
+    }
+
+    #[test]
+    fn extracts_ffmpeg_binary_from_zip_archive() {
+        let dir = test_dir("ok");
+        let _ = std::fs::remove_dir_all(&dir);
+        let bin_dir = dir.join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let dest = bin_dir.join(ffmpeg_dest_name());
+        let payload: Vec<u8> = (0..4096).map(|i| (i % 251) as u8).collect();
+
+        let archive = build_zip(&[
+            ("ffmpeg-master/README.txt", b"readme"),
+            ("ffmpeg-master/bin/ffmpeg.exe", &payload),
+            ("ffmpeg-master/bin/ffmpeg", &payload),
+        ]);
+
+        let found = extract_ffmpeg_from_zip(&archive, &dest, &bin_dir).unwrap();
+        assert!(found, "expected ffmpeg binary to be found in the zip");
+        let written = std::fs::read(&dest).unwrap();
+        assert_eq!(
+            written, payload,
+            "extracted binary does not match zip entry"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn zip_slip_entries_are_skipped() {
+        let dir = test_dir("slip");
+        let _ = std::fs::remove_dir_all(&dir);
+        let bin_dir = dir.join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let dest = bin_dir.join(ffmpeg_dest_name());
+
+        // An entry attempting path traversal must be skipped, not extracted.
+        let archive = build_zip(&[
+            ("../evil.exe", b"evil"),
+            ("C:/windows/system32/evil.exe", b"evil2"),
+            ("ffmpeg-master/bin/ffmpeg.exe", b"real-ffmpeg"),
+            ("ffmpeg-master/bin/ffmpeg", b"real-ffmpeg"),
+        ]);
+
+        let found = extract_ffmpeg_from_zip(&archive, &dest, &bin_dir).unwrap();
+        assert!(found, "expected ffmpeg binary to be found");
+        let written = std::fs::read(&dest).unwrap();
+        assert_eq!(written, b"real-ffmpeg");
+        // The traversal entries must never be materialised anywhere.
+        assert!(!dir.join("evil.exe").exists());
+        assert!(!Path::new("evil.exe").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn archive_without_ffmpeg_reports_not_found() {
+        let dir = test_dir("missing");
+        let _ = std::fs::remove_dir_all(&dir);
+        let bin_dir = dir.join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let dest = bin_dir.join(ffmpeg_dest_name());
+
+        let archive = build_zip(&[("docs/manual.txt", b"nothing to see")]);
+        let found = extract_ffmpeg_from_zip(&archive, &dest, &bin_dir).unwrap();
+        assert!(!found, "archive without ffmpeg must report not-found");
+        assert!(!dest.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn corrupt_archive_returns_error() {
+        let dir = test_dir("corrupt");
+        let _ = std::fs::remove_dir_all(&dir);
+        let bin_dir = dir.join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let dest = bin_dir.join(ffmpeg_dest_name());
+
+        let garbage = b"this is not a zip archive at all";
+        let err = extract_ffmpeg_from_zip(garbage, &dest, &bin_dir).unwrap_err();
+        assert!(
+            err.contains("Failed to open downloaded archive"),
+            "unexpected error: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

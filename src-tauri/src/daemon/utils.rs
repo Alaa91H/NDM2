@@ -41,7 +41,22 @@ pub fn is_safe_target_url(raw: &str) -> Result<(), String> {
 
 pub fn is_safe_target_url_pinned(raw: &str) -> Result<(IpAddr, String), String> {
     let (ip, host, port) = resolve_and_check_url(raw)?;
-    Ok((ip, format!("{host}:{port}:{ip}")))
+    // curl's `--resolve HOST:PORT:ADDRESS` requires IPv6 literals (both the
+    // host and the address) to be enclosed in brackets (`[2001:db8::1]`).
+    // Emitting a bare IPv6 here produced `host:443:2001:41d0:...`, which
+    // every downstream parser (and curl itself) read as four separate
+    // colon-delimited fields and rejected — downloads to IPv6-first hosts
+    // failed before they started.
+    let host_display = if host.parse::<IpAddr>().is_ok_and(|h| h.is_ipv6()) {
+        format!("[{host}]")
+    } else {
+        host.to_owned()
+    };
+    let pinned = match ip {
+        IpAddr::V6(_) => format!("{host_display}:{port}:[{ip}]"),
+        _ => format!("{host_display}:{port}:{ip}"),
+    };
+    Ok((ip, pinned))
 }
 
 fn resolve_and_check_url(raw: &str) -> Result<(IpAddr, String, u16), String> {
@@ -60,28 +75,43 @@ fn resolve_and_check_url(raw: &str) -> Result<(IpAddr, String, u16), String> {
     if authority.contains('@') {
         return Err("SSRF blocked: URL contains userinfo (e.g. user@host)".to_owned());
     }
-    let host = authority
-        .split(':')
-        .next()
-        .unwrap_or("")
-        .trim_start_matches('[')
-        .trim_end_matches(']');
-    if host.is_empty() || host == "localhost" {
+    // The host may be a bracketed IPv6 literal (`[2606:2800:...]` or
+    // `[2606:2800:...]:443`). A naive `.split(':').next()` on such an
+    // authority returns only the fragment before the first colon (`2606`),
+    // which then fails DNS resolution. Parse the bracket form explicitly.
+    let (host_raw, port_raw) = if let Some(rest) = authority.strip_prefix('[') {
+        match rest.find(']') {
+            Some(end) => {
+                let host = &rest[..end];
+                let after = rest[end + 1..].trim_start_matches(':');
+                (host, after)
+            }
+            None => (rest, ""),
+        }
+    } else {
+        let mut parts = authority.splitn(2, ':');
+        (parts.next().unwrap_or(""), parts.next().unwrap_or(""))
+    };
+    let host = host_raw.trim();
+    if host.is_empty() || (host == "localhost" && !private_network_allowed()) {
         return Err("Host is empty or localhost".to_owned());
     }
-    let port: u16 = authority
-        .split(':')
-        .nth(1)
-        .and_then(|p| p.split('/').next().unwrap_or(p).parse().ok())
+    let port: u16 = port_raw
+        .split('/')
+        .next()
+        .unwrap_or(port_raw)
+        .parse()
+        .ok()
         .unwrap_or(if is_tls { 443 } else { 80 });
     // Try to parse as IP first
     if let Ok(ip) = host.parse::<IpAddr>() {
-        if is_internal_ip(ip) {
+        if is_internal_ip(ip) && !private_network_allowed() {
             return Err(format!("SSRF blocked: URL targets internal IP {ip}"));
         }
         return Ok((ip, host.to_owned(), port));
     }
     // Resolve hostname and check all resolved addresses
+    let allow_private = private_network_allowed();
     let addr_str = format!("{host}:{port}");
     let addrs = addr_str
         .to_socket_addrs()
@@ -89,7 +119,7 @@ fn resolve_and_check_url(raw: &str) -> Result<(IpAddr, String, u16), String> {
     let mut resolved: Option<IpAddr> = None;
     for addr in addrs {
         let ip = addr.ip();
-        if is_internal_ip(ip) {
+        if is_internal_ip(ip) && !allow_private {
             return Err(format!(
                 "SSRF blocked: host '{host}' resolves to internal IP {ip}"
             ));
@@ -100,6 +130,22 @@ fn resolve_and_check_url(raw: &str) -> Result<(IpAddr, String, u16), String> {
     }
     let ip = resolved.ok_or_else(|| format!("Could not resolve host '{host}'"))?;
     Ok((ip, host.to_owned(), port))
+}
+
+/// Whether network requests to private/loopback addresses are permitted.
+///
+/// OFF by default — the daemon must never reach internal networks in
+/// production (SSRF protection). Setting `NOVA_ALLOW_PRIVATE_NETWORK=1` (or
+/// `true`) lifts that restriction so the engine can be tested against local
+/// mirrors and development servers. Read lazily per call so the flag can be
+/// toggled without a restart.
+pub fn private_network_allowed() -> bool {
+    parse_private_network_flag(std::env::var("NOVA_ALLOW_PRIVATE_NETWORK").ok().as_deref())
+}
+
+/// Pure flag parser (unit-testable without touching the process environment).
+fn parse_private_network_flag(value: Option<&str>) -> bool {
+    value.is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
 }
 
 /// Returns true if the IP is internal/private (loopback, private, link-local,
@@ -159,13 +205,36 @@ const fn is_ipv4_mapped_internal(v6: &Ipv6Addr) -> bool {
 /// We reject any entry whose target `ADDRESS/CONNECT_HOST` resolves to an
 /// internal IP, mirroring `is_safe_target_url`'s policy.
 pub fn is_safe_resolve_entry(entry: &str) -> Result<(), String> {
-    let parts: Vec<&str> = entry.splitn(4, ':').collect();
-    if parts.len() < 3 {
+    // Resolve entries are `HOST:PORT:ADDRESS`; connect-to entries are
+    // `HOST:PORT:CONNECT_HOST:CONNECT_PORT`. An IPv6 ADDRESS literal itself
+    // contains colons (`2001:41d0:242:d300::` or bracketed `[2001:db8::1]`),
+    // so the target is everything AFTER THE SECOND colon — never a naive
+    // per-colon split, which misread `host:443:2001:41d0:...` as an entry
+    // whose address was just `2001` and failed the whole download.
+    let Some(after_prefix) = entry.splitn(3, ':').nth(2) else {
         return Err(format!("Invalid resolve/connect-to entry: '{entry}'"));
+    };
+    let mut target = after_prefix.trim();
+    // Strip a bracketed IPv6 literal to its bare address
+    // (`[2001:db8::1]` or `[2001:db8::1]:443` → `2001:db8::1`).
+    if let Some(rest) = target.strip_prefix('[') {
+        if let Some(end) = rest.find(']') {
+            target = &rest[..end];
+        }
+    } else if target.parse::<IpAddr>().is_err() && target != "+" {
+        // connect-to form: `CONNECT_HOST:CONNECT_PORT` → `CONNECT_HOST`.
+        // Only strip a trailing `:PORT` when the remainder is NOT itself an
+        // IPv6 literal — a bare IPv6 like `2001:41d0:242:d300::` ends in
+        // `::` and would be mangled by a naive rfind(':')
+        // (the last field is empty, so stripping it corrupts the address).
+        if let Some(idx) = target.rfind(':') {
+            let (head, tail) = target.split_at(idx);
+            if tail[1..].bytes().all(|b| b.is_ascii_digit()) {
+                target = head;
+            }
+        }
     }
-    // The target address is the 3rd segment. For connect-to it is a hostname;
-    // for resolve it is an IP literal. A `+` means "use normal DNS" (safe).
-    let target = parts[2].trim();
+    let target = target.trim();
     if target.is_empty() {
         return Err(format!(
             "Empty address in resolve/connect-to entry: '{entry}'"
@@ -175,7 +244,7 @@ pub fn is_safe_resolve_entry(entry: &str) -> Result<(), String> {
         return Ok(());
     }
     if let Ok(ip) = target.parse::<IpAddr>() {
-        if is_internal_ip(ip) {
+        if is_internal_ip(ip) && !private_network_allowed() {
             return Err(format!(
                 "SSRF blocked: resolve/connect-to entry '{entry}' targets internal IP {ip}"
             ));
@@ -183,12 +252,13 @@ pub fn is_safe_resolve_entry(entry: &str) -> Result<(), String> {
         return Ok(());
     }
     // Hostname target — resolve and check all addresses.
+    let allow_private = private_network_allowed();
     let addr_str = format!("{target}:443");
     let addrs = addr_str
         .to_socket_addrs()
         .map_err(|e| format!("Could not resolve connect-to host '{target}': {e}"))?;
     for addr in addrs {
-        if is_internal_ip(addr.ip()) {
+        if is_internal_ip(addr.ip()) && !allow_private {
             return Err(format!(
                 "SSRF blocked: connect-to host '{}' resolves to internal IP {}",
                 target,
@@ -792,7 +862,35 @@ pub fn parse_meta_refresh_url(html: &str) -> Option<String> {
         let raw = body[..end_idx].trim();
         if !raw.is_empty() {
             // Meta-refresh URLs are HTML-escaped (e.g. `&amp;` in query strings).
-            return Some(decode_html_entities(raw));
+            // Some sites percent-encode the ENTIRE URL (`URL='http%3A%2F%2Fhost'
+            // `%2Ffile.zip'`); `refreshed_url` only recognizes a literal
+            // `http://`/`https://` prefix, so such encoded-scheme URLs must be
+            // percent-decoded before resolution. Decode ONLY when the raw value
+            // starts with an encoded scheme — a partially-encoded target like
+            // `https://x.com/dl/file%20name.zip` already carries a literal
+            // scheme and its `%20` must be left intact for the HTTP layer, not
+            // turned into a raw space here.
+            let lower_raw = raw.to_ascii_lowercase();
+            let mut decoded = if lower_raw.starts_with("http%3a%2f%2f")
+                || lower_raw.starts_with("https%3a%2f%2f")
+            {
+                percent_decode(raw)
+            } else {
+                raw.to_owned()
+            };
+            // Normalize the scheme to lowercase: percent-decoding preserves the
+            // original casing (`HTTPS%3A%2F%2F` → `HTTPS://`), but
+            // `refreshed_url` only recognizes a literal lowercase `http://` /
+            // `https://` prefix, so an uppercase decoded scheme would silently
+            // be treated as a relative path.
+            if decoded.len() >= 7 {
+                if decoded[..7].eq_ignore_ascii_case("http://") {
+                    decoded.replace_range(..7, "http://");
+                } else if decoded.len() >= 8 && decoded[..8].eq_ignore_ascii_case("https://") {
+                    decoded.replace_range(..8, "https://");
+                }
+            }
+            return Some(decode_html_entities(&decoded));
         }
     }
     None
@@ -1041,18 +1139,19 @@ pub fn validate_proxy_url(proxy_url: &str) -> Result<(), String> {
         return Err("Proxy targets localhost".to_owned());
     }
     if let Ok(ip) = host.parse::<IpAddr>() {
-        if is_internal_ip(ip) {
+        if is_internal_ip(ip) && !private_network_allowed() {
             return Err(format!("Proxy targets internal IP {ip}"));
         }
         return Ok(());
     }
     // Resolve hostname and check all resolved addresses
+    let allow_private = private_network_allowed();
     let addr_str = format!("{host}:443");
     let addrs = addr_str
         .to_socket_addrs()
         .map_err(|e| format!("Could not resolve proxy host '{host}': {e}"))?;
     for addr in addrs {
-        if is_internal_ip(addr.ip()) {
+        if is_internal_ip(addr.ip()) && !allow_private {
             return Err(format!(
                 "Proxy host '{}' resolves to internal IP {}",
                 host,
@@ -1319,6 +1418,17 @@ mod tests {
     // ── is_safe_target_url ────────────────────────────────────────────────
 
     #[test]
+    fn private_network_flag_parsing() {
+        assert!(parse_private_network_flag(Some("1")));
+        assert!(parse_private_network_flag(Some("true")));
+        assert!(parse_private_network_flag(Some("TRUE")));
+        assert!(!parse_private_network_flag(Some("0")));
+        assert!(!parse_private_network_flag(Some("false")));
+        assert!(!parse_private_network_flag(Some("")));
+        assert!(!parse_private_network_flag(None));
+    }
+
+    #[test]
     fn empty_url_rejected() {
         assert!(is_safe_target_url("").is_err());
     }
@@ -1378,6 +1488,60 @@ mod tests {
     fn valid_public_hostname_accepted() {
         assert!(is_safe_target_url("https://example.com").is_ok());
         assert!(is_safe_target_url("https://example.com:443/path").is_ok());
+    }
+
+    // ── is_safe_target_url_pinned / is_safe_resolve_entry (IPv6) ─────────
+
+    #[test]
+    fn pinned_entry_brackets_ipv6_literals() {
+        // curl's `--resolve HOST:PORT:ADDRESS` requires IPv6 addresses to be
+        // enclosed in brackets. A bare `host:443:2001:41d0:...` is read as
+        // four colon-delimited fields and rejected — the exact failure that
+        // broke downloads to IPv6-first hosts (proof.ovh.net, etc.).
+        // The host is also a bracketed IPv6 literal here, so the pinned
+        // entry must bracket BOTH the host and the address.
+        let (_ip, entry) =
+            is_safe_target_url_pinned("https://[2606:2800:220:1:248:1893:25c8:1946]/file.bin")
+                .unwrap();
+        assert!(
+            entry.starts_with("[2606:2800:220:1:248:1893:25c8:1946]:"),
+            "expected bracketed IPv6 host, got: {entry}"
+        );
+        assert!(
+            entry.contains(":[2606:2800:220:1:248:1893:25c8:1946]"),
+            "expected bracketed IPv6 address, got: {entry}"
+        );
+        assert!(
+            entry.split(']').count() == 3,
+            "expected exactly two bracketed groups (host + address), got: {entry}"
+        );
+    }
+
+    #[test]
+    fn resolve_entry_accepts_bare_and_bracketed_ipv6() {
+        // The exact format produced for IPv6-first hosts before the fix:
+        // `host:443:2001:41d0:242:d300::`. The parser must take everything
+        // after the second colon as the address, not split on every colon
+        // (which misread the address as just `2001` and failed resolution).
+        assert!(is_safe_resolve_entry("proof.ovh.net:443:2001:41d0:242:d300::").is_ok());
+        assert!(is_safe_resolve_entry("proof.ovh.net:443:[2001:41d0:242:d300::]").is_ok());
+        assert!(is_safe_resolve_entry("example.com:443:8.8.8.8").is_ok());
+        // connect-to form: HOST:PORT:CONNECT_HOST:CONNECT_PORT — use an IP
+        // literal so the test needs no DNS.
+        assert!(is_safe_resolve_entry("example.com:443:9.9.9.9:8443").is_ok());
+        // The keep-DNS marker stays safe.
+        assert!(is_safe_resolve_entry("example.com:443:+").is_ok());
+    }
+
+    #[test]
+    fn resolve_entry_rejects_internal_ipv6() {
+        // SSRF protection must still apply when the target is an internal
+        // IPv6 literal, even with brackets or a mapped form.
+        assert!(is_safe_resolve_entry("example.com:443:fd00::1").is_err());
+        assert!(is_safe_resolve_entry("example.com:443:[::1]").is_err());
+        assert!(is_safe_resolve_entry("example.com:443:[fe80::1]").is_err());
+        assert!(is_safe_resolve_entry("example.com:443:127.0.0.1").is_err());
+        assert!(is_safe_resolve_entry("example.com:443:10.0.0.5").is_err());
     }
 
     #[test]
@@ -2045,6 +2209,55 @@ mod tests {
     #[test]
     fn meta_refresh_none() {
         assert!(parse_meta_refresh_url("<html><head></head></html>").is_none());
+    }
+
+    #[test]
+    fn meta_refresh_percent_encoded_url() {
+        // Some sites percent-encode the ENTIRE URL in the content attribute
+        // (`URL='http%3A%2F%2Fhost%2Ffile.zip'`). The parser must decode it so
+        // `refreshed_url` recognizes the `http://` prefix instead of treating
+        // the encoded string as a relative path.
+        let html = r#"<meta http-equiv="refresh" content="0; URL='http%3A%2F%2Fmirror.example.com%2Ffiles%2Fapp.zip'">"#;
+        assert_eq!(
+            parse_meta_refresh_url(html),
+            Some("http://mirror.example.com/files/app.zip".to_string())
+        );
+    }
+
+    #[test]
+    fn meta_refresh_percent_encoded_then_entities() {
+        // Percent escapes AND HTML entities may both be present
+        // (`&amp;` inside an encoded query).
+        let html = r#"<meta http-equiv="refresh" content="0;URL=https%3A%2F%2Fx.com%2Fdl%3Ffile%3Da%26b.zip">"#;
+        assert_eq!(
+            parse_meta_refresh_url(html),
+            Some("https://x.com/dl?file=a&b.zip".to_string())
+        );
+    }
+
+    #[test]
+    fn meta_refresh_partially_encoded_url_left_intact() {
+        // A target that already has a literal scheme (`https://...`) may still
+        // percent-encode individual path characters (`%20` for a space). Those
+        // must be preserved for the HTTP layer, NOT decoded into a raw space.
+        let html =
+            r#"<meta http-equiv="refresh" content="0;URL='https://x.com/dl/file%20name.zip'">"#;
+        assert_eq!(
+            parse_meta_refresh_url(html),
+            Some("https://x.com/dl/file%20name.zip".to_string())
+        );
+    }
+
+    #[test]
+    fn meta_refresh_encoded_scheme_uppercase() {
+        // Encoded-scheme detection must be case-insensitive
+        // (`HTTP%3A%2F%2F` vs `http%3a%2f%2f`).
+        let html =
+            r#"<meta http-equiv="refresh" content="0;URL=HTTPS%3A%2F%2Fcdn.example.com%2Fa.zip">"#;
+        assert_eq!(
+            parse_meta_refresh_url(html),
+            Some("https://cdn.example.com/a.zip".to_string())
+        );
     }
 
     // ── decode_html_entities ─────────────────────────────────────────────

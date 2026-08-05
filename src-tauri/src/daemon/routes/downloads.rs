@@ -519,9 +519,6 @@ fn apply_fast_resolve(body: &mut CreateDownloadBody) -> bool {
     // cancel the native download before the browser's "Save As" dialog appears.
     if let Some(name) = body.name.as_deref().map(str::trim) {
         if !name.is_empty() && name != "download" && name != "index.html" {
-            if body.referer.as_deref().unwrap_or("").trim().is_empty() {
-                body.referer = Some(original_url.clone());
-            }
             body.url = Some(original_url);
             return true;
         }
@@ -541,9 +538,6 @@ fn apply_fast_resolve(body: &mut CreateDownloadBody) -> bool {
     if let Some(file_name) = file_name_from_url(&original_url) {
         if has_recognizable_extension(&file_name) {
             body.name = Some(file_name);
-            if body.referer.as_deref().unwrap_or("").trim().is_empty() {
-                body.referer = Some(original_url.clone());
-            }
             body.url = Some(original_url);
             return true;
         }

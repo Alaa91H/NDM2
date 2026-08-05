@@ -20,7 +20,7 @@
         "./src/*"
       ]
     },
-    "baseUrl": ".",
+    // baseUrl removed in TypeScript 7; paths resolve relative to this file.
     "allowImportingTsExtensions": true,
     // TODO: Enable after fixing ~60 type errors:
     // "noUncheckedIndexedAccess": true,
