@@ -322,6 +322,11 @@ pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
                         .pool_idle_timeout(std::time::Duration::from_secs(90))
                         .pool_max_idle_per_host(4)
                         .connect_timeout(std::time::Duration::from_secs(15))
+                        // Deep-but-valid redirect chains (CDNs, mirror farms)
+                        // must survive probe + download. reqwest's default (10)
+                        // fails chains the curl engine would happily follow
+                        // (curl's own default limit is 50).
+                        .redirect(reqwest::redirect::Policy::limited(50))
                         .build()
                         .unwrap_or_else(|_| {
                             // M4: the fallback client must also have timeouts

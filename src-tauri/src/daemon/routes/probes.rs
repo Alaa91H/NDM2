@@ -92,6 +92,10 @@ fn probe_http_client(state: &SharedState, body: Option<&CreateDownloadBody>) -> 
         return state.http_client.clone();
     };
     let mut builder = reqwest::Client::builder();
+    // Match the download engine's redirect tolerance (curl follows up to 50
+    // by default). reqwest's default (10) breaks deep-but-valid chains at
+    // probe time even though the actual download would succeed.
+    builder = builder.redirect(reqwest::redirect::Policy::limited(50));
     if let Some(proxy) = direct_option_str(body, "proxy") {
         if let Ok(proxy) = reqwest::Proxy::all(proxy) {
             builder = builder.proxy(proxy);
@@ -154,14 +158,44 @@ fn apply_probe_request_options(
     request
 }
 
+/// Record the most informative HTTP error status observed during probing.
+/// A 4xx (dead link, forbidden, rate-limited) is a stronger signal than a
+/// 5xx (transient server hiccup): keep the first 4xx we see, otherwise keep
+/// the first 5xx. Later duplicate classes are ignored so a definitive 404
+/// from an early stage is not masked by a flaky 503 from a later one.
+fn record_probe_error(
+    last_error_status: &mut Option<u16>,
+    last_error_reason: &mut String,
+    status: u16,
+    reason: &str,
+) {
+    let better = match *last_error_status {
+        None => true,
+        Some(prev) => {
+            let prev_is_4xx = (400..500).contains(&prev);
+            let new_is_4xx = (400..500).contains(&status);
+            new_is_4xx && !prev_is_4xx
+        }
+    };
+    if better {
+        *last_error_status = Some(status);
+        last_error_reason.clear();
+        last_error_reason.push_str(reason);
+    }
+}
+
 /// Stage 1 of the smart probe: HEAD request
 /// Returns the final URL after redirects (if HEAD succeeded), or None.
-/// Sets `best_payload` if size was obtained.
+/// Sets `best_payload` if size was obtained, and records the error status
+/// when HEAD itself fails with 4xx/5xx so the fallback payload can explain
+/// the failure.
 async fn probe_stage_head(
     client: &reqwest::Client,
     url: &str,
     body: Option<&CreateDownloadBody>,
     best_payload: &mut Option<serde_json::Value>,
+    last_error_status: &mut Option<u16>,
+    last_error_reason: &mut String,
 ) -> Option<String> {
     match apply_probe_request_options(
         client
@@ -203,6 +237,12 @@ async fn probe_stage_head(
                     url,
                     status,
                     resp.status().canonical_reason().unwrap_or("")
+                );
+                record_probe_error(
+                    last_error_status,
+                    last_error_reason,
+                    status,
+                    resp.status().canonical_reason().unwrap_or(""),
                 );
                 best_payload.as_ref().map(|_| final_url)
             }
@@ -340,9 +380,23 @@ async fn probe_url_uncached(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
     let client = probe_http_client(state, body);
     let mut best_payload: Option<serde_json::Value> = None;
+    // The most informative HTTP status observed across stages. When every
+    // attempt fails with a 4xx/5xx (dead mirror, forbidden, rate-limited),
+    // surface that status in the fallback payload so the UI can show
+    // "403 Forbidden" / "404 Not Found" instead of a generic unknown.
+    let mut last_error_status: Option<u16> = None;
+    let mut last_error_reason = String::new();
 
     // â”€â”€ Stage 1: HEAD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    let final_url = probe_stage_head(&client, url, body, &mut best_payload).await;
+    let final_url = probe_stage_head(
+        &client,
+        url,
+        body,
+        &mut best_payload,
+        &mut last_error_status,
+        &mut last_error_reason,
+    )
+    .await;
 
     // â”€â”€ Stage 2: GET bytes=0-0 (single byte range) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     let target_url = final_url.as_deref().unwrap_or(url);
@@ -389,6 +443,12 @@ async fn probe_url_uncached(
                 url,
                 status,
                 resp.status().canonical_reason().unwrap_or("")
+            );
+            record_probe_error(
+                &mut last_error_status,
+                &mut last_error_reason,
+                status,
+                resp.status().canonical_reason().unwrap_or(""),
             );
         }
         if is_html {
@@ -449,6 +509,14 @@ async fn probe_url_uncached(
             if is_html {
                 log::info!(
                     "probe GET range=0-1023 {url} -> HTML response (redirect page?), skipping to Stage 3b"
+                );
+            }
+            if status >= 400 {
+                record_probe_error(
+                    &mut last_error_status,
+                    &mut last_error_reason,
+                    status,
+                    resp.status().canonical_reason().unwrap_or(""),
                 );
             }
         }
@@ -599,6 +667,12 @@ async fn probe_url_uncached(
             }
         } else {
             log::warn!("probe GET (encoding) {url} -> {status} {status_reason}");
+            record_probe_error(
+                &mut last_error_status,
+                &mut last_error_reason,
+                status,
+                &status_reason,
+            );
         }
         body_text
     } else {
@@ -606,11 +680,14 @@ async fn probe_url_uncached(
     };
 
     // â”€â”€ Stage 4: Synthetic fallback â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // All network attempts failed (timeout / DNS / TLS / 4xx-5xx).
-    // Return minimal metadata derived from the URL alone so the UI can still
-    // show a sensible filename and file type without crashing.
+    // All network attempts failed (timeout / DNS / TLS / 4xx-5xx). Return
+    // minimal metadata derived from the URL alone so the UI can still show a
+    // sensible filename and file type without crashing. When we did observe a
+    // concrete HTTP error status (dead mirror, forbidden, rate-limited), carry
+    // it through so the UI can explain why the link is unusable instead of
+    // showing a generic unknown.
     let fname = fallback_file_name(url);
-    Ok(Json(serde_json::json!({
+    let mut fallback = serde_json::json!({
         "url": url,
         "finalUrl": url,
         "fileName": fname,
@@ -623,7 +700,13 @@ async fn probe_url_uncached(
         "etag": "",
         "lastModified": "",
         "probeMethod": "fallback-no-response"
-    })))
+    });
+    if let Some(status) = last_error_status {
+        fallback["httpStatus"] = serde_json::Value::from(status);
+        fallback["probeMethod"] =
+            serde_json::Value::from(format!("fallback-http-{status} {last_error_reason}"));
+    }
+    Ok(Json(fallback))
 }
 
 pub async fn handle_probe(
