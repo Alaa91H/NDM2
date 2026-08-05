@@ -8,8 +8,6 @@ import {
   Palette,
   Monitor,
   Video,
-  Magnet,
-  Webhook,
   Bot,
   Package,
   ScrollText,
@@ -34,8 +32,6 @@ import { NetworkAndPerformance } from './sections/NetworkAndPerformance';
 import { AppearanceSettings } from './sections/AppearanceSettings';
 import { BrowserSettings } from './sections/BrowserSettings';
 import { MediaSettings } from './sections/MediaSettings';
-import { TorrentSettings } from './sections/TorrentSettings';
-import { IntegrationsSettings } from './sections/IntegrationsSettings';
 import { TelegramBotSettings } from './sections/TelegramBotSettings';
 import { ExternalToolsSettings } from './sections/ExternalToolsSettings';
 
@@ -49,8 +45,6 @@ type SettingsTabId =
   | 'appearance'
   | 'browser'
   | 'media'
-  | 'torrent'
-  | 'integrations'
   | 'telegram'
   | 'external_tools'
   | 'logging'
@@ -104,8 +98,6 @@ export const SettingsDialog: React.FC = () => {
         autoReconnectDaemon: true,
         enableSse: true,
         daemonPort: '3199',
-        daemonBindAddress: '127.0.0.1',
-        experimentalFeatures: false,
       },
     };
     setLocalSettings(updatedSettings);
@@ -128,7 +120,7 @@ export const SettingsDialog: React.FC = () => {
       id: 'general',
       label: 'General',
       icon: Settings,
-      keywords: ['general', 'startup', 'language', 'update', 'timezone', 'tray'],
+      keywords: ['general', 'language', 'update'],
     },
     {
       id: 'downloads',
@@ -155,13 +147,6 @@ export const SettingsDialog: React.FC = () => {
       keywords: ['browser', 'extension', 'chrome', 'edge', 'firefox', 'clipboard', 'intercept', 'hls', 'dash'],
     },
     { id: 'media', label: 'Media', icon: Video, keywords: ['media', 'video', 'quality', 'subtitle', 'ffmpeg'] },
-    { id: 'torrent', label: 'Torrent', icon: Magnet, keywords: ['torrent', 'magnet', 'dht', 'pex', 'seeding', 'peer'] },
-    {
-      id: 'integrations',
-      label: 'Integrations',
-      icon: Webhook,
-      keywords: ['integration', 'webhook', 'smtp', 'email', 'notification'],
-    },
     { id: 'telegram', label: 'Telegram Bot', icon: Bot, keywords: ['telegram', 'bot', 'tg', 'chat', 'command', 'cli'] },
     {
       id: 'external_tools',
@@ -273,10 +258,6 @@ export const SettingsDialog: React.FC = () => {
           )}
           {activeTab === 'browser' && <BrowserSettings settings={localSettings} updateSetting={updateLocalSetting} />}
           {activeTab === 'media' && <MediaSettings settings={localSettings} updateSetting={updateLocalSetting} />}
-          {activeTab === 'torrent' && <TorrentSettings settings={localSettings} updateSetting={updateLocalSetting} />}
-          {activeTab === 'integrations' && (
-            <IntegrationsSettings settings={localSettings} updateSetting={updateLocalSetting} />
-          )}
           {activeTab === 'telegram' && (
             <TelegramBotSettings settings={localSettings} updateSetting={updateLocalSetting} onAddToast={addToast} />
           )}

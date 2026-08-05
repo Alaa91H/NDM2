@@ -93,15 +93,6 @@ export const MediaSettings: React.FC<Props> = ({ settings, updateSetting }) => {
               }}
             />
           </div>
-          <div className="flex items-center justify-between py-2">
-            <span className="text-xs font-bold text-[var(--text-primary)]">Delete Segments After Merge</span>
-            <Switch
-              checked={settings.extra.ffmpegDeleteSegments}
-              onChange={(v) => {
-                updateSetting('extra', 'ffmpegDeleteSegments', v);
-              }}
-            />
-          </div>
           <p className="text-[10px] text-[var(--text-muted)] leading-relaxed">
             After merging, individual segment files are removed to save disk space.
           </p>

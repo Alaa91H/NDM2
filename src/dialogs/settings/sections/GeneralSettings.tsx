@@ -76,31 +76,10 @@ export const GeneralSettings: React.FC<Props> = ({ settings, updateSetting }) =>
         <div className="bg-[var(--bg-hover)]/25 p-3 rounded-lg border border-[var(--border-color)] divide-y divide-[var(--border-color)]/40">
           {[
             {
-              label: t('settings_launch_startup'),
-              checked: settings.general.runOnStartup,
-              onChange: (v: boolean) => {
-                updateSetting('general', 'runOnStartup', v);
-              },
-            },
-            {
-              label: t('settings_minimize_tray'),
-              checked: settings.general.showTrayIcon,
-              onChange: (v: boolean) => {
-                updateSetting('general', 'showTrayIcon', v);
-              },
-            },
-            {
               label: t('settings_monitor_clipboard'),
               checked: settings.general.monitorClipboard,
               onChange: (v: boolean) => {
                 updateSetting('general', 'monitorClipboard', v);
-              },
-            },
-            {
-              label: t('settings_confirm_delete'),
-              checked: settings.general.confirmOnDelete,
-              onChange: (v: boolean) => {
-                updateSetting('general', 'confirmOnDelete', v);
               },
             },
             {
@@ -179,17 +158,6 @@ export const GeneralSettings: React.FC<Props> = ({ settings, updateSetting }) =>
               updateSetting('extra', 'language', e.target.value || 'en');
             }}
             options={WORLD_LANGUAGES}
-          />
-          <SelectField
-            label={t('settings_timezone_format')}
-            value={settings.extra.timezone}
-            onChange={(e) => {
-              updateSetting('extra', 'timezone', e.target.value);
-            }}
-            options={[
-              { value: 'system', label: t('settings_timezone_system') },
-              { value: 'utc', label: 'UTC' },
-            ]}
           />
         </div>
       </div>

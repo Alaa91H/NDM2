@@ -13,6 +13,7 @@ import { useEngineStore } from '../../store/engineStore';
 import type { DownloadItem, DownloadSegment } from '../../types/desktop-ui.types';
 import { formatBytes } from '../../initialData';
 import { formatSpeed, formatElapsed } from '../../utils/formatUtils';
+import { taskProgressInfo } from '../../utils/progressUtils';
 
 const SegmentCard: React.FC<{
   seg: DownloadSegment;
@@ -129,11 +130,7 @@ export const ActiveProgressDialog: React.FC<{ taskId?: string }> = ({ taskId }) 
   const speedLimitEnabled = settings.connection.speedLimiter.enabled;
   const speedLimitValue = settings.connection.speedLimiter.maxSpeedKbs;
 
-  const progressPercent = task
-    ? task.sizeBytes > 0
-      ? Math.round((task.downloadedBytes / task.sizeBytes) * 100)
-      : 0
-    : 0;
+  const progress = taskProgressInfo(task);
 
   const activeSegments = useMemo(() => (task ? task.segments.filter((s) => s.active && s.progress < 1) : []), [task]);
   const completedSegments = useMemo(() => (task ? task.segments.filter((s) => s.progress >= 1) : []), [task]);
@@ -220,7 +217,9 @@ export const ActiveProgressDialog: React.FC<{ taskId?: string }> = ({ taskId }) 
         <div className="flex items-center justify-between">
           <span className="text-[11px] font-bold text-[var(--text-secondary)]">{t('progress_overall_progress')}</span>
           <div className="flex items-center gap-2">
-            <span className="text-[11px] font-bold font-mono text-[var(--accent-primary)]">{progressPercent}%</span>
+            <span className="text-[11px] font-bold font-mono text-[var(--accent-primary)]">
+              {progress.percentLabel}
+            </span>
           </div>
         </div>
         <div
@@ -356,7 +355,8 @@ export const ActiveProgressDialog: React.FC<{ taskId?: string }> = ({ taskId }) 
                     {t('progress_downloaded')}
                   </div>
                   <div className="col-span-9 text-[var(--text-primary)] font-medium">
-                    {formatBytes(task.downloadedBytes)} ({progressPercent}%)
+                    {formatBytes(task.downloadedBytes)}
+                    {!progress.indeterminate ? ` (${progress.percentLabel})` : ''}
                   </div>
                   <div className="col-span-3 text-[var(--text-secondary)] font-semibold">
                     {t('progress_transfer_rate')}

@@ -29,6 +29,7 @@ import {
 } from 'lucide-react';
 import { novaClient, type BrowserExtensionHealth } from '../api/novaClient';
 import { useEscapeKey } from '../hooks/useEscapeKey';
+import { taskProgressInfo } from '../utils/progressUtils';
 
 import { extractErrorMessage } from '../utils/formatUtils';
 export const StatusBar: React.FC = () => {
@@ -51,13 +52,7 @@ export const StatusBar: React.FC = () => {
     [minimizedProgressTask, tasks],
   );
 
-  const minimizedProgressPercent = useMemo(
-    () =>
-      minimizedRealTask && minimizedRealTask.sizeBytes > 0
-        ? Math.round((minimizedRealTask.downloadedBytes / minimizedRealTask.sizeBytes) * 100)
-        : 0,
-    [minimizedRealTask],
-  );
+  const minimizedProgress = useMemo(() => taskProgressInfo(minimizedRealTask), [minimizedRealTask]);
 
   const [speedMenuVisible, setSpeedMenuVisible] = useState(false);
   const [speedMenuCoords, setSpeedMenuCoords] = useState({ x: 0, y: 0 });
@@ -325,7 +320,9 @@ export const StatusBar: React.FC = () => {
           >
             <span className="w-1.5 h-1.5 bg-[var(--success)] rounded-full animate-pulse shrink-0" />
             <span className="truncate max-w-[100px]">{minimizedRealTask.name}</span>
-            <span className="text-white font-mono">{minimizedProgressPercent}%</span>
+            <span className="text-white font-mono">
+              {minimizedProgress.percentLabel}
+            </span>
           </button>
         )}
 

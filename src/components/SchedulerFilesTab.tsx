@@ -15,6 +15,7 @@ import type { ContextMenuOption } from './primitives/ContextMenu';
 import { ContextMenu } from './primitives/ContextMenu';
 import { useDialogActions, useI18n } from '../store/selectors';
 import { formatBytes } from '../initialData';
+import { taskProgressInfo } from '../utils/progressUtils';
 
 const QUEUE_TASK_DRAG_TYPE = 'application/x-nova-queue-task';
 
@@ -180,7 +181,7 @@ export const SchedulerFilesTab: React.FC<SchedulerFilesTabProps> = ({
           </div>
         ) : (
           filteredTasks.map((task, index) => {
-            const percent = task.sizeBytes > 0 ? Math.round((task.downloadedBytes / task.sizeBytes) * 100) : 0;
+            const progress = taskProgressInfo(task);
             const sizeLabel = task.sizeBytes > 0 ? formatBytes(task.sizeBytes) : t('sched_size_unknown');
             const isDragging = draggedTaskId === task.id;
             const isDropTarget = dropTargetId === task.id && draggedTaskId !== task.id;
@@ -246,7 +247,9 @@ export const SchedulerFilesTab: React.FC<SchedulerFilesTabProps> = ({
                       {task.name}
                     </span>
                     <span className="text-[10px] text-[var(--text-muted)] block font-mono font-semibold truncate">
-                      {t('sched_size_progress', { size: sizeLabel, percent })}
+                      {progress.indeterminate
+                        ? t('sched_size_progress', { size: sizeLabel, percent: '…' }).replace('%', '')
+                        : t('sched_size_progress', { size: sizeLabel, percent: progress.percent })}
                     </span>
                   </div>
                 </div>

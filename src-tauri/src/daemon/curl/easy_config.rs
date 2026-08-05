@@ -261,6 +261,12 @@ const HTML_HEAD_CAPTURE_LIMIT: usize = 64 * 1024;
 pub struct HtmlHeadCapture {
     body: Vec<u8>,
     http_version: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    /// The real object size learned from `Content-Length` (200 responses) or
+    /// the `Content-Range` total (206 partial responses). The preflight uses
+    /// this to seed `plan.total_size` before the transfer starts, so the UI
+    /// can show a true progress percentage from byte one instead of a fake
+    /// 0% that jumps to 100% at completion.
+    content_length: Option<u64>,
 }
 impl Handler for HtmlHeadCapture {
     fn write(&mut self, data: &[u8]) -> Result<usize, WriteError> {
@@ -282,6 +288,35 @@ impl Handler for HtmlHeadCapture {
                     *v = Some(ver.to_owned());
                 }
             }
+            return true;
+        }
+        // Header lines: capture the true object size so a range probe that
+        // received `bytes=0-0` still reports the FULL file size. Mirrors the
+        // SegmentWriter parsing (Content-Range total takes precedence on 206).
+        if let Some((name, value)) = line.split_once(':') {
+            let name = name.trim().to_ascii_lowercase();
+            let value = value.trim();
+            match name.as_str() {
+                "content-length" => {
+                    if let Ok(size) = value.parse::<u64>() {
+                        if self.content_length.is_none() {
+                            self.content_length = Some(size);
+                        }
+                    }
+                }
+                "content-range" => {
+                    // e.g. "bytes 0-1023/2048" or "bytes */2048"; the total
+                    // after the slash is the true object size.
+                    if let Some(total) = value
+                        .rsplit('/')
+                        .next()
+                        .and_then(|t| t.trim().parse::<u64>().ok())
+                    {
+                        self.content_length = Some(total);
+                    }
+                }
+                _ => {}
+            }
         }
         true
     }
@@ -292,6 +327,9 @@ impl HtmlHeadCapture {
     }
     pub(crate) fn http_version(&self) -> Option<String> {
         self.http_version.lock().ok().and_then(|v| v.clone())
+    }
+    pub(crate) fn content_length(&self) -> Option<u64> {
+        self.content_length
     }
 }
 

@@ -405,6 +405,11 @@ export const novaClient = {
     payload?: Partial<CreateDownloadPayload> & { directOptions?: Record<string, unknown> },
   ): Promise<NovaProbeResult> {
     if (payload) {
+      // The daemon probe is multi-stage (HEAD → range GET → encoding GET →
+      // HTML interstitial/redirect resolution) and can legitimately take up
+      // to ~45s on slow or interstitial-heavy servers. The timeout must not
+      // fire before the backend finishes, or valid file links report
+      // "analysis failed" even though the daemon would resolve them.
       return request<NovaProbeResult>(
         '/api/probe',
         {
@@ -412,10 +417,10 @@ export const novaClient = {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ...payload, url }),
         },
-        10000,
+        45000,
       );
     }
-    return request<NovaProbeResult>(`/api/probe?url=${encodeURIComponent(url)}`, undefined, 8000);
+    return request<NovaProbeResult>(`/api/probe?url=${encodeURIComponent(url)}`, undefined, 45000);
   },
 
   async createDownload(payload: CreateDownloadPayload): Promise<DownloadItem> {

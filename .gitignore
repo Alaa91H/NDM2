@@ -189,3 +189,6 @@ Desktop.ini
 # ──────────────────────────────────────────────────────
 Plan.md
 metadata.json
+
+# Local app database (not part of the source tree)
+.freebuff/

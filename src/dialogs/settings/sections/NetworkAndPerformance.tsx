@@ -63,7 +63,11 @@ export const NetworkAndPerformance: React.FC<Props> = ({ settings, updateSetting
     const preset = DNS_PRESETS[mode];
     if (preset && mode !== 'custom') {
       const servers = [preset.primary, preset.secondary].filter(Boolean).join(',');
-      updateSetting('connection', 'dnsServers', servers);
+      // Real consumer: AddDownloadDialog reads connection.defaults.dnsServers.
+      updateSetting('connection', 'defaults', {
+        ...settings.connection.defaults,
+        dnsServers: servers,
+      });
       if (mode !== 'system') {
         updateSetting('extra', 'dnsCustomResolver', servers);
       }
@@ -73,7 +77,10 @@ export const NetworkAndPerformance: React.FC<Props> = ({ settings, updateSetting
   const handleDnsCustomApply = () => {
     const servers = [dnsCustomPrimary, dnsCustomSecondary].filter(Boolean).join(',');
     updateSetting('extra', 'dnsCustomResolver', servers);
-    updateSetting('connection', 'dnsServers', servers);
+    updateSetting('connection', 'defaults', {
+      ...settings.connection.defaults,
+      dnsServers: servers,
+    });
     onAddToast('success', 'DNS', 'Custom DNS servers applied.');
   };
 
@@ -339,13 +346,6 @@ export const NetworkAndPerformance: React.FC<Props> = ({ settings, updateSetting
                     updateSetting('extra', 'vpnKillSwitch', v);
                   }}
                 />
-                <Checkbox
-                  label={t('settings_vpn_dns_protection')}
-                  checked={settings.extra.vpnDnsProtection}
-                  onChange={(v) => {
-                    updateSetting('extra', 'vpnDnsProtection', v);
-                  }}
-                />
               </div>
 
               <p className="text-[10px] text-[var(--text-muted)] leading-relaxed">{t('settings_vpn_note')}</p>
@@ -415,14 +415,6 @@ export const NetworkAndPerformance: React.FC<Props> = ({ settings, updateSetting
               )}
 
               <div className="grid grid-cols-2 gap-3">
-                <FormRow label="DNS over HTTPS">
-                  <Switch
-                    checked={settings.extra.dnsOverHttps}
-                    onChange={(v) => {
-                      updateSetting('extra', 'dnsOverHttps', v);
-                    }}
-                  />
-                </FormRow>
                 <FormRow label="Cache timeout (sec)">
                   <input
                     type="number"

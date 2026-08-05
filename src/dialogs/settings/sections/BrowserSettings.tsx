@@ -2,7 +2,7 @@
 import React from 'react';
 import type { AppSettings } from '../../../types/desktop-ui.types';
 import { Switch, SelectField } from '../../../components/primitives';
-import { Globe, Monitor, Keyboard } from 'lucide-react';
+import { Globe, Keyboard } from 'lucide-react';
 
 interface Props {
   settings: AppSettings;
@@ -47,8 +47,8 @@ export const BrowserSettings: React.FC<Props> = ({ settings, updateSetting }) =>
       {/* ── Monitoring ── */}
       <div className="space-y-4">
         <div className="flex items-center gap-2 border-b border-[var(--border-color)] pb-2">
-          <Monitor className="w-4 h-4 text-[var(--warning)]" />
-          <h3 className="text-sm font-extrabold text-[var(--warning)]">Media Monitoring</h3>
+          <Keyboard className="w-4 h-4 text-[var(--warning)]" />
+          <h3 className="text-sm font-extrabold text-[var(--warning)]">Monitoring</h3>
         </div>
 
         <div className="bg-[var(--bg-hover)]/30 p-3.5 rounded-lg border border-[var(--border-color)] space-y-3">
@@ -58,33 +58,6 @@ export const BrowserSettings: React.FC<Props> = ({ settings, updateSetting }) =>
               checked={settings.general.monitorClipboard}
               onChange={(v) => {
                 updateSetting('general', 'monitorClipboard', v);
-              }}
-            />
-          </div>
-          <div className="flex items-center justify-between py-2">
-            <span className="text-xs font-bold text-[var(--text-primary)]">Media Monitor</span>
-            <Switch
-              checked={settings.extra.mediaMonitorEnabled}
-              onChange={(v) => {
-                updateSetting('extra', 'mediaMonitorEnabled', v);
-              }}
-            />
-          </div>
-          <div className="flex items-center justify-between py-2">
-            <span className="text-xs font-bold text-[var(--text-primary)]">Capture HLS Streams</span>
-            <Switch
-              checked={settings.extra.captureHls}
-              onChange={(v) => {
-                updateSetting('extra', 'captureHls', v);
-              }}
-            />
-          </div>
-          <div className="flex items-center justify-between py-2">
-            <span className="text-xs font-bold text-[var(--text-primary)]">Capture DASH Streams</span>
-            <Switch
-              checked={settings.extra.captureDash}
-              onChange={(v) => {
-                updateSetting('extra', 'captureDash', v);
               }}
             />
           </div>

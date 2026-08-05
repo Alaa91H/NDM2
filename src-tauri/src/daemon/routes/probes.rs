@@ -547,13 +547,13 @@ async fn probe_url_uncached(
                 }
                 // No meta-refresh: some sites (Sublime "thank you" page,
                 // SourceForge, GitHub releases) link the real file via plain
-                // <a href> anchors. Follow the best candidate so the probe
-                // reports the real file size instead of the HTML page.
-                if let Some(link) =
-                    crate::daemon::utils::extract_direct_download_links(&body_text, &stage_final)
-                        .into_iter()
-                        .next()
-                {
+                // <a href> anchors. Follow the ranked candidates in order so
+                // the probe reports the real file size instead of the HTML
+                // page; the first-ranked link may be dead or another
+                // interstitial, so try each until one answers with a file.
+                let candidates =
+                    crate::daemon::utils::extract_direct_download_links(&body_text, &stage_final);
+                for link in candidates {
                     log::info!("probe direct-download link for {url}: {link}");
                     if let Ok(resp) = apply_probe_request_options(
                         client
@@ -569,7 +569,16 @@ async fn probe_url_uncached(
                     {
                         let r_status = resp.status().as_u16();
                         let r_final = resp.url().to_string();
-                        if r_status == 206 || r_status == 416 || r_status < 400 {
+                        // A candidate that itself answers with an HTML
+                        // interstitial (e.g. a mirror pointing at another
+                        // landing page) must not be reported as a file — skip
+                        // it and try the next ranked candidate.
+                        let is_html = resp
+                            .headers()
+                            .get(reqwest::header::CONTENT_TYPE)
+                            .and_then(|v| v.to_str().ok())
+                            .is_some_and(|ct| ct.to_ascii_lowercase().contains("text/html"));
+                        if (r_status == 206 || r_status == 416 || r_status < 400) && !is_html {
                             let payload = probe_payload(
                                 url,
                                 &r_final,

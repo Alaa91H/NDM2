@@ -549,6 +549,20 @@ fn apply_fast_resolve(body: &mut CreateDownloadBody) -> bool {
         }
     }
 
+    // Scripted download endpoints hide the real file name in a query parameter
+    // (`/download.php?file=setup.exe`, `/get?id=7&filename=report.pdf`) while
+    // the path ends in `.php`/`.asp`. If a well-known filename parameter names
+    // a recognizable file, the URL is a direct download — take the fast path
+    // with the query-derived name instead of probing an HTML endpoint.
+    if let Some(file_name) = crate::daemon::utils::file_name_from_query(&original_url) {
+        body.name = Some(file_name);
+        if body.referer.as_deref().unwrap_or("").trim().is_empty() {
+            body.referer = Some(original_url.clone());
+        }
+        body.url = Some(original_url);
+        return true;
+    }
+
     // No recognizable name or extension — let background_resolve_and_start
     // analyze this URL with proper anti-bot headers (Sec-Fetch-*, realistic
     // User-Agent) and resolve the final name, size, and metadata via RIE.
@@ -572,90 +586,20 @@ fn file_name_from_url(url: &str) -> Option<String> {
 }
 
 /// Minimal percent-decoding for path segments (handles %20, %2F, etc.).
+/// Delegates to the shared decoder in `daemon::utils`.
 fn percent_decode(input: &str) -> String {
-    if !input.contains('%') {
-        return input.to_owned();
-    }
-    let bytes = input.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(byte) =
-                u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
-            {
-                out.push(byte);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).to_string()
+    crate::daemon::utils::percent_decode(input)
 }
 
 /// True when the filename ends with a known downloadable extension, indicating
 /// a direct file link rather than an HTML interstitial that needs probing.
+///
+/// Delegates to the single source of truth in `daemon::utils` so the fast
+/// path and the interstitial link extractor can never drift apart again.
 fn has_recognizable_extension(name: &str) -> bool {
-    let lower = name.rsplit('.').next().unwrap_or("").to_lowercase();
-    matches!(
-        lower.as_str(),
-        "exe"
-            | "msi"
-            | "msix"
-            | "appx"
-            | "dmg"
-            | "pkg"
-            | "deb"
-            | "rpm"
-            | "apk"
-            | "zip"
-            | "7z"
-            | "rar"
-            | "tar"
-            | "gz"
-            | "bz2"
-            | "xz"
-            | "iso"
-            | "img"
-            | "bin"
-            | "jar"
-            | "war"
-            | "pdf"
-            | "doc"
-            | "docx"
-            | "xls"
-            | "xlsx"
-            | "ppt"
-            | "pptx"
-            | "mp3"
-            | "mp4"
-            | "mkv"
-            | "avi"
-            | "mov"
-            | "flv"
-            | "webm"
-            | "wav"
-            | "flac"
-            | "ogg"
-            | "m4a"
-            | "aac"
-            | "epub"
-            | "mobi"
-            | "azw3"
-            | "torrent"
-            | "crx"
-            | "xpi"
-            | "run"
-            | "sh"
-            | "bat"
-            | "cmd"
-            | "ps1"
-            | "py"
-            | "whl"
-            | "egg"
-    )
+    let lower = name.to_lowercase();
+    let ext = lower.rsplit('.').next().unwrap_or("");
+    crate::daemon::utils::is_recognizable_download_extension(ext)
 }
 
 struct ProbeMetadata {
@@ -1105,4 +1049,59 @@ pub fn register_routes(router: Router<SharedState>) -> Router<SharedState> {
         .route("/api/stats", get(handle_stats))
         .route("/captures", post(handle_captures))
         .route("/captures/pending", get(handle_captures_pending))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_recognizable_extension;
+
+    #[test]
+    fn recognizable_extensions_take_the_fast_path() {
+        for name in [
+            "photo.jpg",
+            "image.jpeg",
+            "pic.png",
+            "anim.gif",
+            "web.webp",
+            "vector.svg",
+            "notes.txt",
+            "data.csv",
+            "config.json",
+            "feed.xml",
+            "readme.md",
+            "font.ttf",
+            "font.otf",
+            "font.woff2",
+            "lib.dll",
+            "lib.so",
+            "lib.dylib",
+            "archive.zip",
+            "archive.tar.gz",
+            "movie.mp4",
+            "song.mp3",
+            "doc.pdf",
+        ] {
+            assert!(
+                has_recognizable_extension(name),
+                "expected {name} to be recognized as a direct file link"
+            );
+        }
+    }
+
+    #[test]
+    fn non_file_urls_do_not_take_the_fast_path() {
+        for name in [
+            "index.html",
+            "page.php",
+            "download.php?id=1",
+            "",
+            "/",
+            "redirect",
+        ] {
+            assert!(
+                !has_recognizable_extension(name),
+                "expected {name:?} to NOT be recognized as a direct file link"
+            );
+        }
+    }
 }

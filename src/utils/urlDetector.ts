@@ -459,6 +459,13 @@ export function detectUrlType(url: string): UrlType {
     .replace(/^lite\./, '');
   const fullPath = parsed.pathname + parsed.search;
 
+  // HLS / DASH stream manifests are media regardless of the hosting hostname
+  // (they are commonly served from arbitrary CDNs). The direct engine would
+  // only fetch the playlist text, so route these to the media engine instead.
+  // Matched against pathname only: query-embedded "manifest.m3u8" strings in
+  // page URLs must not classify an HTML page as a stream.
+  if (/\.(?:m3u8|mpd)$/i.test(parsed.pathname)) return 'media';
+
   for (const pattern of MEDIA_PATTERNS) {
     if (!pattern.host.test(hostname)) continue;
     if (pattern.path) {

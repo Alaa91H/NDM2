@@ -323,7 +323,6 @@ export interface Queue {
 
 export interface AppSettings {
   general: {
-    runOnStartup: boolean;
     integrateWithBrowsers: {
       chrome: boolean;
       edge: boolean;
@@ -331,8 +330,6 @@ export interface AppSettings {
       safari: boolean;
     };
     monitorClipboard: boolean;
-    showTrayIcon: boolean;
-    confirmOnDelete: boolean;
     checkUpdates: boolean;
   };
   fileTypes: {
@@ -421,50 +418,24 @@ export interface AppSettings {
   };
   extra: {
     language: string;
-    timezone: string;
     duplicateAction: string;
-    checkRanges: boolean;
-    warnOnDuplicate: boolean;
     openOnComplete: boolean;
     openFolderOnComplete: boolean;
     virusScan: boolean;
     userAgent: string;
     dnsResolver: string;
     dnsCustomResolver: string;
-    dnsOverHttps: boolean;
     dnsCacheTimeoutSec: number;
-    forceIpv4: boolean;
     vpnEnabled: boolean;
     vpnMode: 'system' | 'proxy' | 'bind';
     vpnProxyUrl: string;
     vpnBindAddress: string;
     vpnKillSwitch: boolean;
-    vpnDnsProtection: boolean;
-    homePage: string;
-    searchEngine: string;
-    saveHistory: boolean;
-    block3rdPartyCookies: boolean;
-    clearHistoryOnExit: boolean;
-    clearCookiesOnExit: boolean;
-    mediaMonitorEnabled: boolean;
-    captureHls: boolean;
-    captureDash: boolean;
     downloadSubtitles: boolean;
     videoQuality: string;
     subtitleLanguage: string;
     ffmpegPath: string;
     ffmpegAutoMerge: boolean;
-    ffmpegDeleteSegments: boolean;
-    torrentEnabled: boolean;
-    torrentDht: boolean;
-    torrentPex: boolean;
-    torrentEncrypt: boolean;
-    torrentPort: string;
-    torrentMaxPeers: string;
-    torrentSeeding: boolean;
-    torrentBatteryStop: boolean;
-    torrentRatioLimit: string;
-    torrentUploadSpeed: string;
     tgEnabled: boolean;
     tgBotToken: string;
     tgChatId: string;
@@ -475,27 +446,12 @@ export interface AppSettings {
     tgFullControl: boolean;
     tgApiBase: string;
     tgFileUploadLimitMb: number;
-    smtpHost: string;
-    smtpPort: string;
-    smtpUser: string;
-    smtpPass: string;
-    webhookUrl: string;
-    webhookAuth: string;
-    webhookActive: boolean;
-    smtpActive: boolean;
     daemonPort: string;
-    daemonBindAddress: string;
-    experimentalFeatures: boolean;
     encryptAccessTokens: boolean;
-    redactTokens: boolean;
     preventClipboardHistory: boolean;
     browserPairingToken: string;
-    bindLocalhostOnly: boolean;
-    rejectExternalRequests: boolean;
-    trustedOrigins: string;
     autoReconnectDaemon: boolean;
     enableSse: boolean;
-    ignoreSites: string;
   };
 }
 

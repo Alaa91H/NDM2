@@ -378,6 +378,11 @@ fn resolve_effective_target(plan: &DirectDownloadPlan) -> (String, bool, Preflig
     const MAX_META_REFRESH_HOPS: usize = 5;
     let mut current = plan.url.clone();
     let mut preflight = PreflightData::default();
+    // Direct-download candidates still to try, ranked best-first. Kept across
+    // hops so a dead or interstitial first candidate falls back to the next
+    // one instead of aborting the whole resolve (SourceForge mirrors, GitHub
+    // releases with several assets, etc.).
+    let mut pending_direct: std::collections::VecDeque<String> = std::collections::VecDeque::new();
 
     for _hop in 0..=MAX_META_REFRESH_HOPS {
         // M10: only the URL changes per hop — avoid cloning the whole plan.
@@ -469,6 +474,33 @@ fn resolve_effective_target(plan: &DirectDownloadPlan) -> (String, bool, Preflig
             .flatten()
             .is_some_and(|ct| ct.to_ascii_lowercase().contains("text/html"));
 
+        // A followed candidate that answered with an HTTP error (404/403/5xx)
+        // is a dead mirror or asset: fall back to the next ranked candidate
+        // instead of failing the resolve outright. This MUST run before the
+        // is_html branch: real error pages are served as text/html and carry
+        // their own page furniture (logo/favicon/nav links). Parsing those
+        // would inject them into the candidate queue ahead of the remaining
+        // mirrors — and a `logo.png` or `favicon.ico` (both recognizable
+        // extensions now) would be downloaded as the "target file". Error
+        // responses are dead ends, never link sources.
+        if code >= 400 {
+            let mut followed = false;
+            while let Some(next) = pending_direct.pop_front() {
+                if next.starts_with("http") && next != current && next != effective {
+                    log::info!(
+                        "resolve: direct-download link {current} -> {next} (fallback after {code})"
+                    );
+                    current = next;
+                    followed = true;
+                    break;
+                }
+            }
+            if followed {
+                continue;
+            }
+            return (effective, code == 206, preflight);
+        }
+
         if is_html {
             if let Some(refresh) =
                 crate::daemon::utils::parse_meta_refresh_url(&easy.get_ref().text())
@@ -482,21 +514,51 @@ fn resolve_effective_target(plan: &DirectDownloadPlan) -> (String, bool, Preflig
             }
             // Some download pages (Sublime "thank you", SourceForge, GitHub
             // releases) link the real file via plain <a href> instead of a
-            // meta-refresh. Follow the best candidate before giving up.
-            let direct = crate::daemon::utils::extract_direct_download_links(
+            // meta-refresh. Follow the ranked candidates one at a time; the
+            // top-ranked link may itself be dead or another interstitial, so
+            // keep the leftovers across hops and fall back to the next.
+            let fresh = crate::daemon::utils::extract_direct_download_links(
                 &easy.get_ref().text(),
                 &effective,
             );
-            if let Some(next) = direct.into_iter().next() {
+            if !fresh.is_empty() {
+                // The current page's own links are closest to the file, so try
+                // them first — but keep any earlier-page candidates after them
+                // so a dead chain of interstitials can still fall back to the
+                // original page's remaining links. Dedup by exact URL.
+                let mut merged: std::collections::VecDeque<String> = fresh.into_iter().collect();
+                for leftover in pending_direct {
+                    if !merged.contains(&leftover) {
+                        merged.push_back(leftover);
+                    }
+                }
+                pending_direct = merged;
+            }
+            let mut followed = false;
+            while let Some(next) = pending_direct.pop_front() {
                 if next.starts_with("http") && next != current && next != effective {
                     log::info!("resolve: direct-download link {current} -> {next}");
                     current = next;
-                    continue;
+                    followed = true;
+                    break;
                 }
+            }
+            if followed {
+                continue;
             }
             return (effective, false, preflight);
         }
 
+        // The preflight response is a real file (not an interstitial, not an
+        // error page): record its total size so the transfer can start with a
+        // known size. This is what lets the UI show a live progress
+        // percentage from byte one instead of a fake 0% that only jumps to
+        // 100% when the download completes.
+        if let Some(len) = easy.get_ref().content_length() {
+            if len > 0 {
+                preflight.total_size = len;
+            }
+        }
         return (effective, code == 206, preflight);
     }
 
@@ -512,6 +574,12 @@ struct PreflightData {
     ttfb_us: u64,
     uses_tls: bool,
     supports_range: bool,
+    /// Total file size discovered from the preflight response headers
+    /// (Content-Length / Content-Range). 0 when unknown (HTML interstitial,
+    /// chunked response, error). The caller seeds `plan.total_size` with this
+    /// before dispatch so the UI shows a real progress percentage instead of
+    /// a fake 0% that jumps to 100% at completion.
+    total_size: u64,
 }
 
 fn update_curl_task_progress(
@@ -2005,9 +2073,57 @@ fn run_libcurl_download(
             );
             plan.url = effective_url;
         }
+        // The preflight discovered a real total size for a download that
+        // started with an unknown size (fast path). Apply it to the plan and
+        // the task snapshot before dispatch so the UI shows a live progress
+        // percentage from byte one — not a fake 0% that jumps to 100% at
+        // completion.
+        if plan.total_size == 0 && preflight.total_size > 0 {
+            log::info!(
+                "Task {id}: preflight learned total size {} bytes for unknown-size download",
+                preflight.total_size
+            );
+            plan.total_size = preflight.total_size;
+            // Lock order: curl_jobs → task_snapshot (documented order).
+            if let Ok(mut jobs) = state.curl_jobs.lock() {
+                if let Some(job) = jobs.get_mut(id) {
+                    if job.task.size_bytes == 0 {
+                        job.task.size_bytes = preflight.total_size;
+                    }
+                }
+            }
+            if let Ok(mut tasks) = state.task_snapshot.lock() {
+                if let Some(task) = tasks.get_mut(id) {
+                    if task.size_bytes == 0 {
+                        task.size_bytes = preflight.total_size;
+                    }
+                }
+            }
+            state.priority_queue.update_size(id, preflight.total_size);
+            state.mark_dirty();
+        }
         if plan.segmented && !supports_range {
             log::info!("Task {id}: server does not honour byte ranges; using a single connection");
             plan.segmented = false;
+        }
+        // A size learned from the preflight may now qualify the download for
+        // segmented multi-connection transfer (plan_from_job saw size 0 and
+        // fell back to a single connection). Re-evaluate with the same gates:
+        // segmented opt-in, not force-single, resumable, >1 connection, size
+        // above the minimum, and the server honouring byte ranges.
+        if !plan.segmented
+            && supports_range
+            && plan.config.bool_("segmented").unwrap_or(true)
+            && !plan.config.bool_("forceSingleConnection").unwrap_or(false)
+            && plan.resumable
+            && plan.connections > 1
+            && plan.total_size >= global_config().min_segment_bytes
+        {
+            log::info!(
+                "Task {id}: enabling segmented transfer after preflight size discovery ({})",
+                plan.total_size
+            );
+            plan.segmented = true;
         }
     }
     // Auto-resolve filename conflicts before downloading. Professional download
@@ -3195,7 +3311,12 @@ mod tests {
     #[test]
     fn unknown_size_download_learns_total_from_content_length_for_live_progress() {
         let payload: Vec<u8> = (0..(4 * 1024 * 1024)).map(|i| (i % 257) as u8).collect();
-        let addr = spawn_range_server(std::sync::Arc::new(payload.clone()));
+        // Use the throttled server: a plain localhost transfer can complete
+        // between the 5ms polling ticks under parallel load, making the
+        // "intermediate progress observed" assertion a race (the same flake
+        // the fresh_download sibling test guards against). Dribbling the
+        // body out over several hundred ms makes the observation deterministic.
+        let addr = spawn_slow_range_server(std::sync::Arc::new(payload.clone()), 64 * 1024, 2);
         let url = format!("http://{addr}/unknown.bin");
         let dir = std::env::temp_dir().join(format!("nova_test_unknown_{}", std::process::id()));
         let out = dir.join("unknown.bin");
@@ -3258,6 +3379,168 @@ mod tests {
         assert!(
             saw_intermediate,
             "no intermediate progress: size_bytes stayed 0 during transfer (0% then 100% bug)"
+        );
+        let written = std::fs::read(&out).unwrap();
+        assert_eq!(written, payload, "output content mismatch");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn preflight_discovers_total_size_before_transfer_for_unknown_size_download() {
+        // The 0% → 100% bug's missing link: the engine's own preflight
+        // (resolve_effective_target) performs a real HTTP request but used to
+        // throw away the Content-Length/Content-Range it received, so a
+        // fast-path download that started with size 0 stayed at 0% until
+        // completion. The preflight must capture the total size and the
+        // dispatch must apply it BEFORE the transfer so the UI shows a live
+        // percentage from byte one.
+        let payload: Vec<u8> = (0..(2 * 1024 * 1024)).map(|i| (i % 251) as u8).collect();
+        let addr = spawn_slow_range_server(std::sync::Arc::new(payload.clone()), 128 * 1024, 1);
+        let url = format!("http://{addr}/preflight-unknown.bin");
+        let dir =
+            std::env::temp_dir().join(format!("nova_test_preflight_size_{}", std::process::id()));
+        let out = dir.join("preflight-unknown.bin");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let state = std::sync::Arc::new(crate::daemon::persist::tests::test_state(
+            &dir.to_string_lossy(),
+        ));
+        let id = "preflight-size-test";
+        let body = download_body(&url, "preflight-unknown.bin", 0, 1);
+        let job = task_from_body(
+            &body,
+            id,
+            "preflight-unknown.bin".to_string(),
+            &out,
+            std::collections::HashMap::new(),
+            Vec::new(),
+        );
+        {
+            let mut jobs = state.curl_jobs.lock().unwrap();
+            jobs.insert(id.to_string(), job);
+        }
+        state.mark_dirty();
+
+        let st = state.clone();
+        std::thread::spawn(move || start_curl_process(&st, id));
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut saw_size_before_completion = false;
+        let mut saw_intermediate_percent = false;
+        loop {
+            let (status, downloaded, size) = {
+                let jobs = state.curl_jobs.lock().unwrap();
+                let Some(j) = jobs.get(id) else { break };
+                (
+                    j.task.status.clone(),
+                    j.task.downloaded_bytes,
+                    j.task.size_bytes,
+                )
+            };
+            if status == "downloading" && size == payload.len() as u64 {
+                saw_size_before_completion = true;
+            }
+            if status == "downloading" && size > 0 && downloaded > 0 && downloaded < size {
+                saw_intermediate_percent = true;
+            }
+            if status == "completed" || status == "error" {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timeout status={status} downloaded={downloaded} size={size}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        let task = run_task_to_completion(&state, id, std::time::Duration::from_secs(30));
+        assert_eq!(task.size_bytes, payload.len() as u64);
+        assert!(
+            saw_size_before_completion,
+            "preflight did not surface the total size while the transfer was still running"
+        );
+        assert!(
+            saw_intermediate_percent,
+            "no real intermediate percentage: downloaded/size never observed mid-transfer"
+        );
+        let written = std::fs::read(&out).unwrap();
+        assert_eq!(written, payload, "output content mismatch");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn preflight_size_upgrades_unknown_size_download_to_segmented() {
+        // A fast-path download that starts with an unknown size (0) and
+        // requests >1 connection must be upgraded to a segmented transfer once
+        // the preflight learns the real size (Content-Length/Content-Range) —
+        // previously it stayed single-connection forever, wasting the server's
+        // range support and the user's bandwidth.
+        let payload: Vec<u8> = (0..(3 * 1024 * 1024)).map(|i| (i % 251) as u8).collect();
+        let addr = spawn_slow_range_server(std::sync::Arc::new(payload.clone()), 128 * 1024, 1);
+        let url = format!("http://{addr}/upgrade-unknown.bin");
+        let dir =
+            std::env::temp_dir().join(format!("nova_test_seg_upgrade_{}", std::process::id()));
+        let out = dir.join("upgrade-unknown.bin");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let state = std::sync::Arc::new(crate::daemon::persist::tests::test_state(
+            &dir.to_string_lossy(),
+        ));
+        let id = "seg-upgrade-test";
+        let body = download_body(&url, "upgrade-unknown.bin", 0, 4);
+        let job = task_from_body(
+            &body,
+            id,
+            "upgrade-unknown.bin".to_string(),
+            &out,
+            std::collections::HashMap::new(),
+            Vec::new(),
+        );
+        {
+            let mut jobs = state.curl_jobs.lock().unwrap();
+            jobs.insert(id.to_string(), job);
+        }
+        state.mark_dirty();
+
+        let st = state.clone();
+        std::thread::spawn(move || start_curl_process(&st, id));
+
+        // Watch for the engine tracker's segment scheduler to appear — it is
+        // only registered by run_segmented_libcurl, so its presence proves the
+        // transfer was actually segmented (not single-connection).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut saw_segmented_tracker = false;
+        loop {
+            let (status, has_tracker, size, downloaded) = {
+                let trackers = state.engine_trackers.read().unwrap();
+                let has = trackers.get(id).is_some_and(|t| t.segments.is_some());
+                let jobs = state.curl_jobs.lock().unwrap();
+                let Some(j) = jobs.get(id) else { break };
+                (
+                    j.task.status.clone(),
+                    has,
+                    j.task.size_bytes,
+                    j.task.downloaded_bytes,
+                )
+            };
+            if has_tracker && size == payload.len() as u64 && downloaded > 0 {
+                saw_segmented_tracker = true;
+            }
+            if status == "completed" || status == "error" {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timeout status={status} size={size} downloaded={downloaded} segmented={has_tracker}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        let task = run_task_to_completion(&state, id, std::time::Duration::from_secs(30));
+        assert_eq!(task.size_bytes, payload.len() as u64);
+        assert!(
+            saw_segmented_tracker,
+            "preflight-discovered size did not upgrade the transfer to segmented mode"
         );
         let written = std::fs::read(&out).unwrap();
         assert_eq!(written, payload, "output content mismatch");
@@ -3838,18 +4121,49 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Serves an HTML "thank you" interstitial (like Sublime's download page)
-    /// that links the real file via a plain `<a href>` — no meta-refresh, no
-    /// redirect — plus the actual file behind a range-capable endpoint.
-    fn spawn_interstitial_server(payload: std::sync::Arc<Vec<u8>>) -> std::net::SocketAddr {
+    /// What a test interstitial server should answer for a request path.
+    #[derive(Clone, Debug)]
+    enum InterstitialResponse {
+        /// Serve the given HTML page (an interstitial "thank you" page).
+        Html(String),
+        /// Serve an HTTP 404 with a REAL HTML error-page body — a dead mirror
+        /// whose error page has `<html>` boilerplate AND page-furniture links
+        /// (exercises the code>=400-before-is_html ordering: the error page's
+        /// own links must NOT be followed ahead of the live mirror).
+        NotFoundHtml(String),
+        /// Serve an HTTP 404 with a plain-text body — a dead mirror that
+        /// answers non-HTML (exercises the `code >= 400` fallback branch).
+        NotFoundPlain,
+        /// Serve a small, distinct non-payload body (a decoy logo) so a wrong
+        /// follow of an error page's furniture link fails the byte assertion
+        /// instead of silently succeeding with the real payload.
+        DecoyLogo,
+        /// Serve the binary payload with range support (the real file).
+        File,
+    }
+
+    /// Serves a configurable HTML interstitial (Sublime/SourceForge/GitHub
+    /// style download pages) that links the real file via plain `<a href>`
+    /// anchors — no meta-refresh, no redirect — plus the actual file behind a
+    /// range-capable endpoint. The `respond` closure maps a request path (and
+    /// the server address, so HTML can embed absolute links) to a response.
+    fn spawn_interstitial_server_with<F>(
+        payload: std::sync::Arc<Vec<u8>>,
+        respond: F,
+    ) -> std::net::SocketAddr
+    where
+        F: Fn(std::net::SocketAddr, &str) -> InterstitialResponse + Send + Sync + 'static,
+    {
         use std::io::{Read, Write};
         use std::net::{Shutdown, TcpListener};
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
+        let respond = std::sync::Arc::new(respond);
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(mut stream) = stream else { break };
                 let payload = payload.clone();
+                let respond = respond.clone();
                 std::thread::spawn(move || {
                     let mut buf = [0u8; 8192];
                     let n = stream.read(&mut buf).unwrap_or(0);
@@ -3873,25 +4187,53 @@ mod tests {
                         let _ = stream.write_all(body);
                         let _ = stream.shutdown(Shutdown::Write);
                     };
-                    if path.starts_with("/page") || path.starts_with("/thanks") {
-                        // Interstitial: ignore Range, always serve HTML that
-                        // links the real file (absolute URL so the engine can
-                        // resolve it without knowing the host in advance).
-                        let html = format!(
-                            "<!DOCTYPE html><html><head><title>Thanks</title></head><body>\n\
-                             <a href=\"http://{addr}/file.bin\">Download</a>\n\
-                             <a href=\"http://{addr}/file.bin.sig\">sig</a>\n\
-                             </body></html>"
-                        );
-                        send(
-                            &mut stream,
-                            format!(
-                                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                                html.len()
-                            ),
-                            html.as_bytes(),
-                        );
-                        return;
+                    match respond(addr, path) {
+                        InterstitialResponse::Html(html) => {
+                            // Interstitial: ignore Range, always serve the
+                            // HTML page (absolute URLs so the engine can
+                            // resolve them without knowing the host).
+                            send(
+                                &mut stream,
+                                format!(
+                                    "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                    html.len()
+                                ),
+                                html.as_bytes(),
+                            );
+                            return;
+                        }
+                        InterstitialResponse::NotFoundHtml(html) => {
+                            send(
+                                &mut stream,
+                                format!(
+                                    "HTTP/1.1 404 Not Found\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                    html.len()
+                                ),
+                                html.as_bytes(),
+                            );
+                            return;
+                        }
+                        InterstitialResponse::NotFoundPlain => {
+                            send(
+                                &mut stream,
+                                "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Length: 13\r\nConnection: close\r\n\r\n".to_string(),
+                                b"404 not found",
+                            );
+                            return;
+                        }
+                        InterstitialResponse::DecoyLogo => {
+                            const DECOY: &[u8] = b"DECOY-LOGO-NOT-THE-PAYLOAD";
+                            send(
+                                &mut stream,
+                                format!(
+                                    "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                    DECOY.len()
+                                ),
+                                DECOY,
+                            );
+                            return;
+                        }
+                        InterstitialResponse::File => {}
                     }
                     match range {
                         Some(r) => {
@@ -3943,10 +4285,26 @@ mod tests {
         // link on an HTML "thank you" page (no meta-refresh) and produce a
         // byte-for-byte identical file — not download the HTML page itself.
         let payload: Vec<u8> = (0..(4 * 1024 * 1024)).map(|i| (i % 251) as u8).collect();
-        let addr = spawn_interstitial_server(std::sync::Arc::new(payload.clone()));
+        let payload_arc = std::sync::Arc::new(payload.clone());
+        let addr = spawn_interstitial_server_with(payload_arc, |addr, path| {
+            if path.starts_with("/thanks") {
+                // Sublime-style "thank you" page linking the real file.
+                InterstitialResponse::Html(format!(
+                    "<!DOCTYPE html><html><head><title>Thanks</title></head><body>\n\
+                     <a href=\"http://{addr}/app_setup.exe\">Download</a>\n\
+                     <a href=\"http://{addr}/app_setup.exe.sig\">sig</a>\n\
+                     </body></html>"
+                ))
+            } else {
+                InterstitialResponse::File
+            }
+        });
         // The pasted URL has no recognizable extension, so it goes through the
         // full preflight loop where the interstitial is detected and followed.
-        let url = format!("http://{addr}/download_thanks?target=win-x64");
+        // It must match the server's `/thanks` interstitial branch — otherwise
+        // the server would serve the payload directly and the interstitial
+        // resolution path would never be exercised.
+        let url = format!("http://{addr}/thanks?target=win-x64");
         let dir =
             std::env::temp_dir().join(format!("nova_test_interstitial_{}", std::process::id()));
         let out = dir.join("app_setup.exe");
@@ -3979,6 +4337,257 @@ mod tests {
         let written = std::fs::read(&out).unwrap();
         assert_eq!(written, payload, "interstitial download is corrupt");
         // The saved file must be the real file, not the HTML page.
+        assert_eq!(written.len(), payload.len());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn html_interstitial_sourceforge_download_suffix_downloads_real_file() {
+        // SourceForge-style case: the interstitial anchors end in a trailing
+        // `/download` segment (`.../files/foo.exe/download?use_mirror=...`)
+        // with no extension of their own. The engine must recognize the file
+        // name before the suffix, follow it, and download the real payload.
+        let payload: Vec<u8> = (0..(3 * 1024 * 1024)).map(|i| (i % 251) as u8).collect();
+        let payload_arc = std::sync::Arc::new(payload.clone());
+        let addr = spawn_interstitial_server_with(payload_arc, |addr, path| {
+            if path.starts_with("/sf/thanks") {
+                InterstitialResponse::Html(format!(
+                    "<!DOCTYPE html><html><head><title>SourceForge</title></head><body>\n\
+                     <a href=\"http://{addr}/files/app_setup.exe/download?use_mirror=autoselect\">Direct link</a>\n\
+                     <a href=\"http://{addr}/files/app_setup.exe/download?use_mirror=mirror2\">Mirror 2</a>\n\
+                     <a href=\"http://{addr}/files/app_setup.dmg/download\">mac</a>\n\
+                     </body></html>"
+                ))
+            } else {
+                InterstitialResponse::File
+            }
+        });
+        let url = format!("http://{addr}/sf/thanks?target=win-x64");
+        let dir = std::env::temp_dir().join(format!("nova_test_sf_{}", std::process::id()));
+        let out = dir.join("app_setup.exe");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let state = std::sync::Arc::new(crate::daemon::persist::tests::test_state(
+            &dir.to_string_lossy(),
+        ));
+        let id = "sf-interstitial-test";
+        let body = download_body(&url, "app_setup.exe", payload.len() as u64, 2);
+        let job = task_from_body(
+            &body,
+            id,
+            "app_setup.exe".to_string(),
+            &out,
+            std::collections::HashMap::new(),
+            Vec::new(),
+        );
+        {
+            let mut jobs = state.curl_jobs.lock().unwrap();
+            jobs.insert(id.to_string(), job);
+        }
+        state.mark_dirty();
+
+        let st = state.clone();
+        std::thread::spawn(move || start_curl_process(&st, id));
+
+        let task = run_task_to_completion(&state, id, std::time::Duration::from_secs(120));
+        assert_eq!(task.status, "completed");
+        let written = std::fs::read(&out).unwrap();
+        assert_eq!(
+            written, payload,
+            "sourceforge /download interstitial is corrupt"
+        );
+        assert_eq!(written.len(), payload.len());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn html_interstitial_github_host_rooted_anchors_downloads_real_file() {
+        // GitHub release-style case: the interstitial links the assets via
+        // host-rooted relative anchors (`/owner/repo/releases/download/...`).
+        // The engine must resolve them against the page URL and download the
+        // real payload.
+        let payload: Vec<u8> = (0..(3 * 1024 * 1024)).map(|i| (i % 251) as u8).collect();
+        let payload_arc = std::sync::Arc::new(payload.clone());
+        let addr = spawn_interstitial_server_with(payload_arc, |_addr, path| {
+            if path.starts_with("/gh/releases/tag") {
+                InterstitialResponse::Html(
+                    "<!DOCTYPE html><html><head><title>Releases</title></head><body>\n\
+                     <a href=\"/gh/releases/download/v1.2.3/app-1.2.3-win-x64.exe\">win</a>\n\
+                     <a href=\"/gh/releases/download/v1.2.3/app-1.2.3-mac.dmg\">mac</a>\n\
+                     </body></html>"
+                        .to_string(),
+                )
+            } else {
+                InterstitialResponse::File
+            }
+        });
+        let url = format!("http://{addr}/gh/releases/tag/v1.2.3");
+        let dir = std::env::temp_dir().join(format!("nova_test_gh_{}", std::process::id()));
+        let out = dir.join("app.exe");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let state = std::sync::Arc::new(crate::daemon::persist::tests::test_state(
+            &dir.to_string_lossy(),
+        ));
+        let id = "gh-interstitial-test";
+        let body = download_body(&url, "app.exe", payload.len() as u64, 2);
+        let job = task_from_body(
+            &body,
+            id,
+            "app.exe".to_string(),
+            &out,
+            std::collections::HashMap::new(),
+            Vec::new(),
+        );
+        {
+            let mut jobs = state.curl_jobs.lock().unwrap();
+            jobs.insert(id.to_string(), job);
+        }
+        state.mark_dirty();
+
+        let st = state.clone();
+        std::thread::spawn(move || start_curl_process(&st, id));
+
+        let task = run_task_to_completion(&state, id, std::time::Duration::from_secs(120));
+        assert_eq!(task.status, "completed");
+        let written = std::fs::read(&out).unwrap();
+        assert_eq!(
+            written, payload,
+            "github host-rooted interstitial is corrupt"
+        );
+        assert_eq!(written.len(), payload.len());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn html_interstitial_dead_first_candidate_falls_back() {
+        // Multi-candidate fallback: the top-ranked direct link is dead (404),
+        // but a second anchor on the page points at the real file. The engine
+        // must fall back to the next candidate instead of failing the task.
+        // The dead mirror answers with a REAL HTML error page (`<html>`
+        // boilerplate plus a page-furniture link to a decoy logo): the resolve
+        // loop must honor the 404 BEFORE parsing the error page, otherwise it
+        // would follow the error page's own `logo.png` link and download the
+        // decoy instead of the live mirror.
+        let payload: Vec<u8> = (0..(3 * 1024 * 1024)).map(|i| (i % 251) as u8).collect();
+        let payload_arc = std::sync::Arc::new(payload.clone());
+        let addr = spawn_interstitial_server_with(payload_arc, |addr, path| {
+            if path.starts_with("/thanks") {
+                InterstitialResponse::Html(format!(
+                    "<!DOCTYPE html><html><head><title>Mirrors</title></head><body>\n\
+                     <a href=\"http://{addr}/dead/app_setup.exe\">dead mirror</a>\n\
+                     <a href=\"http://{addr}/live/app_setup.exe\">live mirror</a>\n\
+                     </body></html>"
+                ))
+            } else if path.starts_with("/dead/") {
+                // A real HTML 404 error page: boilerplate AND a furniture link
+                // to /logo.png. If the engine parsed the error page before
+                // honoring the 404, it would follow the logo and download the
+                // decoy bytes (test fails on the payload comparison).
+                InterstitialResponse::NotFoundHtml(format!(
+                    "<!DOCTYPE html><html><head><title>404 Not Found</title></head><body>\n\
+                     <h1>Not Found</h1>\n\
+                     <a href=\"http://{addr}/logo.png\"><img src=\"http://{addr}/logo.png\"></a>\n\
+                     </body></html>"
+                ))
+            } else if path.starts_with("/logo.png") {
+                InterstitialResponse::DecoyLogo
+            } else {
+                InterstitialResponse::File
+            }
+        });
+        let url = format!("http://{addr}/thanks?target=win-x64");
+        let dir = std::env::temp_dir().join(format!("nova_test_fallback_{}", std::process::id()));
+        let out = dir.join("app_setup.exe");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let state = std::sync::Arc::new(crate::daemon::persist::tests::test_state(
+            &dir.to_string_lossy(),
+        ));
+        let id = "fallback-test";
+        let body = download_body(&url, "app_setup.exe", payload.len() as u64, 2);
+        let job = task_from_body(
+            &body,
+            id,
+            "app_setup.exe".to_string(),
+            &out,
+            std::collections::HashMap::new(),
+            Vec::new(),
+        );
+        {
+            let mut jobs = state.curl_jobs.lock().unwrap();
+            jobs.insert(id.to_string(), job);
+        }
+        state.mark_dirty();
+
+        let st = state.clone();
+        std::thread::spawn(move || start_curl_process(&st, id));
+
+        let task = run_task_to_completion(&state, id, std::time::Duration::from_secs(120));
+        assert_eq!(task.status, "completed");
+        let written = std::fs::read(&out).unwrap();
+        assert_eq!(written, payload, "dead-first fallback download is corrupt");
+        assert_eq!(written.len(), payload.len());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn html_interstitial_dead_first_candidate_non_html_404_falls_back() {
+        // Same fallback, but the dead mirror answers with a plain-text 404
+        // (not an HTML error page). This exercises the `code >= 400` fallback
+        // branch in the preflight loop, which must also skip to the next
+        // ranked candidate instead of failing the task.
+        let payload: Vec<u8> = (0..(3 * 1024 * 1024)).map(|i| (i % 251) as u8).collect();
+        let payload_arc = std::sync::Arc::new(payload.clone());
+        let addr = spawn_interstitial_server_with(payload_arc, |addr, path| {
+            if path.starts_with("/thanks") {
+                InterstitialResponse::Html(format!(
+                    "<!DOCTYPE html><html><head><title>Mirrors</title></head><body>\n\
+                     <a href=\"http://{addr}/dead/app_setup.exe\">dead mirror</a>\n\
+                     <a href=\"http://{addr}/live/app_setup.exe\">live mirror</a>\n\
+                     </body></html>"
+                ))
+            } else if path.starts_with("/dead/") {
+                InterstitialResponse::NotFoundPlain
+            } else {
+                InterstitialResponse::File
+            }
+        });
+        let url = format!("http://{addr}/thanks?target=win-x64");
+        let dir =
+            std::env::temp_dir().join(format!("nova_test_fallback404_{}", std::process::id()));
+        let out = dir.join("app_setup.exe");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let state = std::sync::Arc::new(crate::daemon::persist::tests::test_state(
+            &dir.to_string_lossy(),
+        ));
+        let id = "fallback404-test";
+        let body = download_body(&url, "app_setup.exe", payload.len() as u64, 2);
+        let job = task_from_body(
+            &body,
+            id,
+            "app_setup.exe".to_string(),
+            &out,
+            std::collections::HashMap::new(),
+            Vec::new(),
+        );
+        {
+            let mut jobs = state.curl_jobs.lock().unwrap();
+            jobs.insert(id.to_string(), job);
+        }
+        state.mark_dirty();
+
+        let st = state.clone();
+        std::thread::spawn(move || start_curl_process(&st, id));
+
+        let task = run_task_to_completion(&state, id, std::time::Duration::from_secs(120));
+        assert_eq!(task.status, "completed");
+        let written = std::fs::read(&out).unwrap();
+        assert_eq!(
+            written, payload,
+            "non-html-404 fallback download is corrupt"
+        );
         assert_eq!(written.len(), payload.len());
         let _ = std::fs::remove_dir_all(&dir);
     }

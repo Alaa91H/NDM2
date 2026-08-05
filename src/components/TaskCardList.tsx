@@ -3,6 +3,7 @@ import { ExternalLink, FolderOpen } from 'lucide-react';
 import type { DownloadItem } from '../types/desktop-ui.types';
 import { formatBytes } from '../initialData';
 import { formatSpeed, formatTimeLeft, formatElapsed } from '../utils/taskTableUtils';
+import { taskProgressInfo } from '../utils/progressUtils';
 import TaskCheckboxAndIcon from './primitives/TaskCheckboxAndIcon';
 import { StatusPill } from './primitives';
 
@@ -49,7 +50,7 @@ const TaskCardListInner: React.FC<TaskCardListProps> = ({
           unrendered slice of the card list. */}
       {padTop > 0 && <div aria-hidden="true" style={{ height: padTop }} />}
       {tasks.map((task) => {
-        const progressPercent = task.sizeBytes > 0 ? Math.round((task.downloadedBytes / task.sizeBytes) * 100) : 0;
+        const progress = taskProgressInfo(task);
         const isChecked = checkedTaskIds.has(task.id);
 
         return (
@@ -80,19 +81,32 @@ const TaskCardListInner: React.FC<TaskCardListProps> = ({
 
             <div className="mt-3 flex items-center gap-2">
               <div className="flex-1 h-2 bg-[var(--bg-surface)] dark:bg-[var(--bg-surface-elevated)] rounded-full overflow-hidden border border-[var(--border-color)]">
-                <div
-                  className={`h-full bg-[var(--accent-primary)] rounded-full transition-all duration-300 ${task.status === 'downloading' ? 'accent-glow relative overflow-hidden' : ''}`}
-                  style={{ width: `${String(progressPercent)}%` }}
-                >
-                  {task.status === 'downloading' && <div className="absolute inset-0 bg-white/20 animate-pulse" />}
-                </div>
+                {progress.indeterminate ? (
+                  // Unknown total size: animated indeterminate bar instead of a
+                  // misleading 0% (real percentage appears once size is known).
+                  <div className="progress-indeterminate-bar h-full bg-[var(--accent-primary)] rounded-full" />
+                ) : (
+                  <div
+                    className={`h-full bg-[var(--accent-primary)] rounded-full transition-all duration-300 ${task.status === 'downloading' ? 'accent-glow relative overflow-hidden' : ''}`}
+                    style={{ width: `${String(progress.percent)}%` }}
+                  >
+                    {task.status === 'downloading' && <div className="absolute inset-0 bg-white/20 animate-pulse" />}
+                  </div>
+                )}
               </div>
-              <span className="text-[10px] text-[var(--text-secondary)] font-mono font-bold">{progressPercent}%</span>
+              <span className="text-[10px] text-[var(--text-secondary)] font-mono font-bold">
+                {progress.percentLabel}
+              </span>
             </div>
 
             <div className="mt-2.5 flex flex-wrap justify-between text-[10px] text-[var(--text-secondary)] font-mono">
               <span>
-                {t('table_size_label')} {formatBytes(task.sizeBytes)}
+                {t('table_size_label')}{' '}
+                {task.sizeBytes > 0
+                  ? formatBytes(task.sizeBytes)
+                  : task.downloadedBytes > 0 && task.status === 'downloading'
+                    ? `${formatBytes(task.downloadedBytes)}…`
+                    : '—'}
               </span>
               {task.status === 'downloading' && (
                 <span className="text-[var(--success)] font-bold">

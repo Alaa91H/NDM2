@@ -353,6 +353,13 @@ fn hex_pair_to_byte(high: u8, low: u8) -> Option<u8> {
 }
 
 pub(super) fn fallback_file_name(url: &str) -> String {
+    // Scripted download endpoints hide the real name in a query parameter
+    // (`/download.php?file=setup.exe`); the `.php` path segment would
+    // otherwise become the file name. Prefer the query hint when it names
+    // a recognizable file.
+    if let Some(name) = crate::daemon::utils::file_name_from_query(url) {
+        return name;
+    }
     let clean = url.split('?').next().unwrap_or(url).trim_end_matches('/');
     let name = clean.rsplit('/').next().unwrap_or("download").trim();
     if name.is_empty() {

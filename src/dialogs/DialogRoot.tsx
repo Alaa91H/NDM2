@@ -4,6 +4,7 @@ import { useDialogData, useDialogActions } from '../store/selectors';
 import { useTaskData } from '../store/selectors';
 import { useI18n } from '../store/selectors';
 import { Modal } from './Modal';
+import { taskProgressInfo } from '../utils/progressUtils';
 
 const AddDownloadDialog = lazy(() =>
   import('./download/AddDownloadDialog').then((m) => ({ default: m.AddDownloadDialog })),
@@ -85,11 +86,8 @@ export default function DialogRoot() {
         { id?: string; name?: string; sizeBytes?: number; downloadedBytes?: number } | undefined;
       const currentTask = tasks.find((t) => t.id === taskPayload?.id) || taskPayload;
       if (currentTask) {
-        const progressPercent =
-          currentTask.sizeBytes && currentTask.sizeBytes > 0
-            ? Math.round(((currentTask.downloadedBytes || 0) / currentTask.sizeBytes) * 100)
-            : 0;
-        title = `${String(progressPercent)}%-${currentTask.name || ''}`;
+        const progress = taskProgressInfo(currentTask);
+        title = `${progress.indeterminate ? '…' : `${String(progress.percent)}%`}-${currentTask.name || ''}`;
       } else {
         title = t('nav_properties');
       }

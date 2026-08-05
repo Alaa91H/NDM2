@@ -217,25 +217,158 @@ pub fn infer_file_type(name: &str) -> &'static str {
 /// Map a bare extension (lowercase, no dot) to a file category. Used by both
 /// `infer_file_type` and the browser-extension candidate mapper so that
 /// every code path produces the same classification.
+///
+/// This is the SINGLE source of truth for extension→category mapping. The
+/// recognition set (what counts as a "direct file link" at all) lives in
+/// `is_recognizable_download_extension`; every extension that maps to a real
+/// category here is automatically a recognized download file, while the
+/// categories that have no UI bucket (images, fonts, subtitles, libraries)
+/// map to `other` but are still recognized as direct files.
 pub fn file_type_from_extension(ext: &str) -> &'static str {
     match ext {
         // Archives
-        "zip" | "rar" | "7z" | "tar" | "gz" | "bz2" | "xz" | "zst" | "iso" | "cab" => "compressed",
-        // Programs / installers
-        "exe" | "msi" | "msix" | "apk" | "dmg" | "pkg" | "appimage" | "deb" | "rpm" | "bat"
-        | "sh" | "ps1" => "program",
-        // Documents
-        "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "txt" | "epub" | "mobi"
-        | "csv" | "rtf" => "document",
-        // Video
-        "mp4" | "mkv" | "avi" | "mov" | "flv" | "wmv" | "webm" | "ts" | "m2ts" | "m4v" | "mpg"
-        | "mpeg" | "3gp" => "video",
-        // Audio
-        "mp3" | "flac" | "wav" | "ogg" | "m4a" | "aac" | "wma" | "opus" | "aiff" | "alac" => {
-            "audio"
+        "zip" | "rar" | "7z" | "tar" | "gz" | "tgz" | "bz2" | "tbz2" | "xz" | "txz" | "zst"
+        | "lz" | "lzma" | "arj" | "lzh" | "cpio" | "iso" | "cab" | "nupkg" | "img" | "bin" => {
+            "compressed"
         }
+        // Programs / installers
+        "exe" | "msi" | "msix" | "appx" | "apk" | "ipa" | "dmg" | "pkg" | "appimage"
+        | "flatpak" | "snap" | "deb" | "rpm" | "run" | "bat" | "cmd" | "sh" | "ps1" | "py"
+        | "whl" | "egg" | "jar" | "war" | "xpi" | "crx" | "vsix" => "program",
+        // Documents
+        "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "odt" | "ods" | "odp"
+        | "rtf" | "txt" | "md" | "csv" | "tsv" | "json" | "xml" | "tex" | "log" | "yaml"
+        | "yml" | "epub" | "mobi" | "azw3" => "document",
+        // Video
+        "mp4" | "mkv" | "avi" | "mov" | "flv" | "wmv" | "webm" | "ts" | "m2ts" | "mts" | "m4v"
+        | "mpg" | "mpeg" | "3gp" | "ogv" | "rm" | "rmvb" | "vob" | "f4v" => "video",
+        // Audio
+        "mp3" | "flac" | "wav" | "ogg" | "m4a" | "aac" | "wma" | "opus" | "aiff" | "alac"
+        | "m4b" | "mid" | "midi" | "amr" | "ape" | "wv" | "ac3" | "dts" | "ra" | "mka" => "audio",
         _ => "other",
     }
+}
+
+/// True when the extension identifies a file the download engine can fetch
+/// directly (a real file rather than an HTML page or script endpoint).
+///
+/// This is the SINGLE source of truth for "does this link point at a file?"
+/// shared by the fast-path checker (`has_recognizable_extension` in
+/// routes/downloads.rs), the HTML interstitial link extractor
+/// (`extract_direct_download_links`), and query-string filename detection
+/// (`file_name_from_query`). Previously each caller maintained its own
+/// `matches!` list, so a `.png` link was accepted by the fast path but
+/// dropped by the link extractor depending on which list it landed in.
+/// Expects a lowercase, dot-less extension (`file_type_from_extension`
+/// convention).
+pub fn is_recognizable_download_extension(ext: &str) -> bool {
+    matches!(
+        ext,
+        // Executables & installers
+        "exe" | "msi" | "msix" | "appx" | "dmg" | "pkg" | "deb" | "rpm" | "apk" | "ipa"
+            | "appimage" | "flatpak" | "snap" | "run" | "sh" | "bat" | "cmd" | "ps1"
+            | "py" | "whl" | "egg" | "jar" | "war" | "xpi" | "crx" | "nupkg" | "vsix"
+        // Archives
+        | "zip" | "7z" | "rar" | "tar" | "gz" | "tgz" | "bz2" | "tbz2" | "xz" | "txz"
+            | "zst" | "lz" | "lzma" | "arj" | "lzh" | "cpio" | "cab" | "iso" | "img"
+            | "bin"
+        // Documents
+        | "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "odt" | "ods"
+            | "odp" | "rtf" | "txt" | "md" | "csv" | "tsv" | "json" | "xml" | "tex"
+            | "log" | "yaml" | "yml" | "epub" | "mobi" | "azw3"
+        // Media — video
+        | "mp4" | "mkv" | "avi" | "mov" | "flv" | "webm" | "wmv" | "m4v" | "mpg"
+            | "mpeg" | "3gp" | "ts" | "m2ts" | "mts" | "ogv" | "rm" | "rmvb" | "vob"
+            | "f4v"
+        // Media — audio
+        | "mp3" | "wav" | "flac" | "ogg" | "m4a" | "aac" | "wma" | "opus" | "aiff"
+            | "alac" | "m4b" | "mid" | "midi" | "amr" | "ape" | "wv" | "ac3" | "dts"
+            | "ra" | "mka"
+        // Media — images
+        | "jpg" | "jpeg" | "png" | "gif" | "webp" | "svg" | "bmp" | "tiff" | "tif"
+            | "heic" | "avif" | "ico" | "raw" | "psd" | "ai" | "eps" | "jxl"
+        // Fonts
+        | "ttf" | "otf" | "woff" | "woff2" | "eot"
+        // Subtitles / captions
+        | "srt" | "vtt" | "ass" | "ssa" | "sub"
+        // Libraries & data
+        | "dll" | "so" | "dylib" | "lib" | "a" | "o" | "dat" | "db" | "sqlite"
+            | "sqlite3" | "pem" | "crt" | "key" | "p12" | "pfx"
+        // Other downloadable
+        | "torrent"
+    )
+}
+
+/// Query-string parameter names that commonly carry the real file name on
+/// scripted download endpoints (`/download.php?file=setup.exe`,
+/// `/get?id=7&filename=report.pdf`). The value is a file name with an
+/// extension — unlike the path, which usually ends in `.php`/`.asp`.
+const QUERY_FILENAME_KEYS: &[&str] = &[
+    "file", "filename", "fname", "name", "fn", "dl", "download", "saveas", "path", "url",
+];
+
+/// Extract a file name from a URL's query string when a well-known filename
+/// parameter (`?file=setup.exe`, `?filename=report.pdf`) names a recognizable
+/// file. Returns `None` when no parameter names a file (page URLs, API
+/// endpoints). The value is percent-decoded and reduced to its final path
+/// segment so `?file=/dir/foo.zip` still works.
+pub fn file_name_from_query(url: &str) -> Option<String> {
+    let query = url.split('?').nth(1)?;
+    for pair in query.split('&') {
+        let Some((key, value)) = pair.split_once('=') else {
+            continue;
+        };
+        let key = key.trim().to_ascii_lowercase();
+        if !QUERY_FILENAME_KEYS.contains(&key.as_str()) {
+            continue;
+        }
+        let mut decoded = percent_decode(value);
+        // Strip any URL fragment (`?file=foo.zip#section`) — the fragment is
+        // page state, not part of the file name.
+        if let Some(idx) = decoded.find('#') {
+            decoded.truncate(idx);
+        }
+        // Reduce to the final path segment, honoring both `/` and `\` so an
+        // encoded or literal backslash cannot smuggle traversal-looking
+        // segments into the name (the caller sanitizes anyway, but the
+        // helper should not manufacture them).
+        let name = decoded.rsplit(['/', '\\']).next().unwrap_or(&decoded);
+        let name = name.trim().trim_matches('"').trim_matches('\'');
+        if name.is_empty() {
+            continue;
+        }
+        let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+        if is_recognizable_download_extension(&ext) {
+            return Some(name.to_owned());
+        }
+    }
+    None
+}
+
+/// Percent-decode a URL component (`%20` → space, `%2F` → `/`, `%C3%A9` → é)
+/// into UTF-8, replacing invalid sequences lossily. Shared by the query
+/// filename detector and the route-level `file_name_from_url`.
+pub fn percent_decode(input: &str) -> String {
+    if !input.contains('%') {
+        return input.to_owned();
+    }
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(byte) =
+                u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
+            {
+                out.push(byte);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).to_string()
 }
 
 #[inline]
@@ -761,8 +894,21 @@ pub fn extract_direct_download_links(html: &str, page_url: &str) -> Vec<String> 
                 .unwrap_or_else(|| refreshed_url(link, page_url))
         };
         let path = absolute.split(['?', '#']).next().unwrap_or(&absolute);
-        let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
-        if ext.is_empty() || file_type_from_extension(&ext) == "other" {
+        // SourceForge-style download anchors end in a trailing `/download`
+        // segment (`.../files/foo.zip/download?use_mirror=...`) that carries
+        // no extension of its own. The real file name — and its recognizable
+        // extension — precedes it, so strip the suffix before classification.
+        let file_path = path.strip_suffix("/download").unwrap_or(path);
+        let ext = file_path
+            .rsplit('.')
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        // Accept the link when the path ends in a recognizable extension OR a
+        // scripted endpoint query (`?file=setup.exe`) names one. Scripted
+        // download pages put the real file name in the query, never in the
+        // `.php`/`.asp` path.
+        if !is_recognizable_download_extension(&ext) && file_name_from_query(&absolute).is_none() {
             continue;
         }
         if !candidates.contains(&absolute) {
@@ -799,7 +945,20 @@ pub fn extract_direct_download_links(html: &str, page_url: &str) -> Vec<String> 
 
 fn score_link(url: &str, win: bool, mac: bool, linux: bool, x64: bool, arm64: bool) -> i64 {
     let u = url.to_ascii_lowercase();
-    let ext = u.rsplit('.').next().unwrap_or("").to_string();
+    // Mirror extract_direct_download_links: a trailing `/download` segment
+    // (SourceForge convention) carries no extension, so classify the segment
+    // before it for platform scoring.
+    let file_path = u.split(['?', '#']).next().unwrap_or(&u);
+    let file_path = file_path.strip_suffix("/download").unwrap_or(file_path);
+    let mut ext = file_path.rsplit('.').next().unwrap_or("").to_string();
+    // Scripted endpoints (`/download.php?file=setup.exe`) hide the real file
+    // name in the query — score by that extension instead of `.php`. The
+    // query name may preserve original case, so normalize before matching.
+    if !is_recognizable_download_extension(&ext) {
+        if let Some(name) = file_name_from_query(url) {
+            ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+        }
+    }
     let ext_win = matches!(
         ext.as_str(),
         "exe" | "msi" | "msix" | "bat" | "cmd" | "zip" | "7z" | "rar"
@@ -830,6 +989,28 @@ fn score_link(url: &str, win: bool, mac: bool, linux: bool, x64: bool, arm64: bo
         "exe" | "msi" | "msix" | "dmg" | "pkg" | "deb" | "rpm" | "appimage"
     ) {
         score += 2;
+    }
+    // Page furniture (logos, fonts, subtitle files, thumbnails) maps to
+    // category "other". On interstitial pages with no platform hints they
+    // would otherwise tie on score and win by DOM order, causing a `logo.png`
+    // to be downloaded as the "target file". Give the unambiguous payload
+    // categories — installers/archives (program, compressed), video, audio —
+    // a floor above "other" so a real file always outranks a stray image.
+    //
+    // Documents are deliberately EXCLUDED from the floor: a `.txt`/`.md`/`.csv`
+    // companion is as likely to be page furniture (README, license, notes) as
+    // the target, and on image/font/subtitle target pages (wallpapers, media
+    // grabbers) giving documents +3 would let the text companion outrank the
+    // actual `.jpg`/`.ttf` the user came for. Those pages resolve by DOM order
+    // (all score 0), which is correct for a media grabber. Known boundary: a
+    // PDF-manual page whose header logo.png precedes the PDF in DOM order can
+    // pick the logo on a score-0 tie — accepted in exchange for never letting
+    // a text companion outrank an image/font/subtitle target.
+    if matches!(
+        crate::daemon::utils::file_type_from_extension(&ext),
+        "program" | "compressed" | "video" | "audio"
+    ) {
+        score += 3;
     }
     if u.contains("setup") || u.contains("installer") || u.contains("install") {
         score += 2;
@@ -1278,6 +1459,227 @@ mod tests {
         assert_eq!(infer_file_type("Report.PDF"), "document");
         assert_eq!(infer_file_type("CLIP.MP4"), "video");
         assert_eq!(infer_file_type("SONG.MP3"), "audio");
+    }
+
+    // ── is_recognizable_download_extension ────────────────────────────────
+
+    #[test]
+    fn recognizable_extension_is_direct_file() {
+        for ext in [
+            "exe", "msi", "apk", "dmg", "deb", "rpm", "appimage", "zip", "7z", "rar", "tar", "gz",
+            "tgz", "xz", "pdf", "docx", "epub", "mp4", "mkv", "mp3", "flac", "jpg", "png", "gif",
+            "svg", "webp", "ttf", "woff2", "srt", "vtt", "dll", "so", "torrent", "nupkg", "vsix",
+            "ipa", "flatpak", "snap", "ps1", "whl", "jar", "sqlite3", "pem", "mobi", "azw3",
+            "m2ts", "opus", "aiff", "jxl", "heic", "db", "log", "yaml", "yml", "tex", "raw", "psd",
+            "p12", "pfx", "m4b", "ac3",
+        ] {
+            assert!(
+                is_recognizable_download_extension(ext),
+                "expected {ext:?} to be a recognizable download extension"
+            );
+        }
+    }
+
+    #[test]
+    fn every_category_mapped_extension_is_also_recognized() {
+        // Invariant: an extension that maps to a real category in
+        // file_type_from_extension MUST be recognized as a direct file by
+        // is_recognizable_download_extension. Keeps the two lists from
+        // drifting (a categorized-but-unrecognized extension would be
+        // classified in the UI yet skipped by the fast path and the
+        // interstitial extractor).
+        for ext in [
+            // compressed
+            "zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "tbz2", "xz", "txz", "zst", "lz", "lzma",
+            "arj", "lzh", "cpio", "iso", "cab", "nupkg", "img", "bin", // program
+            "exe", "msi", "msix", "appx", "apk", "ipa", "dmg", "pkg", "appimage", "flatpak",
+            "snap", "deb", "rpm", "run", "bat", "cmd", "sh", "ps1", "py", "whl", "egg", "jar",
+            "war", "xpi", "crx", "vsix", // document
+            "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp", "rtf", "txt",
+            "md", "csv", "tsv", "json", "xml", "tex", "log", "yaml", "yml", "epub", "mobi", "azw3",
+            // video
+            "mp4", "mkv", "avi", "mov", "flv", "wmv", "webm", "ts", "m2ts", "mts", "m4v", "mpg",
+            "mpeg", "3gp", "ogv", "rm", "rmvb", "vob", "f4v", // audio
+            "mp3", "flac", "wav", "ogg", "m4a", "aac", "wma", "opus", "aiff", "alac", "m4b", "mid",
+            "midi", "amr", "ape", "wv", "ac3", "dts", "ra", "mka",
+        ] {
+            assert!(
+                is_recognizable_download_extension(ext),
+                "category-mapped extension {ext:?} must also be recognized"
+            );
+        }
+    }
+
+    #[test]
+    fn non_file_extensions_not_recognized() {
+        for ext in [
+            "html", "htm", "php", "asp", "aspx", "jsp", "cgi", "css", "js", "tsx", "rs", "toml",
+            "json5", "", "download",
+        ] {
+            assert!(
+                !is_recognizable_download_extension(ext),
+                "expected {ext:?} to NOT be a recognizable download extension"
+            );
+        }
+    }
+
+    // ── file_name_from_query ──────────────────────────────────────────────
+
+    #[test]
+    fn query_filename_case_insensitive_and_fragment_stripped() {
+        // Uppercase extensions in query values must still match (the helper
+        // lowercases before the recognizer check), and a URL fragment after
+        // the value must not leak into the extension.
+        assert_eq!(
+            file_name_from_query("https://cdn.example.com/dl?file=SETUP.EXE"),
+            Some("SETUP.EXE".to_owned())
+        );
+        assert_eq!(
+            file_name_from_query("https://cdn.example.com/dl?file=Report.Pdf&x=1"),
+            Some("Report.Pdf".to_owned())
+        );
+        assert_eq!(
+            file_name_from_query("https://cdn.example.com/dl?file=foo.zip#section"),
+            Some("foo.zip".to_owned())
+        );
+        // Backslash paths are reduced to the final segment too.
+        assert_eq!(
+            file_name_from_query("https://cdn.example.com/dl?file=%2F..%2F..%2Fevil.exe"),
+            Some("evil.exe".to_owned())
+        );
+    }
+
+    #[test]
+    fn query_filename_recognized() {
+        assert_eq!(
+            file_name_from_query("https://cdn.example.com/download.php?file=setup.exe&id=7"),
+            Some("setup.exe".to_owned())
+        );
+        assert_eq!(
+            file_name_from_query("https://cdn.example.com/get?id=7&filename=report%20final.pdf"),
+            Some("report final.pdf".to_owned())
+        );
+        assert_eq!(
+            file_name_from_query("https://cdn.example.com/dl?fname=archive.tar.gz"),
+            Some("archive.tar.gz".to_owned())
+        );
+        assert_eq!(
+            file_name_from_query("https://cdn.example.com/download?file=%2Fdir%2Fmovie.mkv"),
+            Some("movie.mkv".to_owned())
+        );
+    }
+
+    #[test]
+    fn query_filename_ignored_when_not_a_file() {
+        // Page-style params, missing values, and non-file extensions must not
+        // produce a download name.
+        assert_eq!(
+            file_name_from_query("https://site.example.com/page?article=hello&lang=en"),
+            None
+        );
+        assert_eq!(file_name_from_query("https://site.example.com/page"), None);
+        assert_eq!(
+            file_name_from_query("https://site.example.com/download?file=index.html"),
+            None
+        );
+        assert_eq!(
+            file_name_from_query("https://site.example.com/download?file="),
+            None
+        );
+        assert_eq!(
+            file_name_from_query("https://site.example.com/download?file=setup"),
+            None
+        );
+        // A non-filename key with a file value is not a download hint.
+        assert_eq!(
+            file_name_from_query("https://site.example.com/dl?page=setup.exe"),
+            None
+        );
+    }
+
+    // ── extract_direct_download_links query-param & extra-extension support ──
+
+    #[test]
+    fn extractor_finds_scripted_query_param_links() {
+        // A scripted download endpoint whose path ends in .php but whose query
+        // names a real file must be treated as a direct-download candidate.
+        let html = r#"<html><body>
+            <a href="/download.php?file=app_setup.exe&t=1">Download</a>
+        </body></html>"#;
+        let links = extract_direct_download_links(html, "https://site.example.com/thanks");
+        assert_eq!(links.len(), 1);
+        assert_eq!(
+            links[0],
+            "https://site.example.com/download.php?file=app_setup.exe&t=1"
+        );
+    }
+
+    #[test]
+    fn extractor_finds_new_extension_classes() {
+        // Image/font/subtitle/data extensions were previously filtered out
+        // because they mapped to category "other"; they must now be followed.
+        let html = r#"<html><body>
+            <a href="/files/cover.jpg">cover</a>
+            <a href="/files/font.ttf">font</a>
+            <a href="/files/sub.srt">subs</a>
+            <a href="/files/backup.db">db</a>
+        </body></html>"#;
+        let links = extract_direct_download_links(html, "https://site.example.com/files");
+        assert_eq!(links.len(), 4);
+        assert!(links.contains(&"https://site.example.com/files/cover.jpg".to_owned()));
+        assert!(links.contains(&"https://site.example.com/files/font.ttf".to_owned()));
+        assert!(links.contains(&"https://site.example.com/files/sub.srt".to_owned()));
+        assert!(links.contains(&"https://site.example.com/files/backup.db".to_owned()));
+    }
+
+    #[test]
+    fn extractor_skips_page_links_without_file_hints() {
+        let html = r#"<html><body>
+            <a href="/news/article">article</a>
+            <a href="/page.php?id=4">script</a>
+            <a href="/index.html">home</a>
+        </body></html>"#;
+        let links = extract_direct_download_links(html, "https://site.example.com/");
+        assert!(links.is_empty());
+    }
+
+    #[test]
+    fn extractor_ranking_installer_outranks_page_furniture() {
+        // Software interstitial: the real installer (program category) must
+        // outrank a stray logo.png — the category floor exists for this.
+        let html = r#"<html><body>
+            <a href="https://site.example.com/logo.png">logo</a>
+            <a href="https://site.example.com/app-setup.exe">Download</a>
+        </body></html>"#;
+        let links = extract_direct_download_links(html, "https://site.example.com/thanks");
+        assert_eq!(links[0], "https://site.example.com/app-setup.exe");
+    }
+
+    #[test]
+    fn extractor_ranking_image_target_beats_document_companion() {
+        // Media page: the target is an image (other category). A document
+        // companion (readme.txt) must NOT outrank the actual .jpg — documents
+        // are excluded from the +3 category floor so DOM order (image first)
+        // decides, which is correct for a media grabber.
+        let html = r#"<html><body>
+            <a href="https://site.example.com/wallpaper.jpg">wallpaper</a>
+            <a href="https://site.example.com/readme.txt">readme</a>
+        </body></html>"#;
+        let links = extract_direct_download_links(html, "https://site.example.com/gallery");
+        assert_eq!(links[0], "https://site.example.com/wallpaper.jpg");
+    }
+
+    #[test]
+    fn extractor_ranking_video_target_beats_logo_and_document() {
+        // Video page: the .mp4 (video category, +3 floor) outranks both a
+        // logo.png and a description.txt companion regardless of DOM order.
+        let html = r#"<html><body>
+            <a href="https://site.example.com/logo.png">logo</a>
+            <a href="https://site.example.com/description.txt">desc</a>
+            <a href="https://site.example.com/clip.mp4">video</a>
+        </body></html>"#;
+        let links = extract_direct_download_links(html, "https://site.example.com/watch");
+        assert_eq!(links[0], "https://site.example.com/clip.mp4");
     }
 
     // ── build_segments ────────────────────────────────────────────────────
@@ -1768,5 +2170,83 @@ mod tests {
             "mac dmg outranked linux files: {:?}",
             links
         );
+    }
+
+    #[test]
+    fn direct_links_sourceforge_download_suffix_recognized() {
+        // SourceForge-style anchors end in a trailing `/download` segment with
+        // no extension of its own; the real file name precedes it. These must
+        // be extracted (and ranked) instead of filtered out as "other".
+        let html = r#"<html>
+            <a href="https://sourceforge.net/projects/demo/files/setup/1.0/demo_1.0_win64.exe/download?use_mirror=autoselect">Direct link</a>
+            <a href="/projects/demo/files/setup/1.0/demo_1.0_mac.dmg/download">mac</a>
+            <a href="https://sourceforge.net/projects/demo">project home</a>
+        </html>"#;
+        let links = extract_direct_download_links(
+            html,
+            "https://sourceforge.net/projects/demo/files/setup/1.0/?target=win-x64",
+        );
+        // The win64 exe (with query string intact) must be extracted first.
+        assert!(
+            links
+                .first()
+                .is_some_and(|l| l.contains("demo_1.0_win64.exe/download")),
+            "expected sourceforge /download exe first, got {:?}",
+            links
+        );
+        // The mac dmg is present but outranked; the project home page is not a
+        // file and must be excluded entirely.
+        assert!(
+            links.iter().any(|l| l.contains("_mac.dmg")),
+            "mac dmg should be present: {:?}",
+            links
+        );
+        assert!(
+            !links
+                .iter()
+                .any(|l| l == "https://sourceforge.net/projects/demo"),
+            "project home leaked into candidates: {:?}",
+            links
+        );
+    }
+
+    #[test]
+    fn direct_links_github_release_host_rooted_anchors() {
+        // GitHub release pages use host-rooted relative anchors
+        // (`/owner/repo/releases/download/...`). They must resolve against the
+        // page host and be extracted with the real file name.
+        let html = r#"<html>
+            <a href="/owner/repo/releases/download/v1.2.3/app-1.2.3-win-x64.exe">exe</a>
+            <a href="/owner/repo/releases/download/v1.2.3/app-1.2.3-mac.dmg">dmg</a>
+            <a href="/owner/repo/releases/tag/v1.2.3">release notes</a>
+        </html>"#;
+        let links = extract_direct_download_links(
+            html,
+            "https://github.com/owner/repo/releases/tag/v1.2.3",
+        );
+        assert!(
+            links.first().is_some_and(|l| l
+                == "https://github.com/owner/repo/releases/download/v1.2.3/app-1.2.3-win-x64.exe"),
+            "expected host-rooted win exe resolved first, got {:?}",
+            links
+        );
+        assert!(
+            links
+                .iter()
+                .any(|l| l.ends_with("/releases/download/v1.2.3/app-1.2.3-mac.dmg")),
+            "dmg missing: {:?}",
+            links
+        );
+    }
+
+    #[test]
+    fn direct_links_trailing_download_without_extension_still_skipped() {
+        // A bare `/download` anchor with no file name (e.g. SourceForge's
+        // generic "latest" button) has no recognizable extension and must be
+        // skipped even after the suffix is stripped.
+        let html =
+            r#"<a href="https://sourceforge.net/projects/demo/files/latest/download">latest</a>"#;
+        let links = extract_direct_download_links(html, "https://sourceforge.net/projects/demo/");
+        assert!(links.is_empty(), "expected no candidates, got {:?}", links);
     }
 }

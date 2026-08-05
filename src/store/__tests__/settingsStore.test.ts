@@ -32,11 +32,11 @@ describe('mergeStoredSettings', () => {
 
   it('preserves existing values when merging', () => {
     const partial: Partial<AppSettings> = {
-      general: { ...initialSettings.general, runOnStartup: true },
+      general: { ...initialSettings.general, monitorClipboard: true },
       saveAndCategories: { ...initialSettings.saveAndCategories, defaultFolder: '/custom/path' },
     };
     const merged = mergeStoredSettings(partial);
-    expect(merged.general.runOnStartup).toBe(true);
+    expect(merged.general.monitorClipboard).toBe(true);
     expect(merged.saveAndCategories.defaultFolder).toBe('/custom/path');
   });
 
@@ -96,9 +96,9 @@ describe('settingsStore', () => {
   });
 
   it('_setSettings replaces settings wholesale', () => {
-    const newSettings = { ...initialSettings, general: { ...initialSettings.general, runOnStartup: true } };
+    const newSettings = { ...initialSettings, general: { ...initialSettings.general, monitorClipboard: true } };
     settingsStore.getState()._setSettings(newSettings);
-    expect(settingsStore.getState().settings.general.runOnStartup).toBe(true);
+    expect(settingsStore.getState().settings.general.monitorClipboard).toBe(true);
   });
 
   it('_setThemeSettings replaces theme wholesale', () => {

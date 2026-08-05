@@ -357,6 +357,39 @@ footer .truncate {
   border-radius: 20px !important;
 }
 
+/* ── Indeterminate progress bar ──────────────────────────────────────────
+   Shown while a download is actively transferring but the total size is
+   still unknown (no Content-Length yet, chunked/streaming response, or a
+   preflight that has not reported a size). A sliding highlight communicates
+   activity instead of a misleading static 0% — the bar switches to a real
+   percentage the moment the engine reports the size. */
+.progress-indeterminate-bar {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+}
+.progress-indeterminate-bar::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.45),
+    transparent
+  );
+  animation: progress-indeterminate-slide 1.15s ease-in-out infinite;
+}
+@keyframes progress-indeterminate-slide {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(350%);
+  }
+}
+
 /* Override standard utility classes to be beautifully curved */
 .rounded,
 .rounded-md {

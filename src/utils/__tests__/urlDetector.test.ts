@@ -280,6 +280,22 @@ describe('detectUrlType', () => {
     });
   });
 
+  describe('HLS / DASH stream manifests', () => {
+    it('detects manifest URLs as media regardless of host', () => {
+      expect(detectUrlType('https://cdn.example.com/hls/master.m3u8')).toBe('media');
+      expect(detectUrlType('https://cdn.example.com/stream/master.m3u8?token=abc')).toBe('media');
+      expect(detectUrlType('https://cdn.example.com/dash/manifest.mpd')).toBe('media');
+      expect(detectUrlType('https://cdn.example.com/out/v1/abc/manifest.mpd')).toBe('media');
+      expect(detectUrlType('https://cdn.example.com/hls/index.m3u8#frag')).toBe('media');
+    });
+
+    it('keeps regular file downloads as download', () => {
+      expect(detectUrlType('https://cdn.example.com/music.mp3')).toBe('download');
+      expect(detectUrlType('https://cdn.example.com/video.mp4')).toBe('download');
+      expect(detectUrlType('https://cdn.example.com/m3u8_demo.txt')).toBe('download');
+    });
+  });
+
   describe('Download URLs (non-media)', () => {
     it('detects direct download URLs', () => {
       expect(detectUrlType('https://example.com/file.zip')).toBe('download');

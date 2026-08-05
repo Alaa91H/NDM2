@@ -258,22 +258,6 @@ export const DownloadSettings: React.FC<Props> = ({
               { value: 'resume', label: t('settings_duplicate_resume') },
             ]}
           />
-          <div className="flex flex-col gap-2 pt-2">
-            <Checkbox
-              label={t('settings_verify_ranges')}
-              checked={settings.extra.checkRanges}
-              onChange={(v) => {
-                updateSetting('extra', 'checkRanges', v);
-              }}
-            />
-            <Checkbox
-              label={t('settings_warn_duplicate')}
-              checked={settings.extra.warnOnDuplicate}
-              onChange={(v) => {
-                updateSetting('extra', 'warnOnDuplicate', v);
-              }}
-            />
-          </div>
         </div>
 
         <div className="bg-[var(--bg-hover)]/30 p-3.5 rounded-lg border border-[var(--border-color)] space-y-3">

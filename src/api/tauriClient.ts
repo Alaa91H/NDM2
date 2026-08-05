@@ -97,9 +97,13 @@ export async function getDaemonToken(): Promise<string> {
     const token = (await invoke('get_daemon_token')) as string;
     if (token && typeof token === 'string') return token;
   } catch {
-    // Not running in Tauri (e.g. browser dev): no token to attach.
+    // Not running in Tauri (e.g. browser dev): fall back to the Vite env
+    // override so a separately-started daemon can be authenticated. Without
+    // this, refreshDaemonUrl() would overwrite the env token with an empty
+    // string and every API call would 401.
   }
-  return '';
+  const devToken = import.meta.env.VITE_NOVA_API_TOKEN;
+  return devToken || '';
 }
 
 export const tauriClient = {
