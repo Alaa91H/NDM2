@@ -313,7 +313,14 @@ async function main() {
   const enableCompression = featureProfile !== 'minimal' && process.env.NOVA_CURL_ENABLE_COMPRESSION !== '0';
   const enableHttp2 = featureProfile !== 'minimal' && process.env.NOVA_CURL_ENABLE_HTTP2 !== '0';
   const enableHttp3 = process.env.NOVA_CURL_ENABLE_HTTP3 === '1' || featureProfile === 'maximum-experimental';
-  const enableSsh = featureProfile !== 'minimal' && process.env.NOVA_CURL_ENABLE_SSH !== '0';
+  // SFTP/SCP (libssh2) is only linkable when the TLS backend provides OpenSSL
+  // symbols. Windows builds use Schannel (-DCURL_USE_OPENSSL=OFF), but vcpkg's
+  // libssh2 port links against OpenSSL, so its EVP_* symbols stay unresolved
+  // and the final link fails (LNK2019 x97 on the curl.exe target). The daemon
+  // never uses SFTP/SCP (non-http(s) schemes are rejected at the SSRF layer),
+  // and fetch-engines.mjs already always passes -DCURL_USE_LIBSSH2=OFF — so
+  // disable libssh2 on Windows here too, mirroring that behavior.
+  const enableSsh = process.platform !== 'win32' && featureProfile !== 'minimal' && process.env.NOVA_CURL_ENABLE_SSH !== '0';
 
   const cmakeOptions = [
     '-S', sourceDir,
