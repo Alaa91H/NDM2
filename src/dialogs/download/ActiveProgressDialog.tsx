@@ -209,13 +209,15 @@ export const ActiveProgressDialog: React.FC<{ taskId?: string }> = ({ taskId }) 
   const [hoveredCardId, setHoveredCardId] = useState<number | null>(null);
   const activeHoverId = hoveredCellId ?? hoveredCardId;
   const segmentGridRef = useRef<HTMLDivElement | null>(null);
-  const handleCardHover = useCallback((id: number | null) => setHoveredCardId(id), []);
+  const handleCardHover = useCallback((id: number | null) => {
+    setHoveredCardId(id);
+  }, []);
   // Keep the highlighted card visible inside the scrollable grid.
   useEffect(() => {
     if (activeHoverId == null || !segmentGridRef.current) return;
     segmentGridRef.current
       .querySelector(`[data-testid="segment-card-${String(activeHoverId)}"]`)
-      ?.scrollIntoView?.({ block: 'nearest' });
+      ?.scrollIntoView({ block: 'nearest' });
   }, [activeHoverId]);
   const speedLimitEnabled = settings.connection.speedLimiter.enabled;
   const speedLimitValue = settings.connection.speedLimiter.maxSpeedKbs;
@@ -328,9 +330,11 @@ export const ActiveProgressDialog: React.FC<{ taskId?: string }> = ({ taskId }) 
           <div
             data-testid="seg-bar"
             className="w-full h-4 bg-[var(--bg-input)] border border-[var(--border-color)] flex rounded-md overflow-hidden select-none shadow-inner"
-            onMouseLeave={() => setHoveredCellId(null)}
+            onMouseLeave={() => {
+              setHoveredCellId(null);
+            }}
           >
-            {task.segments.map((seg, segIdx) => {
+            {task.segments.map((seg) => {
               const segPercent = Math.round(seg.progress * 100);
               return (
                 <div
@@ -346,7 +350,9 @@ export const ActiveProgressDialog: React.FC<{ taskId?: string }> = ({ taskId }) 
                   // bar container level so the tooltip glides between adjacent
                   // cells instead of unmounting mid-flight.
                   aria-describedby={hoveredCellId === seg.id ? 'seg-tooltip' : undefined}
-                  onMouseEnter={() => setHoveredCellId(seg.id)}
+                  onMouseEnter={() => {
+                    setHoveredCellId(seg.id);
+                  }}
                 >
                   {/* Always-mounted fill so each segment glides from 0% smoothly;
                       colours come from the same shared tone map as the cards. */}

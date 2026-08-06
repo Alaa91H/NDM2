@@ -100,7 +100,7 @@ export function ProgressHeadBadge({
         active ? 'animate-pulse' : ''
       }`}
       style={{
-        left: `clamp(${PROGRESS_HEAD_HALF_WIDTH}px, ${percent}%, calc(100% - ${PROGRESS_HEAD_HALF_WIDTH}px))`,
+        left: `clamp(${String(PROGRESS_HEAD_HALF_WIDTH)}px, ${String(percent)}%, calc(100% - ${String(PROGRESS_HEAD_HALF_WIDTH)}px))`,
       }}
     >
       <span className="text-[8px] font-mono font-bold text-[var(--accent-primary)]">{label}</span>
@@ -180,7 +180,7 @@ export function TaskProgressBar({
             className={`absolute left-0 top-0 bottom-0 progress-fill rounded-full ${progressToneFillClass[tone]} transition-all duration-300 ${
               active ? 'accent-glow' : ''
             }`}
-            style={{ width: `${indeterminate ? 0 : percent}%` }}
+            style={{ width: `${String(indeterminate ? 0 : percent)}%` }}
           >
             {active && <div className="absolute inset-0 bg-white/20 animate-pulse rounded-full" />}
           </div>

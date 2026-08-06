@@ -68,7 +68,9 @@ describe('DetachedProgressWindow — unified live progress', () => {
     expect(screen.getByText('…')).toBeInTheDocument();
     expect(screen.getByTestId('progress-sweep').className).toContain('opacity-100');
     // OS window title carries the indeterminate marker.
-    await waitFor(() => expect(setTitle).toHaveBeenCalledWith('… — file.bin'));
+    await waitFor(() => {
+      expect(setTitle).toHaveBeenCalledWith('… — file.bin');
+    });
   });
 
   it('reflects a discovered size as a real percentage in the title bar and OS title', async () => {
@@ -79,12 +81,16 @@ describe('DetachedProgressWindow — unified live progress', () => {
     const fill = screen.getByTestId('progress-fill');
     expect(fill).toHaveStyle({ width: '50%' });
     expect(screen.getByTestId('progress-sweep').className).toContain('opacity-0');
-    await waitFor(() => expect(setTitle).toHaveBeenCalledWith('50% — file.bin'));
+    await waitFor(() => {
+      expect(setTitle).toHaveBeenCalledWith('50% — file.bin');
+    });
   });
 
   it('falls back to the app name in the OS title when no task matches', async () => {
     render(<DetachedProgressWindow taskId="missing" />);
     expect(screen.queryByText('…')).not.toBeInTheDocument();
-    await waitFor(() => expect(setTitle).toHaveBeenCalledWith('NOVA Download Manager'));
+    await waitFor(() => {
+      expect(setTitle).toHaveBeenCalledWith('NOVA Download Manager');
+    });
   });
 });
