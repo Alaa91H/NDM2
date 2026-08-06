@@ -47,6 +47,12 @@ unicode-normalization = "0.1"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
 
+[dev-dependencies]
+# Used only by tests to generate a real gzip stream for the
+# Content-Encoding regression tests (libcurl decompresses it transparently,
+# exercising the "disk bytes > declared Content-Length" progress path).
+flate2 = "1"
+
 [profile.release]
 lto = "fat"
 codegen-units = 1

@@ -2689,6 +2689,7 @@ dependencies = [
  "chrono",
  "curl",
  "curl-sys",
+ "flate2",
  "flexi_logger",
  "futures-core",
  "log",

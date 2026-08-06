@@ -65,4 +65,34 @@ describe('taskProgressInfo', () => {
   it('rounds percentages to integers', () => {
     expect(taskProgressInfo({ sizeBytes: 3, downloadedBytes: 1, status: 'downloading' }).percent).toBe(33);
   });
+
+  it('never reports a decreasing percentage across the unknown → known size transition', () => {
+    // Simulated SSE stream: the engine starts the task with sizeBytes 0
+    // (indeterminate bar), then discovers the size from the response headers
+    // while downloadedBytes keeps growing. The displayed percentage must be
+    // monotonic non-decreasing across the whole handoff — the engine freezes
+    // sizeBytes once known, so the UI can never jump backward.
+    const snapshots = [
+      // Unknown size, still transferring: indeterminate bar.
+      { sizeBytes: 0, downloadedBytes: 0, status: 'downloading' },
+      { sizeBytes: 0, downloadedBytes: 512 * 1024, status: 'downloading' },
+      // Headers arrive: size discovered (8 MiB), 1 MiB already on disk.
+      { sizeBytes: 8 * 1024 * 1024, downloadedBytes: 1 * 1024 * 1024, status: 'downloading' },
+      { sizeBytes: 8 * 1024 * 1024, downloadedBytes: 4 * 1024 * 1024, status: 'downloading' },
+      { sizeBytes: 8 * 1024 * 1024, downloadedBytes: 8 * 1024 * 1024, status: 'completed' },
+    ];
+    let lastPercent = 0;
+    let sawIndeterminate = false;
+    for (const snapshot of snapshots) {
+      const info = taskProgressInfo(snapshot);
+      if (info.indeterminate) {
+        sawIndeterminate = true;
+        continue;
+      }
+      expect(info.percent).toBeGreaterThanOrEqual(lastPercent);
+      lastPercent = info.percent;
+    }
+    expect(sawIndeterminate).toBe(true);
+    expect(lastPercent).toBe(100);
+  });
 });

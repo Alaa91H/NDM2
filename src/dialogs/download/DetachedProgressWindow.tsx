@@ -6,6 +6,8 @@ import { Minus, X } from 'lucide-react';
 import { logger } from '../../utils/logger';
 import { useTaskData, useBridgeData, useI18n } from '../../store/selectors';
 import { Logo } from '../../components/Logo';
+import { taskProgressInfo } from '../../utils/progressUtils';
+import { TaskProgressBar } from '../../components/primitives/TaskProgressBar';
 
 const ActiveProgressDialog = lazy(() =>
   import('./ActiveProgressDialog').then((m) => ({ default: m.ActiveProgressDialog })),
@@ -22,6 +24,10 @@ export const DetachedProgressWindow: React.FC<{ taskId: string }> = ({ taskId })
   const bridge = useBridgeData();
   const t = useI18n();
   const task = tasks.find((tt) => tt.id === taskId);
+  // Live progress for the bound task — same single helper used by every other
+  // renderer, so the title bar shows the same honest indeterminate→percent
+  // behaviour as the bars inside the dialog.
+  const progress = taskProgressInfo(task);
 
   const minimize = () => {
     if (isTauri())
@@ -40,16 +46,19 @@ export const DetachedProgressWindow: React.FC<{ taskId: string }> = ({ taskId })
         });
   };
 
-  // Keep the OS window title in sync with the file being downloaded.
+  // Keep the OS window title in sync with the file being downloaded; include
+  // the live percentage so the taskbar/title can be read at a glance.
   useEffect(() => {
     if (!isTauri()) return;
-    const title = task ? `${task.name} — ${t('app_name')}` : t('app_name');
+    const title = task
+      ? `${progress.indeterminate ? '…' : `${String(progress.percent)}%`} — ${task.name}`
+      : t('app_name');
     void getCurrentWindow()
       .setTitle(title)
       .catch((e: unknown) => {
         logger.warn('DetachedProgressWindow', 'setTitle failed', e);
       });
-  }, [task, t]);
+  }, [task, progress.indeterminate, progress.percent, t]);
 
   return (
     <div
@@ -67,6 +76,23 @@ export const DetachedProgressWindow: React.FC<{ taskId: string }> = ({ taskId })
           <span className="text-[11px] font-bold text-[var(--text-primary)] truncate">
             {task ? task.name : t('app_name')}
           </span>
+          {task && (
+            <>
+              <span className="text-[10px] font-mono font-bold text-[var(--accent-primary)] shrink-0">
+                {progress.percentLabel}
+              </span>
+              {/* Compact live bar — same cross-fade component as every surface. */}
+              <div className="w-20 shrink-0" data-tauri-drag-region>
+                <TaskProgressBar
+                  progress={progress}
+                  active={task.status === 'downloading'}
+                  trackClass="h-1"
+                  showLabel={false}
+                  ariaLabel={task.name}
+                />
+              </div>
+            </>
+          )}
         </div>
         <div className="flex items-center h-full">
           <button

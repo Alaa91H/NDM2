@@ -720,6 +720,44 @@ fn validate_transfer_size(
     .validate_size(actual)
 }
 
+/// Decide the effective total size to report for the next progress tick.
+///
+/// This is the single source of truth for the size the UI progress bar
+/// shows, and it enforces the monotonicity contract that makes the
+/// "unknown size (indeterminate bar) → known size (percentage)" transition
+/// smooth with no backward jump:
+///
+/// * Content-encoded responses (gzip/br/deflate) always report 0 — this
+///   branch overrides everything else, even a size the preflight already
+///   seeded: libcurl decompresses the body before writing it to disk, so
+///   the wire Content-Length describes the COMPRESSED size and showing it
+///   as the total would let downloaded_bytes outrun size_bytes (progress
+///   over 100%). Indeterminate is the honest choice for such transfers.
+/// * Otherwise the total transitions 0 → known exactly once, from the
+///   response headers' Content-Length / Content-Range. In practice headers
+///   arrive before any body bytes are written, so the transition happens
+///   while downloaded is still ~0 and the percentage simply starts climbing
+///   from a low value.
+/// * Outside the content-encoded case, once a size is known it is FROZEN
+///   for the rest of the transfer: never replaced by a smaller value (a
+///   shrink would drop the percentage) and never "corrected" to a larger
+///   one either (a grow would also make downloaded / size jump backward).
+///   The completion path reconciles the exact on-disk size at the end,
+///   together with downloaded_bytes, so the final snapshot always lands on
+///   100%.
+fn next_progress_total(current: u64, discovered: Option<u64>, content_encoded: bool) -> u64 {
+    if content_encoded {
+        return 0;
+    }
+    if current > 0 {
+        return current;
+    }
+    match discovered {
+        Some(d) if d > 0 => d,
+        _ => 0,
+    }
+}
+
 fn run_single_libcurl(
     state: &SharedState,
     id: &str,
@@ -830,6 +868,7 @@ fn run_single_libcurl(
         capture: capture.clone(),
         streaming_digest_out: streaming_digest_out.clone(),
         range_rejected: Arc::new(AtomicBool::new(false)),
+        encoding_rejected: Arc::new(AtomicBool::new(false)),
         expects_206: false,
     };
     let task_limit = state.bandwidth_manager.allowed_speed_for_task(id);
@@ -928,17 +967,29 @@ fn run_single_libcurl(
         let speed_u64 = speed as u64;
         state.bandwidth_manager.report_speed(id, speed_u64);
 
-        if effective_total == 0 {
-            if let Ok(cap) = capture.lock() {
-                if !cap.content_encoded {
-                    if let Some(discovered) = cap.content_length {
-                        effective_total = discovered;
-                        log::info!(
-                            "Task {id}: discovered total size from response headers: {discovered} bytes"
-                        );
-                    }
-                }
-            }
+        // A response with a real Content-Encoding (gzip/br/deflate) is
+        // decompressed by libcurl before it is written to disk, so the probed
+        // Content-Length describes the COMPRESSED wire size, not the file on
+        // disk. Using it as the total would let downloaded_bytes outrun
+        // size_bytes (a progress bar over 100%). Report an unknown size
+        // (indeterminate bar) until completion records the real on-disk size.
+        //
+        // Otherwise learn the real size from the response headers as soon as
+        // they arrive. next_progress_total enforces monotonicity so the size
+        // reported to the UI can never jump backward (see its docs).
+        let (content_encoded, discovered) = {
+            let cap = capture.lock().ok();
+            (
+                cap.as_ref().is_some_and(|c| c.content_encoded),
+                cap.as_ref().and_then(|c| c.content_length),
+            )
+        };
+        let new_total = next_progress_total(effective_total, discovered, content_encoded);
+        if new_total != effective_total {
+            log::info!(
+                "Task {id}: progress total {effective_total} -> {new_total} bytes (learned from response headers)"
+            );
+            effective_total = new_total;
         }
 
         // Blocking lock: a try_lock spin would delay progress ticks and the
@@ -955,6 +1006,10 @@ fn run_single_libcurl(
                 // stored instead of resetting the UI back to 0%.
                 job.task.size_bytes = if effective_total > 0 {
                     effective_total
+                } else if content_encoded {
+                    // Compressed transfer: the declared size is the wire size,
+                    // not the file on disk — unknown until completion.
+                    0
                 } else {
                     job.task.size_bytes
                 };
@@ -1324,6 +1379,11 @@ fn run_segmented_libcurl(
     // C-2: shared flag — when any segment's header callback sees a 200 in
     // answer to a partial-range request, every segment stops writing.
     let range_rejected = Arc::new(AtomicBool::new(false));
+    // C-5: shared flag — when any segment's header callback sees a real
+    // Content-Encoding (gzip/br/deflate) on a byte-range response, every
+    // segment stops writing so the corrupted (offset-shifted) parts are never
+    // merged; the attempt then falls back to a single connection.
+    let encoding_rejected = Arc::new(AtomicBool::new(false));
     let per_segment_limit_bps = if task_limit > 0 {
         Some((task_limit * 1024) / u64::from(effective_connections.max(1)))
     } else {
@@ -1425,6 +1485,7 @@ fn run_segmented_libcurl(
                 capture: seg_capture,
                 streaming_digest_out: streaming_digest_out.clone(),
                 range_rejected: range_rejected.clone(),
+                encoding_rejected: encoding_rejected.clone(),
                 expects_206: start > 0 || ranges.len() > 1,
             },
             Some((start, range.end)),
@@ -1793,6 +1854,7 @@ fn run_segmented_libcurl(
                     capture: seg_capture,
                     streaming_digest_out: streaming_digest_out.clone(),
                     range_rejected: range_rejected.clone(),
+                    encoding_rejected: encoding_rejected.clone(),
                     expects_206: start + trusted > 0 || new_geometry_len > 1,
                 },
                 Some((start + trusted, end)),
@@ -1830,6 +1892,22 @@ fn run_segmented_libcurl(
             "Server returned 200 OK instead of 206 Partial Content to a byte-range request; \
              the server does not honor range requests. Retry with a single connection or \
              disable segmented mode."
+                .to_owned(),
+        );
+    }
+    // C-5: at least one segment received a byte-range response with a real
+    // Content-Encoding, so every segment stopped writing via the shared
+    // encoding_rejected flag. Each segment would have decompressed an
+    // independent compressed stream, breaking the byte offsets the merge
+    // relies on — fail fast and let the retry loop fall back to a single
+    // connection (which handles Content-Encoding correctly).
+    if encoding_rejected.load(Ordering::Acquire) {
+        for r in active_cell.borrow().iter() {
+            let _ = std::fs::remove_file(&r.0.path);
+        }
+        return Err(
+            "Server applied Content-Encoding to byte-range responses; segmented download \
+             would corrupt the output. Retrying with a single connection."
                 .to_owned(),
         );
     }
@@ -2523,7 +2601,12 @@ pub fn mark_curl_task_finished(state: &SharedState, id: &str, final_size: u64, g
         }
         job.task.status = "completed".to_owned();
         job.task.downloaded_bytes = final_size;
-        if job.task.size_bytes == 0 {
+        // A Content-Encoding transfer (gzip/br/deflate) decompresses the body
+        // before writing it, so the real on-disk size may differ from the
+        // probed Content-Length (which describes the compressed wire size).
+        // Reconcile size_bytes to the ACTUAL file size so the completed task
+        // never reports downloaded_bytes > size_bytes (progress > 100%).
+        if job.task.size_bytes != final_size {
             job.task.size_bytes = final_size;
         }
         job.task.speed_bytes_per_sec = 0;
@@ -3020,6 +3103,212 @@ mod tests {
         assert!(p2.supports_range);
     }
 
+    #[test]
+    fn update_curl_task_progress_sums_per_segment_write_pointers() {
+        // Regression: `downloadedBytes` must equal the SUM of per-segment
+        // (on-disk resume bytes + bytes written this run), each clamped to
+        // its segment size — never a single whole-file write cursor. This is
+        // what makes the progress bar move continuously with real disk
+        // writes instead of jumping 0% → 100% at merge time.
+        let dir =
+            std::env::temp_dir().join(format!("nova_test_progress_sum_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = std::sync::Arc::new(crate::daemon::persist::tests::test_state(
+            &dir.to_string_lossy(),
+        ));
+        let id = "progress-sum-test";
+        let out = dir.join("sample.bin");
+        let body = download_body("http://127.0.0.1:1/sample.bin", "sample.bin", 1000, 2);
+        let job = task_from_body(
+            &body,
+            id,
+            "sample.bin".to_string(),
+            &out,
+            std::collections::HashMap::new(),
+            Vec::new(),
+        );
+        {
+            let mut jobs = state.curl_jobs.lock().unwrap();
+            jobs.insert(id.to_string(), job);
+        }
+        // Two segments of 500 bytes each. Segment 0 resumed with 100 bytes
+        // on disk and wrote 300 this run; segment 1 started empty and wrote
+        // 250. The atomic counters mirror SegmentWriter::write increments.
+        let ranges: Vec<(ByteRange, Arc<AtomicU64>, u64)> = vec![
+            (
+                ByteRange {
+                    index: 0,
+                    start: 0,
+                    end: 499,
+                    path: out.clone(),
+                },
+                Arc::new(AtomicU64::new(300)),
+                100,
+            ),
+            (
+                ByteRange {
+                    index: 1,
+                    start: 500,
+                    end: 999,
+                    path: out.clone(),
+                },
+                Arc::new(AtomicU64::new(250)),
+                0,
+            ),
+        ];
+        let mut last_total = 0u64;
+        let mut last_tick = Instant::now();
+        update_curl_task_progress(&state, id, 1000, &ranges, &mut last_total, &mut last_tick);
+
+        let task = {
+            let jobs = state.curl_jobs.lock().unwrap();
+            jobs.get(id).unwrap().task.clone()
+        };
+        // 100+300 + 0+250 = 650 — the sum of the actual write pointers.
+        assert_eq!(task.downloaded_bytes, 650);
+        assert_eq!(task.size_bytes, 1000);
+        assert_eq!(task.segments.len(), 2);
+        assert_eq!(task.segments[0].downloaded_bytes, 400);
+        assert_eq!(task.segments[1].downloaded_bytes, 250);
+        assert_eq!(task.segments[0].total_bytes, 500);
+        assert_eq!(task.segments[1].total_bytes, 500);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn update_curl_task_progress_clamps_segment_overrun() {
+        // A segment whose counter exceeds its planned size (server sent extra
+        // bytes, or a stale counter after an adaptive rebuild) must be
+        // clamped to its part size so the task total never overshoots the
+        // real file size — otherwise the UI would show >100%.
+        let dir =
+            std::env::temp_dir().join(format!("nova_test_progress_clamp_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = std::sync::Arc::new(crate::daemon::persist::tests::test_state(
+            &dir.to_string_lossy(),
+        ));
+        let id = "progress-clamp-test";
+        let out = dir.join("sample.bin");
+        let body = download_body("http://127.0.0.1:1/sample.bin", "sample.bin", 1000, 2);
+        let job = task_from_body(
+            &body,
+            id,
+            "sample.bin".to_string(),
+            &out,
+            std::collections::HashMap::new(),
+            Vec::new(),
+        );
+        {
+            let mut jobs = state.curl_jobs.lock().unwrap();
+            jobs.insert(id.to_string(), job);
+        }
+        // Segment 0 claims 100 + 600 = 700 bytes into a 500-byte range; the
+        // effective total must be clamped to 500, so the task total stays at
+        // the real file size (500 + 500).
+        let ranges: Vec<(ByteRange, Arc<AtomicU64>, u64)> = vec![
+            (
+                ByteRange {
+                    index: 0,
+                    start: 0,
+                    end: 499,
+                    path: out.clone(),
+                },
+                Arc::new(AtomicU64::new(600)),
+                100,
+            ),
+            (
+                ByteRange {
+                    index: 1,
+                    start: 500,
+                    end: 999,
+                    path: out.clone(),
+                },
+                Arc::new(AtomicU64::new(500)),
+                0,
+            ),
+        ];
+        let mut last_total = 0u64;
+        let mut last_tick = Instant::now();
+        update_curl_task_progress(&state, id, 1000, &ranges, &mut last_total, &mut last_tick);
+
+        let task = {
+            let jobs = state.curl_jobs.lock().unwrap();
+            jobs.get(id).unwrap().task.clone()
+        };
+        assert_eq!(task.downloaded_bytes, 1000, "clamped to the file size");
+        assert_eq!(task.segments[0].downloaded_bytes, 500);
+        assert_eq!(task.segments[1].downloaded_bytes, 500);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn next_progress_total_transitions_unknown_to_known_without_backward_jump() {
+        // The UI handoff this function exists for: a download starts with an
+        // unknown size (indeterminate bar), then the response headers reveal
+        // the real Content-Length. The reported total must jump 0 → known
+        // exactly once and then stay FROZEN — changing it afterwards (shrink
+        // OR grow) would make downloaded / size jump backward.
+
+        // Unknown size, no headers yet → stays unknown (indeterminate).
+        assert_eq!(next_progress_total(0, None, false), 0);
+        // Headers arrive → the size becomes known.
+        assert_eq!(next_progress_total(0, Some(1000), false), 1000);
+        // A later, smaller header value must NOT shrink the reported total.
+        assert_eq!(next_progress_total(1000, Some(800), false), 1000);
+        // A later, larger header value must NOT grow it either (a grow would
+        // also drop the percentage — e.g. 50% of 1000 → 25% of 2000).
+        assert_eq!(next_progress_total(1000, Some(2000), false), 1000);
+        // No headers at all after discovery → stays frozen.
+        assert_eq!(next_progress_total(1000, None, false), 1000);
+        // Unknown stays unknown even if a bogus 0 length is seen.
+        assert_eq!(next_progress_total(0, Some(0), false), 0);
+        // Content-encoded responses (gzip/br/deflate) always report unknown,
+        // overriding even a size the preflight already seeded: the wire size
+        // is the compressed size, not the on-disk file.
+        assert_eq!(next_progress_total(1000, Some(2000), true), 0);
+        assert_eq!(next_progress_total(0, Some(500), true), 0);
+    }
+    #[test]
+    fn next_progress_total_keeps_percentage_monotonic_under_random_headers() {
+        // Property test over many random header discoveries: once the total
+        // is non-zero it is frozen, downloaded only grows and never exceeds
+        // it, so the percentage the UI computes can never jump backward.
+        // Content-encoding is a property of the RESPONSE (stable for the whole
+        // transfer), so the model makes it sticky once seen — matching reality
+        // where a gzip response stays gzip for every tick.
+        let mut total = 0u64;
+        let mut downloaded = 0u64;
+        let mut encoded = false;
+        let mut last_percent: Option<u64> = None;
+        let mut seed: u64 = 0x9E3779B97F4A7C15;
+        for tick in 0..10_000u64 {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let discovered = if seed % 3 == 0 {
+                Some((seed >> 8) % 2_000_000)
+            } else {
+                None
+            };
+            // The server either always encodes or never encodes this transfer.
+            encoded |= seed % 17 == 0;
+            total = next_progress_total(total, discovered, encoded);
+            downloaded = (downloaded + (seed % 1024)).min(if total > 0 { total } else { u64::MAX });
+            if let Some(percent) = downloaded
+                .checked_mul(100)
+                .and_then(|scaled| scaled.checked_div(total))
+            {
+                if let Some(prev) = last_percent {
+                    assert!(
+                        percent >= prev,
+                        "tick {tick}: percentage fell {prev}% -> {percent}% (total={total}, downloaded={downloaded})"
+                    );
+                }
+                last_percent = Some(percent);
+            }
+        }
+    }
+
     // ── Local HTTP server with byte-range support (206) ──────────────────
     fn spawn_range_server(payload: std::sync::Arc<Vec<u8>>) -> std::net::SocketAddr {
         use std::io::{Read, Write};
@@ -3173,6 +3462,295 @@ mod tests {
             }
         });
         addr
+    }
+
+    /// Serves `payload` as an HTTP/1.1 **chunked** response with NO
+    /// Content-Length header — the streaming mode that declares no size at
+    /// all. The engine must keep the bar indeterminate (size stays 0 while
+    /// downloaded_bytes grows honestly) and must not fabricate a percentage
+    /// from an unknown total.
+    fn spawn_chunked_server(
+        payload: std::sync::Arc<Vec<u8>>,
+        chunk: usize,
+        sleep_ms: u64,
+    ) -> std::net::SocketAddr {
+        use std::io::{Read, Write};
+        use std::net::{Shutdown, TcpListener};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let payload = payload.clone();
+                std::thread::spawn(move || {
+                    let mut buf = [0u8; 8192];
+                    let _n = stream.read(&mut buf).unwrap_or(0);
+                    // No Content-Length: chunked transfer encoding only.
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
+                    );
+                    for piece in payload.chunks(chunk.max(1)) {
+                        if stream
+                            .write_all(format!("{:x}\r\n", piece.len()).as_bytes())
+                            .is_err()
+                        {
+                            return;
+                        }
+                        if stream.write_all(piece).is_err() {
+                            return;
+                        }
+                        let _ = stream.write_all(b"\r\n");
+                        std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
+                    }
+                    let _ = stream.write_all(b"0\r\n\r\n");
+                    let _ = stream.shutdown(Shutdown::Write);
+                });
+            }
+        });
+        addr
+    }
+
+    /// Serves a gzip-compressed body with `Content-Encoding: gzip` and a
+    /// Content-Length equal to the COMPRESSED size. libcurl decompresses
+    /// transparently, so far more bytes land on disk than Content-Length
+    /// declared — the exact case where the old code let downloaded_bytes
+    /// outrun size_bytes (progress > 100%).
+    fn spawn_gzip_server(
+        payload: std::sync::Arc<Vec<u8>>,
+        chunk: usize,
+        sleep_ms: u64,
+    ) -> std::net::SocketAddr {
+        use std::io::{Read, Write};
+        use std::net::{Shutdown, TcpListener};
+        let gz = gzip_bytes(&payload);
+        assert!(
+            gz.len() < payload.len(),
+            "test payload must actually compress"
+        );
+        let gz = std::sync::Arc::new(gz);
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let gz = gz.clone();
+                std::thread::spawn(move || {
+                    let mut buf = [0u8; 8192];
+                    let _n = stream.read(&mut buf).unwrap_or(0);
+                    let _ = stream.write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
+                            gz.len()
+                        )
+                        .as_bytes(),
+                    );
+                    for piece in gz.chunks(chunk.max(1)) {
+                        if stream.write_all(piece).is_err() {
+                            return;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
+                    }
+                    let _ = stream.shutdown(Shutdown::Write);
+                });
+            }
+        });
+        addr
+    }
+
+    /// Serves `payload` with byte-range support (206 Partial Content) AND
+    /// `Content-Encoding: gzip` on every response — the pathological combo
+    /// that breaks segmented downloads: each segment decompresses an
+    /// independent compressed stream, so the decompressed bytes no longer
+    /// align with the requested file offsets and merging the parts would
+    /// silently corrupt the output. The engine must detect the encoding on
+    /// the range responses, stop all segments, discard the parts, and fall
+    /// back to a single connection (which decompresses the whole body once
+    /// and writes the correct bytes).
+    fn spawn_range_gzip_server(
+        payload: std::sync::Arc<Vec<u8>>,
+    ) -> (std::net::SocketAddr, Arc<AtomicBool>) {
+        use std::io::{Read, Write};
+        use std::net::{Shutdown, TcpListener};
+        let gz = gzip_bytes(&payload);
+        let gz = std::sync::Arc::new(gz);
+        // Set once a byte-range request arrives — proves the engine actually
+        // ATTEMPTED a segmented download (and was forced back to a single
+        // connection by the Content-Encoding rejection). Without this the
+        // test could pass even if segmentation were silently disabled.
+        let saw_range = Arc::new(AtomicBool::new(false));
+        let saw_range_thread = saw_range.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let gz = gz.clone();
+                let saw_range_thread = saw_range_thread.clone();
+                std::thread::spawn(move || {
+                    let mut buf = [0u8; 8192];
+                    let n = stream.read(&mut buf).unwrap_or(0);
+                    let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let mut range = None;
+                    for line in req.lines() {
+                        if let Some(rest) = line.to_ascii_lowercase().strip_prefix("range: bytes=")
+                        {
+                            range = Some(rest.trim().to_string());
+                            saw_range_thread.store(true, Ordering::Release);
+                            break;
+                        }
+                    }
+                    let send = |stream: &mut std::net::TcpStream, head: String, body: &[u8]| {
+                        let _ = stream.write_all(head.as_bytes());
+                        let _ = stream.write_all(body);
+                        let _ = stream.shutdown(Shutdown::Write);
+                    };
+                    match range {
+                        Some(r) => {
+                            // Range request: serve a 206 of the COMPRESSED
+                            // stream (a misbehaving but real-world behavior
+                            // for pre-compressed files behind a CDN). Each
+                            // segment therefore receives its own gzip body.
+                            let (s, e) = r.split_once('-').unwrap_or((r.as_str(), ""));
+                            let start: u64 = s.trim().parse().unwrap_or(0);
+                            let end: u64 = if e.is_empty() {
+                                (gz.len() as u64).saturating_sub(1)
+                            } else {
+                                e.trim()
+                                    .parse()
+                                    .unwrap_or((gz.len() as u64).saturating_sub(1))
+                            };
+                            let end = end.min((gz.len() as u64).saturating_sub(1));
+                            let body = &gz[start as usize..=end as usize];
+                            send(
+                                &mut stream,
+                                format!(
+                                    "HTTP/1.1 206 Partial Content\r\nContent-Encoding: gzip\r\nContent-Range: bytes {start}-{end}/{}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n",
+                                    gz.len(),
+                                    body.len()
+                                ),
+                                body,
+                            );
+                        }
+                        None => {
+                            // Plain GET: serve the whole gzip body once.
+                            send(
+                                &mut stream,
+                                format!(
+                                    "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
+                                    gz.len()
+                                ),
+                                &gz,
+                            );
+                        }
+                    }
+                });
+            }
+        });
+        (addr, saw_range)
+    }
+
+    /// Serves byte ranges but answers every range request with MORE bytes
+    /// than requested: the Content-Length is `range_len + extra` and the body
+    /// includes the surplus. A misbehaving server that sends extra bytes past
+    /// the requested range must not push progress past 100% (the engine
+    /// clamps each segment to its planned size) and the merged file must
+    /// truncate the surplus back to the exact payload.
+    fn spawn_overrange_server(
+        payload: std::sync::Arc<Vec<u8>>,
+        extra: usize,
+        chunk: usize,
+        sleep_ms: u64,
+    ) -> std::net::SocketAddr {
+        use std::io::{Read, Write};
+        use std::net::{Shutdown, TcpListener};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let payload = payload.clone();
+                std::thread::spawn(move || {
+                    let mut buf = [0u8; 8192];
+                    let n = stream.read(&mut buf).unwrap_or(0);
+                    let req = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let total = payload.len() as u64;
+                    let mut range = None;
+                    for line in req.lines() {
+                        if let Some(rest) = line.to_ascii_lowercase().strip_prefix("range: bytes=")
+                        {
+                            range = Some(rest.trim().to_string());
+                            break;
+                        }
+                    }
+                    let send = |stream: &mut std::net::TcpStream, head: String, body: &[u8]| {
+                        let _ = stream.write_all(head.as_bytes());
+                        for piece in body.chunks(chunk.max(1)) {
+                            if stream.write_all(piece).is_err() {
+                                return;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
+                        }
+                        let _ = stream.shutdown(Shutdown::Write);
+                    };
+                    match range {
+                        Some(r) => {
+                            let (s, e) = r.split_once('-').unwrap_or((r.as_str(), ""));
+                            let start: u64 = s.trim().parse().unwrap_or(0);
+                            if start >= total {
+                                send(
+                                    &mut stream,
+                                    format!(
+                                        "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{total}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                                    ),
+                                    b"",
+                                );
+                                return;
+                            }
+                            let end: u64 = if e.is_empty() {
+                                total - 1
+                            } else {
+                                e.trim().parse().unwrap_or(total - 1)
+                            };
+                            let end = end.min(total - 1);
+                            let want = (end - start + 1) as usize + extra;
+                            // Build a body with the requested range PLUS `extra`
+                            // surplus bytes (cycling the payload so the surplus
+                            // is deterministic). The Content-Length below must
+                            // advertise the ACTUAL sent length so curl doesn't
+                            // stall waiting for bytes that never come.
+                            let mut body = Vec::with_capacity(want);
+                            for i in 0..want {
+                                let idx = (start as usize + i) % payload.len();
+                                body.push(payload[idx]);
+                            }
+                            send(
+                                &mut stream,
+                                format!(
+                                    "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{end}/{total}\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nETag: \"nova-test\"\r\nConnection: close\r\n\r\n",
+                                    body.len()
+                                ),
+                                &body,
+                            );
+                        }
+                        None => send(
+                            &mut stream,
+                            format!(
+                                "HTTP/1.1 200 OK\r\nContent-Length: {total}\r\nAccept-Ranges: bytes\r\nETag: \"nova-test\"\r\nConnection: close\r\n\r\n"
+                            ),
+                            &payload,
+                        ),
+                    }
+                });
+            }
+        });
+        addr
+    }
+
+    fn gzip_bytes(data: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(data).unwrap();
+        enc.finish().unwrap()
     }
 
     fn download_body(
@@ -3544,6 +4122,327 @@ mod tests {
         );
         let written = std::fs::read(&out).unwrap();
         assert_eq!(written, payload, "output content mismatch");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn chunked_response_without_content_length_keeps_progress_honest() {
+        // Regression: a server streaming with Transfer-Encoding: chunked and
+        // NO Content-Length. The total size is genuinely unknown, so the bar
+        // must stay indeterminate (size_bytes 0) while downloaded_bytes grows
+        // live, and the completed task must report the real file size.
+        let payload: Vec<u8> = (0..(3 * 1024 * 1024)).map(|i| (i % 251) as u8).collect();
+        let addr = spawn_chunked_server(std::sync::Arc::new(payload.clone()), 64 * 1024, 2);
+        let url = format!("http://{addr}/chunked.bin");
+        let dir = std::env::temp_dir().join(format!("nova_test_chunked_{}", std::process::id()));
+        let out = dir.join("chunked.bin");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let state = std::sync::Arc::new(crate::daemon::persist::tests::test_state(
+            &dir.to_string_lossy(),
+        ));
+        let id = "chunked-progress-test";
+        let body = download_body(&url, "chunked.bin", 0, 1);
+        let job = task_from_body(
+            &body,
+            id,
+            "chunked.bin".to_string(),
+            &out,
+            std::collections::HashMap::new(),
+            Vec::new(),
+        );
+        {
+            let mut jobs = state.curl_jobs.lock().unwrap();
+            jobs.insert(id.to_string(), job);
+        }
+        state.mark_dirty();
+
+        let st = state.clone();
+        std::thread::spawn(move || start_curl_process(&st, id));
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut saw_live = false;
+        loop {
+            let (status, downloaded, size) = {
+                let jobs = state.curl_jobs.lock().unwrap();
+                let Some(j) = jobs.get(id) else { break };
+                (
+                    j.task.status.clone(),
+                    j.task.downloaded_bytes,
+                    j.task.size_bytes,
+                )
+            };
+            if status == "downloading" && downloaded > 0 {
+                saw_live = true;
+            }
+            // Honesty invariant: whenever a size is known, downloaded must
+            // never exceed it — and while the size is unknown it must stay 0
+            // (the UI renders an indeterminate bar, not a fake percentage).
+            assert!(
+                size == 0 || downloaded <= size,
+                "progress exceeded 100%: downloaded={downloaded} size={size}"
+            );
+            if status == "completed" || status == "error" {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timeout status={status} downloaded={downloaded} size={size}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        let task = run_task_to_completion(&state, id, std::time::Duration::from_secs(30));
+        assert_eq!(task.status, "completed");
+        assert_eq!(task.size_bytes, payload.len() as u64);
+        assert_eq!(task.downloaded_bytes, payload.len() as u64);
+        assert!(
+            saw_live,
+            "no live progress observed during chunked transfer"
+        );
+        let written = std::fs::read(&out).unwrap();
+        assert_eq!(written, payload, "chunked output content mismatch");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn content_encoding_gzip_writes_decompressed_file_without_fake_percentage() {
+        // Regression: a server that gzips on the fly. Content-Length
+        // advertises the COMPRESSED size, but libcurl decompresses the body
+        // before it is written, so far more bytes land on disk than were
+        // declared. The engine must not report a percentage above 100% and
+        // must reconcile size_bytes to the real (decompressed) size at
+        // completion.
+        let payload: Vec<u8> = (0..(2 * 1024 * 1024)).map(|i| (i % 251) as u8).collect();
+        let addr = spawn_gzip_server(std::sync::Arc::new(payload.clone()), 8 * 1024, 2);
+        let url = format!("http://{addr}/app.gz");
+        let dir = std::env::temp_dir().join(format!("nova_test_gzip_{}", std::process::id()));
+        let out = dir.join("app.gz");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let state = std::sync::Arc::new(crate::daemon::persist::tests::test_state(
+            &dir.to_string_lossy(),
+        ));
+        let id = "gzip-progress-test";
+        // Start with an unknown size; the preflight discovers the COMPRESSED
+        // Content-Length, which is smaller than the decompressed file — the
+        // exact trap that used to push the progress bar over 100%.
+        let body = download_body(&url, "app.gz", 0, 1);
+        let job = task_from_body(
+            &body,
+            id,
+            "app.gz".to_string(),
+            &out,
+            std::collections::HashMap::new(),
+            Vec::new(),
+        );
+        {
+            let mut jobs = state.curl_jobs.lock().unwrap();
+            jobs.insert(id.to_string(), job);
+        }
+        state.mark_dirty();
+
+        let st = state.clone();
+        std::thread::spawn(move || start_curl_process(&st, id));
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let (status, downloaded, size) = {
+                let jobs = state.curl_jobs.lock().unwrap();
+                let Some(j) = jobs.get(id) else { break };
+                (
+                    j.task.status.clone(),
+                    j.task.downloaded_bytes,
+                    j.task.size_bytes,
+                )
+            };
+            // Never exceed 100%: when a size is reported, downloaded must fit
+            // under it; once Content-Encoding is detected the size correctly
+            // becomes unknown (0 = indeterminate bar).
+            assert!(
+                size == 0 || downloaded <= size,
+                "gzip progress exceeded 100%: downloaded={downloaded} size={size}"
+            );
+            if status == "completed" || status == "error" {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timeout status={status} downloaded={downloaded} size={size}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        let task = run_task_to_completion(&state, id, std::time::Duration::from_secs(30));
+        assert_eq!(task.status, "completed");
+        assert_eq!(
+            task.size_bytes,
+            payload.len() as u64,
+            "size_bytes must be the DECOMPRESSED file size, not the compressed Content-Length"
+        );
+        assert_eq!(task.downloaded_bytes, payload.len() as u64);
+        let written = std::fs::read(&out).unwrap();
+        assert_eq!(
+            written, payload,
+            "on-disk file must be the decompressed payload, not the gzip bytes"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn range_capable_gzip_server_falls_back_to_single_connection() {
+        // Regression (C-5): a server that honors byte ranges AND applies
+        // Content-Encoding: gzip to every response is pathological for
+        // segmented downloads — each segment decompresses an independent
+        // compressed stream whose byte offsets no longer match the file, so
+        // merging the parts would silently corrupt the output. The engine
+        // must detect the encoding on the range responses, stop every
+        // segment, discard the parts, and fall back to a single connection,
+        // which decompresses the whole body once and writes correct bytes.
+        let payload: Vec<u8> = (0..(3 * 1024 * 1024)).map(|i| (i % 251) as u8).collect();
+        let (addr, saw_range) = spawn_range_gzip_server(std::sync::Arc::new(payload.clone()));
+        let url = format!("http://{addr}/app.bin");
+        let dir = std::env::temp_dir().join(format!("nova_test_rangegz_{}", std::process::id()));
+        let out = dir.join("app.bin");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let state = std::sync::Arc::new(crate::daemon::persist::tests::test_state(
+            &dir.to_string_lossy(),
+        ));
+        let id = "range-gzip-test";
+        // Force a segmented attempt (4 connections, known size above the
+        // segment minimum) so the encoding-rejection path is exercised.
+        let body = download_body(&url, "app.bin", payload.len() as u64, 4);
+        let job = task_from_body(
+            &body,
+            id,
+            "app.bin".to_string(),
+            &out,
+            std::collections::HashMap::new(),
+            Vec::new(),
+        );
+        {
+            let mut jobs = state.curl_jobs.lock().unwrap();
+            jobs.insert(id.to_string(), job);
+        }
+        state.mark_dirty();
+
+        let st = state.clone();
+        std::thread::spawn(move || start_curl_process(&st, id));
+
+        let task = run_task_to_completion(&state, id, std::time::Duration::from_secs(60));
+        assert_eq!(
+            task.status, "completed",
+            "range+gzip server must complete via single-connection fallback"
+        );
+        // The engine must have ATTEMPTED a segmented download (a byte-range
+        // request reached the server) before being forced back to a single
+        // connection — otherwise this test would pass even if segmentation
+        // were silently disabled and the C-5 rejection never ran.
+        assert!(
+            saw_range.load(Ordering::Acquire),
+            "engine never sent a byte-range request: the segmented attempt (and its \
+             Content-Encoding rejection) was not exercised"
+        );
+        // Honesty: the completed task reports the real decompressed size and
+        // never claims more downloaded than the on-disk file.
+        assert_eq!(task.size_bytes, payload.len() as u64);
+        assert_eq!(task.downloaded_bytes, payload.len() as u64);
+        let written = std::fs::read(&out).unwrap();
+        assert_eq!(
+            written, payload,
+            "range+gzip server: merged output must equal the payload"
+        );
+        assert_eq!(written.len(), payload.len());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn overrange_server_progress_stays_at_or_below_100_and_merge_truncates_surplus() {
+        // Regression: a misbehaving server that answers each range request
+        // with MORE bytes than requested. Each segment's part file therefore
+        // grows beyond its planned size; the engine must clamp reported
+        // progress to the planned segment size (never >100%) and the merge
+        // must truncate the surplus so the final file matches the payload
+        // byte-for-byte.
+        let payload: Vec<u8> = (0..(3 * 1024 * 1024)).map(|i| (i % 251) as u8).collect();
+        let extra = 64 * 1024;
+        let addr =
+            spawn_overrange_server(std::sync::Arc::new(payload.clone()), extra, 64 * 1024, 2);
+        let url = format!("http://{addr}/over.bin");
+        let dir = std::env::temp_dir().join(format!("nova_test_overrange_{}", std::process::id()));
+        let out = dir.join("over.bin");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let state = std::sync::Arc::new(crate::daemon::persist::tests::test_state(
+            &dir.to_string_lossy(),
+        ));
+        let id = "overrange-progress-test";
+        let body = download_body(&url, "over.bin", payload.len() as u64, 4);
+        let job = task_from_body(
+            &body,
+            id,
+            "over.bin".to_string(),
+            &out,
+            std::collections::HashMap::new(),
+            Vec::new(),
+        );
+        {
+            let mut jobs = state.curl_jobs.lock().unwrap();
+            jobs.insert(id.to_string(), job);
+        }
+        state.mark_dirty();
+
+        let st = state.clone();
+        std::thread::spawn(move || start_curl_process(&st, id));
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let (status, downloaded, size, segments) = {
+                let jobs = state.curl_jobs.lock().unwrap();
+                let Some(j) = jobs.get(id) else { break };
+                (
+                    j.task.status.clone(),
+                    j.task.downloaded_bytes,
+                    j.task.size_bytes,
+                    j.task.segments.clone(),
+                )
+            };
+            // Task-level honesty: the total can never exceed the known size.
+            assert!(
+                size == 0 || downloaded <= size,
+                "overrange progress exceeded 100%: downloaded={downloaded} size={size}"
+            );
+            // Segment-level honesty: no segment may report more than its
+            // planned byte range, even though the server sends extra bytes.
+            for seg in &segments {
+                assert!(
+                    seg.downloaded_bytes <= seg.total_bytes,
+                    "segment {} over its range: downloaded={} total={}",
+                    seg.id,
+                    seg.downloaded_bytes,
+                    seg.total_bytes
+                );
+            }
+            if status == "completed" || status == "error" {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timeout status={status} downloaded={downloaded} size={size}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        let task = run_task_to_completion(&state, id, std::time::Duration::from_secs(30));
+        assert_eq!(task.status, "completed");
+        assert_eq!(task.size_bytes, payload.len() as u64);
+        assert_eq!(task.downloaded_bytes, payload.len() as u64);
+        let written = std::fs::read(&out).unwrap();
+        assert_eq!(
+            written, payload,
+            "overrange merge must truncate the surplus bytes"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

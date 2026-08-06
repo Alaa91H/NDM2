@@ -107,6 +107,7 @@ impl Handler for SegmentWriter {
     fn write(&mut self, data: &[u8]) -> Result<usize, WriteError> {
         if self.progress.abort.load(Ordering::Relaxed)
             || self.progress.range_rejected.load(Ordering::Relaxed)
+            || self.progress.encoding_rejected.load(Ordering::Relaxed)
         {
             return Ok(0);
         }
@@ -131,6 +132,7 @@ impl Handler for SegmentWriter {
     fn progress(&mut self, _dltotal: f64, _dlnow: f64, _ultotal: f64, _ulnow: f64) -> bool {
         !self.progress.abort.load(Ordering::Relaxed)
             && !self.progress.range_rejected.load(Ordering::Relaxed)
+            && !self.progress.encoding_rejected.load(Ordering::Relaxed)
     }
 
     fn header(&mut self, data: &[u8]) -> bool {
@@ -188,6 +190,18 @@ impl Handler for SegmentWriter {
             "content-encoding" if !value.eq_ignore_ascii_case("identity") => {
                 if let Ok(mut cap) = self.progress.capture.lock() {
                     cap.content_encoded = true;
+                }
+                // C-5: a byte-range response with a real Content-Encoding is
+                // unsafe for segmented downloads — each segment receives an
+                // independently compressed stream whose decompressed bytes no
+                // longer align with the requested file offsets, so merging the
+                // parts would silently corrupt the output. Flag it so ALL
+                // segments stop writing and the attempt falls back to a single
+                // connection (which handles Content-Encoding correctly).
+                if self.progress.expects_206 {
+                    self.progress
+                        .encoding_rejected
+                        .store(true, Ordering::Release);
                 }
             }
             "content-length" => {
@@ -1337,6 +1351,7 @@ mod tests {
             capture: Arc::new(Mutex::new(ResponseCapture::default())),
             streaming_digest_out: Arc::new(Mutex::new(None)),
             range_rejected: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            encoding_rejected: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             expects_206: false,
         };
         SegmentWriter {
@@ -1348,6 +1363,122 @@ mod tests {
 
     fn captured(w: &SegmentWriter) -> ResponseCapture {
         w.progress.capture.lock().unwrap().clone()
+    }
+
+    #[test]
+    fn write_callback_counts_only_bytes_successfully_written_to_disk() {
+        // Unique, Windows-safe file name per test: tests run in parallel and
+        // the shared segment_writer() helper truncates the same hdr.bin,
+        // which would make the on-disk-size assertions a race. The test
+        // thread name contains colons (invalid in a Windows filename), so
+        // uniqueness comes from the system clock nanos + a per-test prefix.
+        let dir = std::env::temp_dir().join(format!("nova_easy_cfg_count_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos();
+        let path = dir.join(format!("count_{nanos}.bin"));
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        let progress = SegmentProgress {
+            downloaded: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            abort: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            retry_after: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            capture: Arc::new(Mutex::new(ResponseCapture::default())),
+            streaming_digest_out: Arc::new(Mutex::new(None)),
+            range_rejected: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            encoding_rejected: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            expects_206: false,
+        };
+        let mut w = SegmentWriter {
+            file,
+            progress,
+            streaming_hasher: None,
+        };
+        let chunk = vec![7u8; 4096];
+        assert_eq!(w.write(&chunk).unwrap(), 4096);
+        // The counter increments ONLY after write_all succeeded — it is a
+        // count of bytes actually handed to the file descriptor, so it must
+        // equal the on-disk size of the part file, byte for byte.
+        assert_eq!(
+            w.progress.downloaded.load(Ordering::Relaxed),
+            4096,
+            "write counter must equal bytes written"
+        );
+        assert_eq!(
+            w.file.metadata().unwrap().len(),
+            4096,
+            "part file must contain exactly the counted bytes"
+        );
+        // A second chunk accumulates monotonically and stays in lockstep with
+        // the file size — progress cannot drift from real disk bytes.
+        assert_eq!(w.write(&chunk).unwrap(), 4096);
+        assert_eq!(w.progress.downloaded.load(Ordering::Relaxed), 8192);
+        assert_eq!(w.file.metadata().unwrap().len(), 8192);
+
+        // After abort, write_all must not run: no bytes written, no counter
+        // movement. This is what prevents fake progress on a dead segment.
+        w.progress.abort.store(true, Ordering::Relaxed);
+        assert_eq!(w.write(&chunk).unwrap(), 0);
+        assert_eq!(w.progress.downloaded.load(Ordering::Relaxed), 8192);
+        assert_eq!(w.file.metadata().unwrap().len(), 8192);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_callback_resume_offset_matches_disk_then_accumulates() {
+        // Resume scenario: the part file already holds `existing` bytes on
+        // disk and the writer was opened in append mode (seek-to-end). A
+        // fresh segment counter starts at 0; the caller adds `existing` on
+        // top. The invariant to preserve is that counter + existing always
+        // equals the on-disk length. Unique, Windows-safe file path — see
+        // the sibling test.
+        let dir = std::env::temp_dir().join(format!("nova_easy_cfg_resume_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos();
+        let path = dir.join(format!("resume_{nanos}.bin"));
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        let progress = SegmentProgress {
+            downloaded: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            abort: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            retry_after: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            capture: Arc::new(Mutex::new(ResponseCapture::default())),
+            streaming_digest_out: Arc::new(Mutex::new(None)),
+            range_rejected: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            encoding_rejected: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            expects_206: false,
+        };
+        let mut w = SegmentWriter {
+            file,
+            progress,
+            streaming_hasher: None,
+        };
+        let pre = vec![1u8; 1000];
+        assert_eq!(w.write(&pre).unwrap(), 1000);
+        let existing = w.file.metadata().unwrap().len();
+        assert_eq!(existing, 1000);
+
+        let mut resume = w;
+        let more = vec![2u8; 500];
+        assert_eq!(resume.write(&more).unwrap(), 500);
+        let written = resume.progress.downloaded.load(Ordering::Relaxed);
+        let on_disk = resume.file.metadata().unwrap().len();
+        assert_eq!(written, 1500, "counter accumulates across the resume");
+        assert_eq!(on_disk, 1500, "disk length stays in lockstep");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

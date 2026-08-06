@@ -67,8 +67,9 @@ class IntersectionObserverMock {
 }
 window.IntersectionObserver = IntersectionObserverMock;
 
-// scrollTo
+// scrollTo / scrollIntoView (jsdom omits both)
 window.scrollTo = vi.fn();
+Element.prototype.scrollIntoView = vi.fn();
 
 // Notification
 Object.defineProperty(window, 'Notification', {

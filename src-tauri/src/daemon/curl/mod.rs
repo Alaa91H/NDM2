@@ -106,6 +106,14 @@ pub(super) struct SegmentProgress {
     /// requested 206) to a partial-range request. Shared across all segments
     /// so every write callback stops immediately (C-2).
     pub(super) range_rejected: Arc<AtomicBool>,
+    /// Set by the header callback when a range response carries a real
+    /// `Content-Encoding` (gzip/br/deflate). libcurl decompresses each
+    /// segment independently, so the decompressed bytes no longer align with
+    /// the requested file offsets and the merged output would be silently
+    /// corrupted. Shared across all segments so every write callback stops
+    /// immediately and the attempt falls back to a single connection (which
+    /// handles Content-Encoding correctly).
+    pub(super) encoding_rejected: Arc<AtomicBool>,
     /// True when this segment requested a partial range and therefore must
     /// receive a 206 response for the transfer to be valid.
     pub(super) expects_206: bool,

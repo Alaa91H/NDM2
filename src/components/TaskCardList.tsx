@@ -6,6 +6,7 @@ import { formatSpeed, formatTimeLeft, formatElapsed } from '../utils/taskTableUt
 import { taskProgressInfo } from '../utils/progressUtils';
 import TaskCheckboxAndIcon from './primitives/TaskCheckboxAndIcon';
 import { StatusPill } from './primitives';
+import { TaskProgressBar } from './primitives/TaskProgressBar';
 
 interface TaskCardListProps {
   tasks: DownloadItem[];
@@ -79,24 +80,14 @@ const TaskCardListInner: React.FC<TaskCardListProps> = ({
               <StatusPill status={task.status} engineStatus={task.engineStatus} errorMessage={task.errorMessage} />
             </div>
 
-            <div className="mt-3 flex items-center gap-2">
-              <div className="flex-1 h-2 bg-[var(--bg-surface)] dark:bg-[var(--bg-surface-elevated)] rounded-full overflow-hidden border border-[var(--border-color)]">
-                {progress.indeterminate ? (
-                  // Unknown total size: animated indeterminate bar instead of a
-                  // misleading 0% (real percentage appears once size is known).
-                  <div className="progress-indeterminate-bar h-full bg-[var(--accent-primary)] rounded-full" />
-                ) : (
-                  <div
-                    className={`h-full bg-[var(--accent-primary)] rounded-full transition-all duration-300 ${task.status === 'downloading' ? 'accent-glow relative overflow-hidden' : ''}`}
-                    style={{ width: `${String(progress.percent)}%` }}
-                  >
-                    {task.status === 'downloading' && <div className="absolute inset-0 bg-white/20 animate-pulse" />}
-                  </div>
-                )}
-              </div>
-              <span className="text-[10px] text-[var(--text-secondary)] font-mono font-bold">
-                {progress.percentLabel}
-              </span>
+            <div className="mt-3">
+              <TaskProgressBar
+                progress={progress}
+                active={task.status === 'downloading'}
+                trackClass="h-2"
+                labelClass="text-[10px] font-mono font-bold"
+                gapClass="gap-2"
+              />
             </div>
 
             <div className="mt-2.5 flex flex-wrap justify-between text-[10px] text-[var(--text-secondary)] font-mono">

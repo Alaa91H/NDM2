@@ -30,6 +30,7 @@ import {
 import { novaClient, type BrowserExtensionHealth } from '../api/novaClient';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { taskProgressInfo } from '../utils/progressUtils';
+import { TaskProgressBar } from './primitives/TaskProgressBar';
 
 import { extractErrorMessage } from '../utils/formatUtils';
 export const StatusBar: React.FC = () => {
@@ -314,13 +315,26 @@ export const StatusBar: React.FC = () => {
             onClick={() => {
               openDialog('activeProgress', minimizedRealTask);
             }}
-            className="flex items-center gap-2 px-2.5 h-6 bg-[var(--success-bg)] hover:bg-[var(--success-bg)] text-[var(--success)] border border-[var(--success-border)] rounded cursor-pointer transition-all duration-200 text-[10px] font-bold shadow-sm max-w-[200px] mr-2"
+            className="flex flex-col justify-center gap-1 px-2.5 py-1 min-w-[140px] max-w-[220px] min-h-[34px] bg-[var(--success-bg)] hover:bg-[var(--success-bg)] text-[var(--success)] border border-[var(--success-border)] rounded cursor-pointer transition-all duration-200 text-[10px] font-bold shadow-sm mr-2"
             title={t('statusbar_restore_progress_tip')}
             dir="ltr"
           >
-            <span className="w-1.5 h-1.5 bg-[var(--success)] rounded-full animate-pulse shrink-0" />
-            <span className="truncate max-w-[100px]">{minimizedRealTask.name}</span>
-            <span className="text-white font-mono">{minimizedProgress.percentLabel}</span>
+            <span className="flex items-center gap-2 min-w-0">
+              <span
+                className={`w-1.5 h-1.5 bg-[var(--success)] rounded-full shrink-0 ${
+                  minimizedRealTask.status === 'downloading' ? 'animate-pulse' : ''
+                }`}
+              />
+              <span className="truncate">{minimizedRealTask.name}</span>
+              <span className="text-white font-mono ml-auto shrink-0">{minimizedProgress.percentLabel}</span>
+            </span>
+            <TaskProgressBar
+              progress={minimizedProgress}
+              active={minimizedRealTask.status === 'downloading'}
+              trackClass="h-1"
+              showLabel={false}
+              ariaLabel={minimizedRealTask.name}
+            />
           </button>
         )}
 

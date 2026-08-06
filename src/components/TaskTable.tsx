@@ -33,6 +33,7 @@ import { StatusPill } from './primitives';
 import type { ContextMenuOption } from './primitives/ContextMenu';
 import { ContextMenu } from './primitives/ContextMenu';
 import TaskCheckboxAndIcon from './primitives/TaskCheckboxAndIcon';
+import { TaskProgressBar } from './primitives/TaskProgressBar';
 import TaskCardList from './TaskCardList';
 import ColumnConfigPanel from './ColumnConfigPanel';
 import { useColumnState } from '../hooks/useColumnState';
@@ -591,28 +592,7 @@ export const TaskTable: React.FC = () => {
                         case 'progress':
                           return (
                             <td key={colKey} className="px-2 py-0.5 font-mono text-[11px] text-start" style={{ width }}>
-                              <div className="flex items-center gap-1.5">
-                                <div className="flex-1 h-1.5 bg-[var(--bg-surface)] dark:bg-[var(--bg-surface-elevated)] rounded-full overflow-hidden border border-[var(--border-color)]">
-                                  {progress.indeterminate ? (
-                                    // Unknown total size: animated indeterminate bar
-                                    // instead of a misleading 0% (downloads show real
-                                    // progress as soon as the engine learns the size).
-                                    <div className="progress-indeterminate-bar h-full bg-[var(--accent-primary)] rounded-full" />
-                                  ) : (
-                                    <div
-                                      className={`h-full bg-[var(--accent-primary)] rounded-full transition-all duration-300 ${task.status === 'downloading' ? 'accent-glow relative overflow-hidden' : ''}`}
-                                      style={{ width: `${String(progress.percent)}%` }}
-                                    >
-                                      {task.status === 'downloading' && (
-                                        <div className="absolute inset-0 bg-white/20 animate-pulse" />
-                                      )}
-                                    </div>
-                                  )}
-                                </div>
-                                <span className="text-[9px] text-[var(--text-secondary)] font-bold">
-                                  {progress.percentLabel}
-                                </span>
-                              </div>
+                              <TaskProgressBar progress={progress} active={task.status === 'downloading'} />
                             </td>
                           );
                         case 'speed':

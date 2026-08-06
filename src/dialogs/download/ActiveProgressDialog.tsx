@@ -1,5 +1,5 @@
 /* src/dialogs/download/ActiveProgressDialog.tsx */
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
   useDialogData,
   useTaskData,
@@ -12,28 +12,109 @@ import { useEngineAdaptive } from '../../store/selectors';
 import { useEngineStore } from '../../store/engineStore';
 import type { DownloadItem, DownloadSegment } from '../../types/desktop-ui.types';
 import { formatBytes } from '../../initialData';
-import { formatSpeed, formatElapsed } from '../../utils/formatUtils';
+import { formatSpeed, formatElapsed, formatTimeLeft } from '../../utils/formatUtils';
 import { taskProgressInfo } from '../../utils/progressUtils';
+import {
+  TaskProgressBar,
+  ProgressHeadBadge,
+  ProgressLegend,
+  progressToneFillClass,
+  type ProgressTone,
+} from '../../components/primitives/TaskProgressBar';
+
+/** Map a segment's engine state to the shared progress-bar tone so the whole
+ *  app uses the same active/completed/idle colour language. */
+const segmentTone = (seg: DownloadSegment): ProgressTone => {
+  if (seg.active && seg.progress < 1) return 'accent';
+  if (seg.progress >= 1) return 'success';
+  return 'muted';
+};
+
+/** Rich hover tooltip anchored above the hovered composite-bar cell: segment
+ *  number, state, bytes, live speed and ETA. Anchored by percentage so it
+ *  tracks the (equal-width) cell without measuring the DOM, and clamped so it
+ *  never overhangs the bar edges. */
+const SegmentHoverTooltip: React.FC<{
+  seg: DownloadSegment;
+  segTotal: number;
+  segDownloaded: number;
+  hoverLeft: number;
+  t: (key: string) => string;
+}> = React.memo(({ seg, segTotal, segDownloaded, hoverLeft, t }) => {
+  const remaining = Math.max(0, segTotal - segDownloaded);
+  const eta = seg.speed > 0 ? remaining / seg.speed : null;
+  const stateLabel =
+    seg.progress >= 1 ? t('progress_complete') : seg.active ? t('progress_receiving') : t('progress_idle');
+  const stateColor =
+    seg.progress >= 1
+      ? 'text-[var(--success)]'
+      : seg.active
+        ? 'text-[var(--accent-primary)]'
+        : 'text-[var(--text-secondary)]';
+  return (
+    <div
+      id="seg-tooltip"
+      data-testid="seg-tooltip"
+      role="tooltip"
+      className="absolute bottom-full mb-1.5 z-30 -translate-x-1/2 pointer-events-none rounded-lg border border-[var(--border-color)] bg-[var(--bg-surface-elevated)] px-2 py-1 shadow-lg text-[10px] text-[var(--text-primary)] whitespace-nowrap"
+      style={{ left: `${String(hoverLeft)}%` }}
+    >
+      <div className="flex items-center gap-1.5">
+        <span className="font-bold">
+          {t('progress_seg_number')} {String(seg.id)}
+        </span>
+        <span className={`font-semibold ${stateColor}`}>{stateLabel}</span>
+      </div>
+      <div className="mt-0.5 font-mono text-[var(--text-muted)]">
+        {formatBytes(segDownloaded)} <span className="text-[var(--text-secondary)]">/</span>{' '}
+        {formatBytes(segTotal)}
+        <span className="mx-1 text-[var(--text-secondary)]">·</span>
+        <span className="font-bold text-[var(--accent-primary)]">{formatSpeed(seg.speed)}</span>
+        <span className="mx-1 text-[var(--text-secondary)]">·</span>
+        <span className="text-[var(--info)]">
+          {t('progress_eta')} {eta != null ? formatTimeLeft(Math.ceil(eta)) : '--'}
+        </span>
+      </div>
+    </div>
+  );
+});
+SegmentHoverTooltip.displayName = 'SegmentHoverTooltip';
 
 const SegmentCard: React.FC<{
   seg: DownloadSegment;
-  index: number;
   segTotal: number;
   segDownloaded: number;
   isActive: boolean;
+  /** True when the matching composite-bar cell is hovered — lifts the card so
+   *  the hover linking between the bar and the grid is visible. */
+  highlighted?: boolean;
+  /** Called with the segment id on hover and null on leave (bar↔card link). */
+  onHoverChange?: (id: number | null) => void;
   t: (key: string) => string;
-}> = React.memo(({ seg, segTotal, segDownloaded, isActive, t }) => {
+}> = React.memo(({ seg, segTotal, segDownloaded, isActive, highlighted = false, onHoverChange, t }) => {
   const segPercent = segTotal > 0 ? Math.round((segDownloaded / segTotal) * 100) : 0;
+  const segProgress = taskProgressInfo({
+    sizeBytes: segTotal,
+    downloadedBytes: segDownloaded,
+    status: isActive && seg.progress < 1 ? 'downloading' : seg.progress >= 1 ? 'completed' : 'paused',
+  });
 
   return (
     <div
+      data-testid={`segment-card-${String(seg.id)}`}
       className={`relative group border rounded-lg overflow-hidden transition-all duration-300 ${
+        highlighted
+          ? 'ring-2 ring-[var(--accent-primary)]/60 shadow-lg border-[var(--accent-primary)]/40'
+          : ''
+      } ${
         isActive
           ? `border-[var(--border-color)] bg-[var(--bg-surface-elevated)] shadow-md`
           : seg.progress >= 1
             ? 'border-[var(--success)]/30 bg-[var(--success)]/5'
             : 'border-[var(--border-color)] bg-[var(--bg-input)] opacity-70'
       }`}
+      onMouseEnter={() => onHoverChange?.(seg.id)}
+      onMouseLeave={() => onHoverChange?.(null)}
     >
       {isActive && (
         <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/[0.02] to-transparent animate-[shimmer_3s_ease-in-out_infinite]" />
@@ -68,27 +149,19 @@ const SegmentCard: React.FC<{
             </span>
           </div>
 
-          <div className="relative h-2 w-full bg-[var(--bg-input)] rounded-full overflow-hidden border border-[var(--border-color)]/50">
-            {isActive && seg.progress < 1 ? (
-              <div
-                className="absolute top-0 bottom-0 left-0 bg-[var(--accent-primary)] rounded-full transition-all duration-300"
-                style={{ width: `${String(segPercent)}%` }}
-              />
-            ) : (
-              <div
-                className={`absolute top-0 bottom-0 left-0 rounded-full transition-all duration-300 ${
-                  seg.progress >= 1 ? 'bg-[var(--success)]/70' : 'bg-[var(--text-secondary)]/30'
-                }`}
-                style={{ width: `${String(segPercent)}%` }}
-              />
-            )}
-            {isActive && seg.progress < 1 && segPercent > 0 && segPercent < 100 && (
-              <div
-                className="absolute top-0 bottom-0 w-[2px] bg-white/80 animate-pulse"
-                style={{ left: `${String(segPercent)}%` }}
-              />
-            )}
-          </div>
+          {/* Shared TaskProgressBar — same always-mounted fill + cross-fade as
+              every other surface; tone keeps the active/completed/idle colours.
+              The active segment also gets a live head badge showing where its
+              bytes are arriving. */}
+          <TaskProgressBar
+            progress={segProgress}
+            active={isActive}
+            tone={segmentTone(seg)}
+            headLabel={isActive ? `${String(segPercent)}%` : undefined}
+            trackClass="h-2"
+            showLabel={false}
+            ariaLabel={`${t('progress_seg_number')} ${String(seg.id)}`}
+          />
 
           <div className="flex items-center justify-between mt-1">
             <span className="text-[10px] font-mono text-[var(--text-muted)]">{segPercent}%</span>
@@ -127,6 +200,23 @@ export const ActiveProgressDialog: React.FC<{ taskId?: string }> = ({ taskId }) 
   // Collapsed by default so the dialog opens compact; the toggle reveals the
   // tabs, details and per-segment cards.
   const [detailsCollapsed, setDetailsCollapsed] = useState(true);
+  // Hover linking between the composite distribution bar and the segment cards:
+  // hovering a BAR cell shows a rich tooltip AND highlights the matching card;
+  // hovering a CARD highlights its cell in turn but never shows the tooltip.
+  // Two separate ids let the tooltip stay reserved for bar-cell hovers while
+  // the highlight follows whichever surface is under the pointer.
+  const [hoveredCellId, setHoveredCellId] = useState<number | null>(null);
+  const [hoveredCardId, setHoveredCardId] = useState<number | null>(null);
+  const activeHoverId = hoveredCellId ?? hoveredCardId;
+  const segmentGridRef = useRef<HTMLDivElement | null>(null);
+  const handleCardHover = useCallback((id: number | null) => setHoveredCardId(id), []);
+  // Keep the highlighted card visible inside the scrollable grid.
+  useEffect(() => {
+    if (activeHoverId == null || !segmentGridRef.current) return;
+    segmentGridRef.current
+      .querySelector(`[data-testid="segment-card-${String(activeHoverId)}"]`)
+      ?.scrollIntoView?.({ block: 'nearest' });
+  }, [activeHoverId]);
   const speedLimitEnabled = settings.connection.speedLimiter.enabled;
   const speedLimitValue = settings.connection.speedLimiter.maxSpeedKbs;
 
@@ -222,57 +312,102 @@ export const ActiveProgressDialog: React.FC<{ taskId?: string }> = ({ taskId }) 
             </span>
           </div>
         </div>
-        <div
-          className="w-full h-6 bg-[var(--bg-input)] border border-[var(--border-color)] flex rounded-lg overflow-hidden select-none shadow-inner"
-          style={{ direction: 'ltr' }}
-        >
-          {task.segments.map((seg) => {
-            const segPercent = Math.round(seg.progress * 100);
-            return (
-              <div
-                key={seg.id}
-                className="h-full flex-1 border-r border-[var(--border-color)]/30 last:border-r-0 relative bg-[var(--bg-input)]"
-                title={`${t('progress_seg_number')} ${String(seg.id)}: ${String(segPercent)}%`}
-              >
-                {segPercent > 0 && (
+        {/* Primary smooth overall bar — shares the cross-fade indeterminate→percent
+            behaviour of the table/card bars so every renderer is consistent. */}
+        <TaskProgressBar
+          progress={progress}
+          active={isDownloading}
+          trackClass="h-2"
+          showLabel={false}
+          ariaLabel={task.name}
+        />
+        {/* Per-segment distribution breakdown — visually subordinate to the
+            primary smooth overall bar above. The wrapper is relative so the
+            rich hover tooltip can float above the bar without being clipped. */}
+        <div className="relative" style={{ direction: 'ltr' }}>
+          <div
+            data-testid="seg-bar"
+            className="w-full h-4 bg-[var(--bg-input)] border border-[var(--border-color)] flex rounded-md overflow-hidden select-none shadow-inner"
+            onMouseLeave={() => setHoveredCellId(null)}
+          >
+            {task.segments.map((seg, segIdx) => {
+              const segPercent = Math.round(seg.progress * 100);
+              return (
+                <div
+                  key={seg.id}
+                  role="img"
+                  aria-label={`${t('progress_seg_number')} ${String(seg.id)}: ${String(segPercent)}%`}
+                  data-testid={`seg-cell-${String(seg.id)}`}
+                  className={`h-full flex-1 border-r border-[var(--border-color)]/30 last:border-r-0 relative bg-[var(--bg-input)] transition-all duration-150 cursor-pointer ${
+                    activeHoverId === seg.id ? 'brightness-125 ring-1 ring-inset ring-[var(--accent-primary)]/70' : ''
+                  }`}
+                  // The rich tooltip replaces the browser's delayed native
+                  // tooltip, so no `title` here. Clearing happens only at the
+                  // bar container level so the tooltip glides between adjacent
+                  // cells instead of unmounting mid-flight.
+                  aria-describedby={hoveredCellId === seg.id ? 'seg-tooltip' : undefined}
+                  onMouseEnter={() => setHoveredCellId(seg.id)}
+                >
+                  {/* Always-mounted fill so each segment glides from 0% smoothly;
+                      colours come from the same shared tone map as the cards. */}
                   <div
-                    className={`h-full absolute top-0 left-0 transition-all duration-300 ${
-                      seg.active && seg.progress < 1
-                        ? 'bg-[var(--accent-primary)] opacity-90'
-                        : seg.progress >= 1
-                          ? 'bg-[var(--success)]/60'
-                          : 'bg-[var(--text-secondary)]/25'
-                    }`}
+                    className={`h-full absolute top-0 left-0 transition-all duration-300 ${progressToneFillClass[segmentTone(seg)]}`}
                     style={{ width: `${String(segPercent)}%` }}
                   />
-                )}
-                {seg.active && seg.progress < 1 && segPercent > 0 && segPercent < 100 && (
-                  <div
-                    className="w-[1.5px] bg-white/70 h-full absolute top-0 animate-pulse"
-                    style={{ left: `${String(segPercent)}%` }}
-                  />
-                )}
-                {isDownloading && seg.active && seg.progress < 1 && (
-                  <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/[0.06] to-transparent animate-[shimmer_2s_ease-in-out_infinite]" />
-                )}
-              </div>
-            );
-          })}
+                  {/* Per-segment download-head badge — the exact shared pill used
+                      by the cards and every other surface (same clamp math, same
+                      glide, same live pulse). Only active segments carry one, so
+                      a finished segment can never overhang its cell. */}
+                  {seg.active && seg.progress < 1 && (
+                    <ProgressHeadBadge percent={segPercent} label={`${String(segPercent)}%`} dataTestId="seg-head" />
+                  )}
+                  {isDownloading && seg.active && seg.progress < 1 && (
+                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/[0.06] to-transparent animate-[shimmer_2s_ease-in-out_infinite]" />
+                  )}
+                  {/* Hover anchor dot — centres the tooltip over this cell. */}
+                  {hoveredCellId === seg.id && (
+                    <div className="absolute -bottom-px left-0 right-0 h-[3px] bg-[var(--accent-primary)]" data-testid={`seg-hover-mark-${String(seg.id)}`} />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          {/* Rich hover tooltip — anchored at the hovered cell's centre, clamped
+              to the bar edges. Shows segment number, state, bytes, speed + ETA.
+              Rendered ONLY for bar-cell hovers (card hovers just highlight). */}
+          {hoveredCellId != null &&
+            (() => {
+              const segIdx = task.segments.findIndex((s) => s.id === hoveredCellId);
+              if (segIdx < 0) return null;
+              const seg = task.segments[segIdx];
+              const segTotal = seg.totalBytes || Math.round(task.sizeBytes / (task.segments.length || 8));
+              const segDownloaded = seg.downloadedBytes || Math.round(seg.progress * segTotal);
+              const hoverLeft = Math.min(90, Math.max(10, ((segIdx + 0.5) / task.segments.length) * 100));
+              return (
+                <SegmentHoverTooltip
+                  seg={seg}
+                  segTotal={segTotal}
+                  segDownloaded={segDownloaded}
+                  hoverLeft={hoverLeft}
+                  t={t}
+                />
+              );
+            })()}
         </div>
-        <div className="flex items-center gap-3 text-[10px] text-[var(--text-muted)]">
-          <span className="flex items-center gap-1">
-            <span className="w-2 h-2 rounded-sm bg-[var(--accent-primary)] opacity-90" />
-            {t('progress_receiving')} ({activeSegments.length})
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="w-2 h-2 rounded-sm bg-[var(--success)]/60" />
-            {t('progress_complete')} ({completedSegments.length})
-          </span>
-          <span className="flex items-center gap-1">
-            <span className="w-2 h-2 rounded-sm bg-[var(--text-secondary)]/25" />
-            {t('progress_idle')} ({task.segments.length - activeSegments.length - completedSegments.length})
-          </span>
-        </div>
+        {/* Shared legend — every entry is a mini head-badge pill tinted by the
+            same exported tone map the bars use, so it reflects the engine's
+            real palette and live segment counts. */}
+        <ProgressLegend
+          entries={[
+            { tone: 'accent', label: t('progress_receiving'), count: activeSegments.length, live: isDownloading },
+            { tone: 'success', label: t('progress_complete'), count: completedSegments.length },
+            {
+              tone: 'muted',
+              label: t('progress_idle'),
+              count: task.segments.length - activeSegments.length - completedSegments.length,
+            },
+          ]}
+        />
       </div>
 
       {/* Live Stats Bar */}
@@ -457,18 +592,22 @@ export const ActiveProgressDialog: React.FC<{ taskId?: string }> = ({ taskId }) 
                 </div>
               );
             })()}
-            <div className="grid grid-cols-2 gap-1.5 max-h-52 overflow-y-auto overflow-x-hidden pr-1 scrollbar-thin">
-              {task.segments.map((seg, idx) => {
+            <div
+              ref={segmentGridRef}
+              className="grid grid-cols-2 gap-1.5 max-h-52 overflow-y-auto overflow-x-hidden pr-1 scrollbar-thin"
+            >
+              {task.segments.map((seg) => {
                 const segTotal = seg.totalBytes || Math.round(task.sizeBytes / (task.segments.length || 8));
                 const segDownloaded = seg.downloadedBytes || Math.round(seg.progress * segTotal);
                 return (
                   <SegmentCard
                     key={seg.id}
                     seg={seg}
-                    index={idx}
                     segTotal={segTotal}
                     segDownloaded={segDownloaded}
                     isActive={seg.active && seg.progress < 1}
+                    highlighted={activeHoverId === seg.id}
+                    onHoverChange={handleCardHover}
                     t={t}
                   />
                 );

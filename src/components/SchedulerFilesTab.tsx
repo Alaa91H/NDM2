@@ -16,6 +16,7 @@ import { ContextMenu } from './primitives/ContextMenu';
 import { useDialogActions, useI18n } from '../store/selectors';
 import { formatBytes } from '../initialData';
 import { taskProgressInfo } from '../utils/progressUtils';
+import { TaskProgressBar } from './primitives/TaskProgressBar';
 
 const QUEUE_TASK_DRAG_TYPE = 'application/x-nova-queue-task';
 
@@ -247,10 +248,17 @@ export const SchedulerFilesTab: React.FC<SchedulerFilesTabProps> = ({
                       {task.name}
                     </span>
                     <span className="text-[10px] text-[var(--text-muted)] block font-mono font-semibold truncate">
-                      {progress.indeterminate
-                        ? t('sched_size_progress', { size: sizeLabel, percent: '…' }).replace('%', '')
-                        : t('sched_size_progress', { size: sizeLabel, percent: progress.percent })}
+                      {sizeLabel}
                     </span>
+                    {/* Shared smooth bar — same indeterminate → percent cross-fade
+                        as the table/cards/dialogs so every surface is consistent. */}
+                    <TaskProgressBar
+                      progress={progress}
+                      active={task.status === 'downloading'}
+                      trackClass="h-1"
+                      labelClass="text-[9px] font-mono font-semibold text-[var(--text-muted)]"
+                      gapClass="gap-1.5"
+                    />
                   </div>
                 </div>
 
