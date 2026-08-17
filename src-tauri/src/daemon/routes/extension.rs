@@ -18,7 +18,7 @@ use crate::daemon::state::SharedState;
 use crate::daemon::types::CreateDownloadBody;
 use crate::daemon::ytdlp::create_ytdlp_task;
 
-use super::common::{header_string, header_u64, hidden_output_timed, PROBE_USER_AGENT};
+use super::common::hidden_output_timed;
 use super::engine::extension_capabilities_from_status;
 
 use serde_json::json;
@@ -918,18 +918,12 @@ pub async fn handle_v1_analyze(
     }
 
     let context = body.get("context").cloned().unwrap_or_else(|| json!({}));
-    let _page_url = context
-        .get("pageUrl")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let _referrer = context
-        .get("referrer")
-        .or_else(|| context.get("title"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
 
-    // Stage 1: HTTP HEAD probe
-    let http_meta = http_probe_for_analyze(&state, &url).await;
+    // Stage 1: use the same staged HTTP probe as direct downloads. A bare
+    // HEAD request cannot resolve many production links (range-only servers,
+    // meta-refresh interstitials, SourceForge/GitHub-style pages) and loses
+    // the browser referer needed by hotlink-protected hosts.
+    let http_meta = http_probe_for_analyze(&state, &url, &context).await;
 
     // Stage 2: yt-dlp probe (for video/audio URLs)
     let ytdlp_result = ytdlp_probe_for_analyze(&state, &url).await;
@@ -1185,7 +1179,7 @@ pub async fn handle_v1_analyze_progress(
         yield_event!(json!({"stage": "http.probing", "url": &url}));
 
         let http_meta = tokio::select! {
-            result = http_probe_for_analyze(&state, &url) => result,
+            result = http_probe_for_analyze(&state, &url, &_context) => result,
             () = cancel.cancelled() => None,
         };
         if let Some(ref meta) = http_meta {
@@ -1223,39 +1217,47 @@ pub async fn handle_v1_analyze_progress(
     )
 }
 
-async fn http_probe_for_analyze(state: &SharedState, url: &str) -> Option<serde_json::Value> {
-    let client = state.http_client.clone();
-    let url2 = url.to_owned();
-    let result = tokio::time::timeout(Duration::from_secs(10), async {
-        let resp = client
-            .head(&url2)
-            .header("User-Agent", PROBE_USER_AGENT)
-            .send()
-            .await
-            .ok()?;
-        let headers = resp.headers().clone();
-        let status = resp.status().as_u16();
-        let content_type = header_string(&headers, "content-type");
-        let content_length = header_u64(&headers, "content-length");
-        let accept_ranges = header_string(&headers, "accept-ranges");
+fn analyze_probe_body(url: &str, context: &serde_json::Value) -> CreateDownloadBody {
+    let referer = context
+        .get("referrer")
+        .or_else(|| context.get("pageUrl"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    CreateDownloadBody {
+        url: Some(url.to_owned()),
+        name: None,
+        file_type: None,
+        size_bytes: None,
+        category: None,
+        queue_id: None,
+        connections: None,
+        resumable: None,
+        save_path: None,
+        description: None,
+        referer,
+        start_immediately: Some(false),
+        direct_options: None,
+        media_options: None,
+    }
+}
 
-        let mut meta = serde_json::Map::new();
-        meta.insert("status".to_owned(), json!(status));
-        meta.insert("contentType".to_owned(), json!(content_type));
-        if content_length > 0 {
-            meta.insert("sizeBytes".to_owned(), json!(content_length));
+async fn http_probe_for_analyze(
+    state: &SharedState,
+    url: &str,
+    context: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    let probe_body = analyze_probe_body(url, context);
+    match super::probes::probe_url_with_options(state, url, Some(&probe_body)).await {
+        Ok(Json(payload)) => Some(payload),
+        Err((status, Json(error))) => {
+            log::debug!(
+                "extension analyze HTTP probe failed for {url}: status={status} error={error}"
+            );
+            None
         }
-        meta.insert(
-            "acceptRanges".to_owned(),
-            json!(accept_ranges.eq_ignore_ascii_case("bytes")),
-        );
-        Some(serde_json::Value::Object(meta))
-    })
-    .await
-    .ok()
-    .flatten();
-
-    result
+    }
 }
 
 async fn ytdlp_probe_for_analyze(state: &SharedState, url: &str) -> Option<serde_json::Value> {
@@ -1320,6 +1322,36 @@ fn content_type_to_ext(content_type: &str) -> &str {
                 "bin"
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::analyze_probe_body;
+
+    #[test]
+    fn analyze_probe_body_preserves_explicit_referrer_then_page_url() {
+        let url = "https://cdn.example.test/file.zip";
+        let with_referrer = analyze_probe_body(
+            url,
+            &serde_json::json!({
+                "pageUrl": "https://page.example.test/download",
+                "referrer": "https://referrer.example.test/source"
+            }),
+        );
+        assert_eq!(
+            with_referrer.referer.as_deref(),
+            Some("https://referrer.example.test/source")
+        );
+
+        let with_page_url = analyze_probe_body(
+            url,
+            &serde_json::json!({"pageUrl": "https://page.example.test/download"}),
+        );
+        assert_eq!(
+            with_page_url.referer.as_deref(),
+            Some("https://page.example.test/download")
+        );
     }
 }
 

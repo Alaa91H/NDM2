@@ -309,6 +309,37 @@ fn merge_parts(output_path: &Path, ranges: &[ByteRange]) -> Result<u64, String> 
     FileWriter::merge_parts(output_path, ranges)
 }
 
+/// Verify the complete on-disk output against a SHA-256 digest supplied by
+/// the server or caller. A per-handle streaming digest cannot be authoritative:
+/// segmented transfers hash independent ranges, and resumed transfers omit the
+/// already-present prefix. The merged output file is the only complete source
+/// of truth for integrity verification.
+fn verify_output_sha256(output_path: &Path, expected_raw: &str) -> Result<String, String> {
+    use crate::daemon::engine::checksum::{compute_checksum, ChecksumAlgorithm};
+
+    let actual_hex = compute_checksum(output_path, &ChecksumAlgorithm::Sha256)
+        .map_err(|e| format!("Could not calculate SHA-256 for completed output: {e}"))?;
+    let expected_value = expected_raw.trim().trim_matches(':');
+    // A 64-character hexadecimal SHA-256 is also syntactically valid Base64.
+    // Recognize it first; otherwise a hex digest would be decoded as Base64 and
+    // transformed into an unrelated, longer byte sequence.
+    let expected_hex = if expected_value.len() == 64
+        && expected_value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        expected_value.to_ascii_lowercase()
+    } else if let Some(bytes) = crate::daemon::utils::base64_decode(expected_value) {
+        bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
+    } else {
+        expected_value.to_owned()
+    };
+    if !actual_hex.eq_ignore_ascii_case(&expected_hex) {
+        return Err(format!(
+            "Content-Digest verification failed: expected sha-256={expected_hex}, got {actual_hex}"
+        ));
+    }
+    Ok(actual_hex)
+}
+
 fn resolve_effective_target(plan: &DirectDownloadPlan) -> (String, bool, PreflightData) {
     log::info!(
         "resolve_effective_target: url={}, total_size={}, preflight_resolved={}",
@@ -2274,38 +2305,16 @@ fn run_libcurl_download(
                 // response headers) — never merely assumed from config.
                 validate_transfer_size(plan.total_size, outcome.content_encoded, size)?;
                 if let Some(ref expected_raw) = plan.digest_sha256 {
-                    let actual_hex = streaming_digest_out
-                        .lock()
-                        .ok()
-                        .and_then(|s| s.clone())
-                        .or_else(|| {
-                            use crate::daemon::engine::checksum::{
-                                compute_checksum, ChecksumAlgorithm,
-                            };
-                            compute_checksum(&plan.output_path, &ChecksumAlgorithm::Sha256).ok()
-                        });
-                    if let Some(actual_hex) = actual_hex {
-                        let expected_hex = if let Some(bytes) =
-                            crate::daemon::utils::base64_decode(expected_raw.trim_matches(':'))
-                        {
-                            bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
-                        } else {
-                            expected_raw.clone()
-                        };
-                        if actual_hex != expected_hex.to_lowercase() {
-                            log::warn!(
-                                "Task {id}: Content-Digest mismatch (expected {expected_hex}, got {actual_hex})"
-                            );
-                            return Err(format!(
-                                "Content-Digest verification failed: expected sha-256={expected_hex}, got {actual_hex}"
-                            ));
-                        }
-                        log::info!(
-                            "Task {}: Content-Digest verified (sha-256={})",
-                            id,
-                            &actual_hex[..16]
-                        );
-                    }
+                    let actual_hex = verify_output_sha256(&plan.output_path, expected_raw)
+                        .map_err(|error| {
+                            log::warn!("Task {id}: {error}");
+                            error
+                        })?;
+                    log::info!(
+                        "Task {}: Content-Digest verified from complete output (sha-256={})",
+                        id,
+                        &actual_hex[..16]
+                    );
                 }
                 if cancel.load(Ordering::Acquire) {
                     return Err("cancelled".to_owned());
@@ -2987,25 +2996,18 @@ fn auto_rename_path(original: &std::path::Path) -> Option<std::path::PathBuf> {
     let stem = original.file_stem()?.to_str()?;
     let ext = original.extension().and_then(|e| e.to_str());
 
-    // Try atomic file creation to eliminate TOCTOU race with concurrent tasks.
+    // Keep the zero-byte file created with `create_new` as the reservation.
+    // Deleting it before the transfer opens its output would reintroduce the
+    // very TOCTOU race this helper is meant to prevent: another task could
+    // claim the same name in that gap. The download writer safely reuses this
+    // empty reservation and starts from offset zero.
     let try_claim = |candidate: &std::path::PathBuf| -> bool {
-        match std::fs::OpenOptions::new()
+        std::fs::OpenOptions::new()
             .create_new(true)
             .write(true)
             .open(candidate)
-        {
-            Ok(f) => {
-                drop(f);
-                if let Err(e) = std::fs::remove_file(candidate) {
-                    log::warn!(
-                        "auto_rename_path: failed to remove placeholder file {}: {e}",
-                        candidate.display()
-                    );
-                }
-                true
-            }
-            Err(_) => false,
-        }
+            .map(drop)
+            .is_ok()
     };
 
     for counter in 1u32..=9999 {
@@ -3019,23 +3021,90 @@ fn auto_rename_path(original: &std::path::Path) -> Option<std::path::PathBuf> {
             return Some(candidate);
         }
     }
-    // Exhausted the counter; append a timestamp + pid as a last resort.
+    // Exhausted the friendly counter. Preserve the atomic claim invariant
+    // even in this rare path; never return a path that this task failed to
+    // reserve. Nanoseconds + PID make a collision unlikely, and the suffix
+    // loop makes it deterministic if one still occurs.
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    let new_stem = format!("{}_{}_{}", stem, ts, std::process::id());
-    let new_name = match ext {
-        Some(e) => format!("{new_stem}.{e}"),
-        None => new_stem,
-    };
-    let candidate = parent.join(&new_name);
-    let _ = try_claim(&candidate);
-    Some(candidate)
+        .map_or(0, |d| d.as_nanos());
+    for suffix in 0u32..=9999 {
+        let new_stem = format!("{}_{}_{}_{}", stem, ts, std::process::id(), suffix);
+        let new_name = match ext {
+            Some(e) => format!("{new_stem}.{e}"),
+            None => new_stem,
+        };
+        let candidate = parent.join(&new_name);
+        if try_claim(&candidate) {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_rename_reserves_distinct_output_names_until_the_writer_opens_them() {
+        let dir = std::env::temp_dir().join(format!(
+            "nova_auto_rename_reservation_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let original = dir.join("asset.zip");
+        std::fs::write(&original, b"existing").unwrap();
+
+        let first = auto_rename_path(&original).expect("first conflict name must reserve");
+        let second = auto_rename_path(&original).expect("second conflict name must reserve");
+        assert_ne!(
+            first, second,
+            "two tasks must not receive the same output path"
+        );
+        assert!(first.exists(), "first reservation must remain held");
+        assert!(second.exists(), "second reservation must remain held");
+        assert_eq!(std::fs::metadata(&first).unwrap().len(), 0);
+        assert_eq!(std::fs::metadata(&second).unwrap().len(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn verify_output_sha256_hashes_complete_output_not_a_single_segment() {
+        use sha2::Digest;
+
+        let dir = std::env::temp_dir().join(format!(
+            "nova_complete_digest_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let output = dir.join("merged.bin");
+        let first_segment = b"first-segment-";
+        let final_segment = b"final-segment";
+        let complete_content = [first_segment.as_slice(), final_segment.as_slice()].concat();
+        std::fs::write(&output, &complete_content).unwrap();
+
+        let whole_digest = format!("{:x}", sha2::Sha256::digest(&complete_content));
+        let final_segment_digest = format!("{:x}", sha2::Sha256::digest(final_segment));
+
+        assert_eq!(
+            verify_output_sha256(&output, &whole_digest).unwrap(),
+            whole_digest
+        );
+        assert!(
+            verify_output_sha256(&output, &final_segment_digest).is_err(),
+            "a digest for only the last segment must never validate the merged output"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn preflight_data_defaults() {
