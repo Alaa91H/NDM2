@@ -8,12 +8,12 @@ use ::curl::easy::Easy2;
 use ::curl::multi::Easy2Handle;
 
 use super::{
-    apply_easy_options, create_easy_for_range_ext, drive_multi_socket, drive_multi_wait_perform,
-    requested_connections, CurlMultiGuard, CurlTransferConfig, DirectDownloadPlan, HtmlHeadCapture,
-    ResponseCapture, SegmentProgress,
+    apply_easy_options, create_easy_for_range_ext, drive_multi_wait_perform, requested_connections,
+    CurlMultiGuard, CurlTransferConfig, DirectDownloadPlan, HtmlHeadCapture, ResponseCapture,
+    SegmentProgress,
 };
 use crate::daemon::direct::{
-    EventLoopMode, FileWriter, IntegrityMetadata, IntegrityValidator, RetryPolicy, SegmentPlanner,
+    FileWriter, IntegrityMetadata, IntegrityValidator, RetryPolicy, SegmentPlanner,
     SegmentRange as ByteRange,
 };
 
@@ -880,12 +880,6 @@ fn run_single_libcurl(
     let easy = create_easy_for_range_ext(plan, &plan.output_path, progress, None, task_limit_bps)?;
     let mut guard = CurlMultiGuard::new();
     guard.configure_limits(global_config().connection_limits_for(1, &plan.url))?;
-    let mut socket_runtime = if matches!(plan.config.event_loop_mode(), EventLoopMode::MultiSocket)
-    {
-        Some(guard.attach_socket_runtime()?)
-    } else {
-        None
-    };
     let handle = guard.add2(easy)?;
     let handles = vec![handle];
     // Live rate-limit tracking (M6): remember what cap is currently applied to
@@ -1029,26 +1023,17 @@ fn run_single_libcurl(
         }
     };
     log::info!("Task {id}: starting curl multi drive loop (on_disk_before={on_disk_before})");
-    if let Some(runtime) = socket_runtime.as_mut() {
-        drive_multi_socket(
-            guard.multi()?,
-            runtime,
-            &handles,
-            &cancel,
-            "transfer",
-            &mut tick,
-            state.bandwidth_manager.paused_flag(),
-        )?;
-    } else {
-        drive_multi_wait_perform(
-            guard.multi()?,
-            &handles,
-            &cancel,
-            "transfer",
-            &mut tick,
-            state.bandwidth_manager.paused_flag(),
-        )?;
-    }
+    // Use libcurl's wait/perform driver for every configured event-loop mode.
+    // It is the verified path for real transfers and invokes bounded progress
+    // ticks while the request is active.
+    drive_multi_wait_perform(
+        guard.multi()?,
+        &handles,
+        &cancel,
+        "transfer",
+        &mut tick,
+        state.bandwidth_manager.paused_flag(),
+    )?;
     let response = handles[0]
         .response_code()
         .map_err(|e| format!("Could not read HTTP response code: {e}"))?;
@@ -1367,12 +1352,6 @@ fn run_segmented_libcurl(
         .multi()?
         .pipelining(false, true)
         .map_err(|e| format!("Could not enable libcurl multiplexing: {e}"))?;
-    let mut socket_runtime = if matches!(plan.config.event_loop_mode(), EventLoopMode::MultiSocket)
-    {
-        Some(guard.attach_socket_runtime()?)
-    } else {
-        None
-    };
 
     let mut handles = Vec::new();
     let mut seg_captures: Vec<Arc<Mutex<ResponseCapture>>> = Vec::new();
@@ -1728,26 +1707,14 @@ fn run_segmented_libcurl(
     // Phase 5 outer drive loop: drive until completion, rebuilding the easy
     // handles whenever the adaptive engine changes the segment geometry.
     'drive: loop {
-        let result = if let Some(runtime) = socket_runtime.as_mut() {
-            drive_multi_socket(
-                guard.multi()?,
-                runtime,
-                &handles_cell.borrow(),
-                &cancel,
-                "segment",
-                &mut tick,
-                state.bandwidth_manager.paused_flag(),
-            )
-        } else {
-            drive_multi_wait_perform(
-                guard.multi()?,
-                &handles_cell.borrow(),
-                &cancel,
-                "segment",
-                &mut tick,
-                state.bandwidth_manager.paused_flag(),
-            )
-        };
+        let result = drive_multi_wait_perform(
+            guard.multi()?,
+            &handles_cell.borrow(),
+            &cancel,
+            "segment",
+            &mut tick,
+            state.bandwidth_manager.paused_flag(),
+        );
         // If the drive loop finished because the engine requested a rebuild
         // (not because transfers completed), rebuild and continue.
         if !pending_rebuild.get() {

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::daemon::direct::{EventLoopMode, RetryPolicy};
+use crate::daemon::direct::RetryPolicy;
 
 fn opt_str(map: &HashMap<String, Value>, key: &str) -> Option<String> {
     map.get(key)
@@ -363,19 +363,6 @@ impl CurlTransferConfig {
                 }
             }
             _ => None,
-        }
-    }
-
-    pub fn event_loop_mode(&self) -> EventLoopMode {
-        match self
-            .event_loop
-            .as_deref()
-            .unwrap_or_default()
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "wait_perform" | "waitperform" | "wait" | "perform" => EventLoopMode::WaitPerform,
-            _ => EventLoopMode::MultiSocket,
         }
     }
 
@@ -834,14 +821,6 @@ mod tests {
         assert_eq!(config.u64_("timeoutSec"), Some(42));
         assert_eq!(config.u64_("maxRedirs"), Some(10));
         assert_eq!(config.u64_("nonexistent"), None);
-    }
-
-    #[test]
-    fn config_event_loop_mode() {
-        let mut config = CurlTransferConfig::new();
-        assert_eq!(config.event_loop_mode(), EventLoopMode::MultiSocket);
-        config.event_loop = Some("waitPerform".to_string());
-        assert_eq!(config.event_loop_mode(), EventLoopMode::WaitPerform);
     }
 
     #[test]

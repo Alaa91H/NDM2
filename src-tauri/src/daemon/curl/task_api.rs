@@ -707,7 +707,8 @@ impl Extractor for CurlExtractor {
 #[cfg(test)]
 mod tests {
     use crate::daemon::curl::{
-        build_curl_args, destination_from_body, drive_multi_socket, split_ranges, CurlMultiGuard,
+        build_curl_args, destination_from_body, drive_multi_wait_perform, split_ranges,
+        CurlMultiGuard,
     };
     use crate::daemon::types::CreateDownloadBody;
     use ::curl::easy::Easy2;
@@ -846,7 +847,7 @@ mod tests {
     }
 
     #[test]
-    fn multi_socket_runtime_downloads_local_response() {
+    fn multi_wait_perform_downloads_local_response() {
         let expected = b"hello multi_socket".to_vec();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
@@ -874,14 +875,12 @@ mod tests {
         easy.get(true).unwrap();
 
         let mut guard = CurlMultiGuard::new();
-        let mut runtime = guard.attach_socket_runtime().unwrap();
         let handle = guard.add2(easy).unwrap();
         let handles = vec![handle];
         let cancel = AtomicBool::new(false);
 
-        drive_multi_socket(
+        drive_multi_wait_perform(
             guard.multi().unwrap(),
-            &mut runtime,
             &handles,
             &cancel,
             "transfer",
