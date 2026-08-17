@@ -52,6 +52,41 @@ pub async fn handle_list_downloads(State(state): State<SharedState>) -> Json<Vec
     Json(list_all_tasks(&state).await)
 }
 
+/// Produce a stable in-memory fingerprint for every task field that clients
+/// need to observe during a running download. Progress alone is insufficient:
+/// background resolution can update the real URL/name/size before the first
+/// bytes arrive, and segment-level state is rendered by the live-progress UI.
+fn task_event_fingerprint(task: &Task) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    task.status.hash(&mut hasher);
+    task.name.hash(&mut hasher);
+    task.url.hash(&mut hasher);
+    task.file_type.hash(&mut hasher);
+    task.downloaded_bytes.hash(&mut hasher);
+    task.speed_bytes_per_sec.hash(&mut hasher);
+    task.time_left_seconds.hash(&mut hasher);
+    task.elapsed_seconds.hash(&mut hasher);
+    task.size_bytes.hash(&mut hasher);
+    task.connections.hash(&mut hasher);
+    task.resumable.hash(&mut hasher);
+    task.save_path.hash(&mut hasher);
+    task.engine_status.hash(&mut hasher);
+    task.error_message.hash(&mut hasher);
+    for segment in &task.segments {
+        segment.id.hash(&mut hasher);
+        segment.progress.to_bits().hash(&mut hasher);
+        segment.downloaded_bytes.hash(&mut hasher);
+        segment.total_bytes.hash(&mut hasher);
+        segment.active.hash(&mut hasher);
+        segment.speed.hash(&mut hasher);
+        segment.start_byte.hash(&mut hasher);
+        segment.end_byte.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 pub async fn handle_download_events(
     State(state): State<SharedState>,
 ) -> Sse<impl futures_core::Stream<Item = Result<Event, Infallible>>> {
@@ -81,24 +116,13 @@ pub async fn handle_download_events(
             let mut changed_tasks: Vec<serde_json::Value> = Vec::new();
             let mut removed_ids: Vec<String> = Vec::new();
 
-            // Build fingerprint hash for each task using the fields that change
-            // during download. A u64 hash avoids String allocation and comparison.
-            let mut current_ids: std::collections::HashSet<&String> = std::collections::HashSet::new();
-            for task in &tasks {
-                current_ids.insert(&task.id);
-                let fingerprint = {
-                    let mut hasher: std::collections::hash_map::DefaultHasher =
-                        std::collections::hash_map::DefaultHasher::new();
-                    use std::hash::{Hash, Hasher};
-                    task.status.hash(&mut hasher);
-                    task.downloaded_bytes.hash(&mut hasher);
-                    task.speed_bytes_per_sec.hash(&mut hasher);
-                    task.time_left_seconds.hash(&mut hasher);
-                    task.size_bytes.hash(&mut hasher);
-                    task.connections.hash(&mut hasher);
-                    task.error_message.hash(&mut hasher);
-                    hasher.finish()
-                };
+                // Build a compact fingerprint for all client-visible mutable
+                // task fields so background analysis and segment updates are sent
+                // on the next 250 ms tick rather than delayed until full sync.
+                let mut current_ids: std::collections::HashSet<&String> = std::collections::HashSet::new();
+                for task in &tasks {
+                    current_ids.insert(&task.id);
+                    let fingerprint = task_event_fingerprint(task);
 
                 let changed = match last_snapshots.get(&task.id) {
                     Some(prev) => *prev != fingerprint,
@@ -1047,7 +1071,68 @@ pub fn register_routes(router: Router<SharedState>) -> Router<SharedState> {
 
 #[cfg(test)]
 mod tests {
-    use super::has_recognizable_extension;
+    use super::{has_recognizable_extension, task_event_fingerprint};
+    use crate::daemon::types::{Segment, Task};
+
+    fn sample_task() -> Task {
+        Task {
+            id: "task-1".to_owned(),
+            name: "pending.bin".to_owned(),
+            url: "https://example.test/pending".to_owned(),
+            file_type: "other".to_owned(),
+            status: "downloading".to_owned(),
+            size_bytes: 0,
+            downloaded_bytes: 0,
+            speed_bytes_per_sec: 0,
+            time_left_seconds: 0,
+            elapsed_seconds: 0,
+            date_added: "2026-01-01T00:00:00Z".to_owned(),
+            category: "other".to_owned(),
+            queue_id: "main".to_owned(),
+            connections: 2,
+            resumable: false,
+            save_path: "/tmp/pending.bin".to_owned(),
+            description: "test".to_owned(),
+            segments: vec![Segment {
+                id: 0,
+                progress: 0.0,
+                downloaded_bytes: 0,
+                total_bytes: 0,
+                active: true,
+                speed: 0,
+                start_byte: 0,
+                end_byte: 0,
+            }],
+            referer: None,
+            engine: "libcurl-multi".to_owned(),
+            engine_id: "task-1".to_owned(),
+            engine_status: Some("starting".to_owned()),
+            error_message: None,
+        }
+    }
+
+    #[test]
+    fn event_fingerprint_changes_for_background_metadata_and_segment_updates() {
+        let original = sample_task();
+        let baseline = task_event_fingerprint(&original);
+
+        let mut enriched = original.clone();
+        enriched.name = "real-file.zip".to_owned();
+        enriched.url = "https://cdn.example.test/real-file.zip".to_owned();
+        enriched.save_path = "/tmp/real-file.zip".to_owned();
+        enriched.size_bytes = 100;
+        enriched.resumable = true;
+        enriched.engine_status = Some("running-libcurl-multi".to_owned());
+        enriched.segments[0].downloaded_bytes = 50;
+        enriched.segments[0].total_bytes = 100;
+        enriched.segments[0].progress = 0.5;
+
+        assert_ne!(
+            baseline,
+            task_event_fingerprint(&enriched),
+            "SSE must emit metadata and segment changes immediately"
+        );
+    }
 
     #[test]
     fn recognizable_extensions_take_the_fast_path() {

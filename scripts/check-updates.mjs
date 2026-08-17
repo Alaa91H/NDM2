@@ -13,7 +13,6 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
-const CARGO_MANIFEST = path.join(ROOT, 'src-tauri', 'Cargo.toml');
 
 function run(cmd, cwd = ROOT) {
   try {
@@ -46,7 +45,7 @@ if (cargoInstalled.toLowerCase().includes('cargo-outdated')) {
 console.log('\n=== Cargo Security Audit ===');
 const cargoAuditInstalled = run('cargo audit --version');
 if (cargoAuditInstalled.toLowerCase().includes('cargo-audit')) {
-  const audit = run(`cargo audit --file ${CARGO_MANIFEST} 2>&1`);
+  const audit = run('cargo audit --manifest-path src-tauri/Cargo.toml');
   console.log(audit || 'No vulnerabilities found.');
 } else {
   console.log('cargo-audit not installed. Run: cargo install cargo-audit');

@@ -75,7 +75,7 @@
   },
   "dependencies": {
     "@wxt-dev/module-react": "^1.2.2",
-    "dexie": "^4.4.4",
+    "dexie": "^4.4.5",
     "m3u8-parser": "^7.2.0",
     "mpd-parser": "^1.4.0",
     "react": "^19.2.7",
@@ -92,9 +92,10 @@
     "@types/webextension-polyfill": "^0.12.5",
     "@typescript-eslint/eslint-plugin": "^8.66.0",
     "@typescript-eslint/parser": "^8.66.0",
+    "@typescript/native": "npm:typescript@^7.0.2",
     "@vitest/coverage-v8": "^4.1.10",
     "cross-env": "^10.1.0",
-    "eslint": "^10.6.0",
+    "eslint": "^10.8.1",
     "eslint-config-prettier": "^10.1.8",
     "fake-indexeddb": "^6.2.5",
     "globals": "^17.9.0",
@@ -103,7 +104,6 @@
     "rollup": "^4.62.4",
     "tsx": "^4.23.5",
     "typescript": "npm:@typescript/typescript6@^6.0.2",
-    "@typescript/native": "npm:typescript@^7.0.2",
     "vitest": "^4.1.10",
     "wxt": "^0.21.3"
   },

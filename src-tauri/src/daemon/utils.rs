@@ -909,23 +909,17 @@ pub fn decode_html_entities(s: &str) -> String {
 }
 
 /// Resolve a meta-refresh redirect URL relative to the page URL if needed.
+///
+/// Use the RFC 3986 resolver instead of joining strings: `/path` is host-rooted,
+/// `../path` traverses directories, and query- or fragment-only references retain
+/// the current resource path. If the page URL is malformed, preserve the parsed
+/// refresh target rather than fabricating a possibly incorrect destination.
 pub fn refreshed_url(refresh: String, page_url: &str) -> String {
-    if refresh.starts_with("http://") || refresh.starts_with("https://") {
-        return refresh;
-    }
-    // Find the authority+path portion after "scheme://"
-    if let Some(scheme_end) = page_url.find("://") {
-        let authority_path = &page_url[scheme_end + 3..];
-        // Get the directory portion of the path (everything up to last /)
-        let base_dir = if let Some(pos) = authority_path.rfind('/') {
-            &page_url[..=(scheme_end + 3 + pos)]
-        } else {
-            page_url
-        };
-        let clean_refresh = refresh.trim_start_matches('/');
-        return format!("{}/{}", base_dir.trim_end_matches('/'), clean_refresh);
-    }
-    refresh
+    reqwest::Url::parse(page_url)
+        .ok()
+        .and_then(|base| base.join(&refresh).ok())
+        .map(|resolved| resolved.to_string())
+        .unwrap_or(refresh)
 }
 
 /// Extract candidate direct download URLs from an HTML page. Many download
@@ -2292,12 +2286,27 @@ mod tests {
     }
 
     #[test]
-    fn refreshed_url_leading_slash() {
-        // Leading-slash paths are joined relative to the base directory, not root.
-        // "dl/" + "file.zip" => "dl/file.zip"
+    fn refreshed_url_leading_slash_is_host_rooted() {
         assert_eq!(
             refreshed_url("/file.zip".into(), "https://example.com/dl/page"),
-            "https://example.com/dl/file.zip"
+            "https://example.com/file.zip"
+        );
+    }
+
+    #[test]
+    fn refreshed_url_resolves_parent_directory_query_and_fragment_references() {
+        let page = "https://example.com/dl/releases/page.html?old=1";
+        assert_eq!(
+            refreshed_url("../files/app.zip".into(), page),
+            "https://example.com/dl/files/app.zip"
+        );
+        assert_eq!(
+            refreshed_url("?token=next".into(), page),
+            "https://example.com/dl/releases/page.html?token=next"
+        );
+        assert_eq!(
+            refreshed_url("#download".into(), page),
+            "https://example.com/dl/releases/page.html?old=1#download"
         );
     }
 

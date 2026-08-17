@@ -265,6 +265,11 @@ fn probe_payload_from_cache(cached: &CachedMetadata) -> serde_json::Value {
         .get("linkMirrors")
         .and_then(|v| serde_json::from_str::<Vec<String>>(v).ok())
         .unwrap_or_default();
+    let mirror_priorities: Vec<u64> = cached
+        .headers
+        .get("mirrorPriorities")
+        .and_then(|v| serde_json::from_str::<Vec<u64>>(v).ok())
+        .unwrap_or_default();
     serde_json::json!({
         "url": cached.url,
         "finalUrl": final_url,
@@ -279,7 +284,9 @@ fn probe_payload_from_cache(cached: &CachedMetadata) -> serde_json::Value {
         "acceptRanges": if cached.accept_ranges { "bytes" } else { "" },
         "etag": cached.etag.clone().unwrap_or_default(),
         "lastModified": cached.last_modified.clone().unwrap_or_default(),
+        "digestSha256": cached.checksum.clone(),
         "linkMirrors": link_mirrors,
+        "mirrorPriorities": mirror_priorities,
         "probeMethod": "metadata-cache"
     })
 }
@@ -310,10 +317,12 @@ fn cache_probe_payload(state: &SharedState, url: &str, payload: &serde_json::Val
     if let Some(final_url) = get_str("finalUrl") {
         headers.insert("finalUrl".to_owned(), final_url);
     }
-    if let Some(mirrors) = payload.get("linkMirrors").and_then(|v| v.as_array()) {
-        if !mirrors.is_empty() {
-            if let Ok(json) = serde_json::to_string(mirrors) {
-                headers.insert("linkMirrors".to_owned(), json);
+    for key in ["linkMirrors", "mirrorPriorities"] {
+        if let Some(values) = payload.get(key).and_then(|v| v.as_array()) {
+            if !values.is_empty() {
+                if let Ok(json) = serde_json::to_string(values) {
+                    headers.insert(key.to_owned(), json);
+                }
             }
         }
     }
@@ -330,7 +339,7 @@ fn cache_probe_payload(state: &SharedState, url: &str, payload: &serde_json::Val
             .get("resumable")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false),
-        checksum: None,
+        checksum: get_str("digestSha256").filter(|v| !v.is_empty()),
         headers,
         cached_at: chrono::Local::now()
             .naive_local()
@@ -362,13 +371,21 @@ pub async fn probe_url_with_options(
 
     // Serve recent probe results from the metadata cache to avoid re-hitting
     // origin servers for the same URL (probe â†’ add-download double request).
-    if let Some(cached) = state.metadata_cache.get(url) {
-        return Ok(Json(probe_payload_from_cache(&cached)));
+    // A cache entry is keyed only by URL. Requests with caller-supplied
+    // cookies, authorization headers, proxy routing or custom user-agent can
+    // legitimately receive different metadata, so only the default public
+    // probe may read or write this shared cache.
+    if body.is_none() {
+        if let Some(cached) = state.metadata_cache.get(url) {
+            return Ok(Json(probe_payload_from_cache(&cached)));
+        }
     }
 
     let result = probe_url_uncached(state, url, body).await;
-    if let Ok(Json(payload)) = &result {
-        cache_probe_payload(state, url, payload);
+    if body.is_none() {
+        if let Ok(Json(payload)) = &result {
+            cache_probe_payload(state, url, payload);
+        }
     }
     result
 }
@@ -707,6 +724,46 @@ async fn probe_url_uncached(
             serde_json::Value::from(format!("fallback-http-{status} {last_error_reason}"));
     }
     Ok(Json(fallback))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::probe_payload_from_cache;
+    use crate::daemon::engine::metadata_cache::CachedMetadata;
+    use std::collections::HashMap;
+
+    #[test]
+    fn cached_probe_preserves_digest_and_mirror_priorities() {
+        let mut headers = HashMap::new();
+        headers.insert(
+            "linkMirrors".to_owned(),
+            r#"["https://mirror-a.example/file.zip","https://mirror-b.example/file.zip"]"#
+                .to_owned(),
+        );
+        headers.insert("mirrorPriorities".to_owned(), "[1,3]".to_owned());
+        let cached = CachedMetadata {
+            url: "https://origin.example/file.zip".to_owned(),
+            filename: "file.zip".to_owned(),
+            content_type: Some("application/zip".to_owned()),
+            content_length: Some(1024),
+            content_range: None,
+            content_disposition: None,
+            etag: Some("\"etag\"".to_owned()),
+            last_modified: None,
+            accept_ranges: true,
+            checksum: Some("a".repeat(64)),
+            headers,
+            cached_at: "2026-08-17 00:00:00".to_owned(),
+        };
+
+        let payload = probe_payload_from_cache(&cached);
+        assert_eq!(payload["digestSha256"], "a".repeat(64));
+        assert_eq!(
+            payload["linkMirrors"][0],
+            "https://mirror-a.example/file.zip"
+        );
+        assert_eq!(payload["mirrorPriorities"], serde_json::json!([1, 3]));
+    }
 }
 
 pub async fn handle_probe(
