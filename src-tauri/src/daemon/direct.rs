@@ -541,12 +541,6 @@ pub fn record_host_ceiling(url: &str, ceiling: usize) {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EventLoopMode {
-    WaitPerform,
-    MultiSocket,
-}
-
 #[derive(Clone, Debug, Default)]
 pub struct IntegrityMetadata {
     pub expected_size: Option<u64>,

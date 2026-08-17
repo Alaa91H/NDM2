@@ -607,7 +607,7 @@ const AppShellInner: React.FC = () => {
       </div>
 
       <div className="flex-1 flex min-h-0 overflow-hidden relative">
-        {/* 2. Main Workspace Layout � downloads view or a full page (settings / lists) */}
+        {/* 2. Main Workspace Layout — downloads view or a full page (settings / lists) */}
         <div className="flex-1 flex flex-col h-full overflow-hidden">
           {activePage === 'settings' ? (
             <Suspense

@@ -343,7 +343,7 @@ export const MediaDownloadPage: React.FC = () => {
         bitrate: '',
         sizeBytes: 0,
         ext: 'm4a',
-        description: 'AAC � Original Quality',
+        description: 'AAC • Original Quality',
       },
       {
         value: 'flac',
@@ -382,7 +382,7 @@ export const MediaDownloadPage: React.FC = () => {
             bitrate: abr,
             sizeBytes: f.filesize || f.filesizeApprox || 0,
             ext: key,
-            description: `Original Stream${abr ? ` � ${abr}` : ''}`,
+            description: `Original Stream${abr ? ` • ${abr}` : ''}`,
           });
         }
       }
@@ -1064,7 +1064,7 @@ export const MediaDownloadPage: React.FC = () => {
             {isPlaylistUrl && playlistResult && totalSize > 0 && (
               <div className="flex items-center justify-between text-[10px] text-[var(--text-muted)] px-1">
                 <span>
-                  {t('media_per_file')} {selectedFormatSize > 0 ? formatBytes(selectedFormatSize) : '�'}
+                  {t('media_per_file')} {selectedFormatSize > 0 ? formatBytes(selectedFormatSize) : '—'}
                 </span>
                 <span className="text-[var(--info)] font-semibold">
                   {t('media_est_total')} {formatBytes(totalSize)}
@@ -1091,7 +1091,7 @@ export const MediaDownloadPage: React.FC = () => {
               {selectAllPlaylist ? playlistResult.entries.length : selectedPlaylistItems.size}&nbsp;item
               {(selectAllPlaylist ? playlistResult.entries.length : selectedPlaylistItems.size) !== 1 ? 's' : ''}
               {totalSize > 0 && (
-                <span className="text-[var(--info)] ml-1 font-semibold">� {formatBytes(totalSize)}</span>
+                <span className="text-[var(--info)] ml-1 font-semibold">• {formatBytes(totalSize)}</span>
               )}
             </span>
           )}

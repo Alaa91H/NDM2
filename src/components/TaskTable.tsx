@@ -491,7 +491,7 @@ export const TaskTable: React.FC = () => {
                 <Sliders className="w-3.5 h-3.5" />
               </button>
 
-              {/* Column Config Panel � anchored to this button */}
+              {/* Column Config Panel — anchored to this button */}
               {showColConfig && (
                 <div ref={colConfigRef} className="absolute top-full ltr:right-0 rtl:left-0 z-30 mt-1">
                   <ColumnConfigPanel
