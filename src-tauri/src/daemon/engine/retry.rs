@@ -1,4 +1,24 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+
+// Break ties between calls made within the same system-clock tick. The retry
+// path is concurrent, so a monotonic sequence is mixed with time before it is
+// reduced to the jitter range.
+static JITTER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+fn retry_jitter_entropy() -> u128 {
+    let sequence = JITTER_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64;
+    // SplitMix64 finalizer: inexpensive, deterministic mixing with good bit
+    // diffusion for consecutive inputs and no external RNG dependency.
+    let mut value = time ^ sequence.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    u128::from(value ^ (value >> 31))
+}
 
 use super::config::global_config;
 
@@ -60,8 +80,21 @@ impl RetryPolicy {
             return Duration::ZERO;
         }
         let exp = f64::from(attempt - 1);
-        let base = self.base_delay.as_secs_f64() * self.backoff_multiplier.powf(exp);
-        let capped = base.min(self.max_delay.as_secs_f64());
+        // Configuration can be imported or user-edited. Reject non-finite or
+        // non-positive multipliers rather than letting NaN/∞ leak into float
+        // duration conversion and make retry timing unpredictable.
+        let multiplier = if self.backoff_multiplier.is_finite() && self.backoff_multiplier > 0.0 {
+            self.backoff_multiplier
+        } else {
+            1.0
+        };
+        let raw = self.base_delay.as_secs_f64() * multiplier.powf(exp);
+        let max_secs = self.max_delay.as_secs_f64();
+        let capped = if raw.is_finite() {
+            raw.min(max_secs)
+        } else {
+            max_secs
+        };
         if self.jitter {
             // Symmetric jitter: ±12.5% of the capped delay, using integer
             // math on nanoseconds so the modulo is unbiased and never zero
@@ -70,10 +103,7 @@ impl RetryPolicy {
             // the old positive-only bias that made every retry longer.
             let capped_nanos = (capped * 1e9) as u128;
             let half_range = capped_nanos / 8; // ±12.5% → 25% spread
-            let entropy = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos();
+            let entropy = retry_jitter_entropy();
             if half_range > 0 {
                 let offset = (entropy % (half_range * 2 + 1)) as i128 - half_range as i128;
                 let jittered = (capped_nanos as i128 + offset).max(0) as u128;
@@ -96,8 +126,8 @@ impl RetryPolicy {
         let lower = error.to_ascii_lowercase();
         if lower.contains("timeout") || lower.contains("timed out") {
             Self {
-                base_delay: self.base_delay * 2,
-                max_delay: self.max_delay * 3 / 2,
+                base_delay: self.base_delay.saturating_mul(2),
+                max_delay: self.max_delay.saturating_mul(3) / 2,
                 ..self.clone()
             }
         } else if lower.contains("connection refused") || lower.contains("connection reset") {
@@ -109,15 +139,15 @@ impl RetryPolicy {
             }
         } else if lower.contains("429") || lower.contains("too many requests") {
             Self {
-                base_delay: self.base_delay * 3,
-                max_delay: self.max_delay * 2,
+                base_delay: self.base_delay.saturating_mul(3),
+                max_delay: self.max_delay.saturating_mul(2),
                 ..self.clone()
             }
         } else if lower.contains("503") || lower.contains("service unavailable") {
             Self {
-                base_delay: self.base_delay * 2,
-                max_delay: self.max_delay * 2,
-                max_retries: self.max_retries + 5,
+                base_delay: self.base_delay.saturating_mul(2),
+                max_delay: self.max_delay.saturating_mul(2),
+                max_retries: self.max_retries.saturating_add(5),
                 ..self.clone()
             }
         } else {
@@ -139,8 +169,8 @@ impl RetryState {
     }
 
     pub fn record_failure(&mut self, error: String) {
-        self.attempt += 1;
-        self.total_retries += 1;
+        self.attempt = self.attempt.saturating_add(1);
+        self.total_retries = self.total_retries.saturating_add(1);
         self.last_error = Some(error);
     }
 
@@ -430,6 +460,41 @@ mod tests {
         let policy = RetryPolicy::default();
         let adapted = policy.adapt_for_error("HTTP 503 Service Unavailable");
         assert!(adapted.max_retries > policy.max_retries);
+    }
+
+    #[test]
+    fn retry_policy_handles_invalid_backoff_and_saturates_error_adaptation() {
+        let invalid = RetryPolicy {
+            backoff_multiplier: f64::NAN,
+            base_delay: Duration::from_secs(2),
+            max_delay: Duration::from_secs(10),
+            jitter: false,
+            ..RetryPolicy::default()
+        };
+        assert_eq!(invalid.delay_for_attempt(2), Duration::from_secs(2));
+
+        let maximal = RetryPolicy {
+            max_retries: u32::MAX,
+            base_delay: Duration::MAX,
+            max_delay: Duration::MAX,
+            ..RetryPolicy::default()
+        };
+        let adapted = maximal.adapt_for_error("HTTP 503 Service Unavailable");
+        assert_eq!(adapted.max_retries, u32::MAX);
+        assert_eq!(adapted.base_delay, Duration::MAX);
+        assert_eq!(adapted.max_delay, Duration::MAX);
+    }
+
+    #[test]
+    fn retry_state_counters_saturate() {
+        let mut state = RetryState {
+            attempt: u32::MAX,
+            total_retries: u32::MAX,
+            last_error: None,
+        };
+        state.record_failure("overflow-safe".to_owned());
+        assert_eq!(state.attempt, u32::MAX);
+        assert_eq!(state.total_retries, u32::MAX);
     }
 
     #[test]
