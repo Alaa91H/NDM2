@@ -321,46 +321,11 @@ impl ResourceMonitor {
 
     #[cfg(not(target_os = "windows"))]
     fn sample_memory_fallback(&mut self) {
-        // M8: real readings on Linux via /proc/meminfo; macOS falls back to
-        // a sane estimate instead of a hardcoded constant.
-        #[cfg(target_os = "linux")]
-        {
-            if let Ok(content) = std::fs::read_to_string("/proc/meminfo") {
-                let mut mem_total_kb = 0u64;
-                let mut mem_avail_kb = 0u64;
-                for line in content.lines() {
-                    if let Some(rest) = line.strip_prefix("MemTotal:") {
-                        mem_total_kb = rest
-                            .split_whitespace()
-                            .next()
-                            .and_then(|v| v.parse().ok())
-                            .unwrap_or(0);
-                    } else if let Some(rest) = line.strip_prefix("MemAvailable:") {
-                        mem_avail_kb = rest
-                            .split_whitespace()
-                            .next()
-                            .and_then(|v| v.parse().ok())
-                            .unwrap_or(0);
-                    }
-                }
-                if mem_avail_kb > 0 {
-                    self.available_memory_mb = mem_avail_kb / 1024;
-                    return;
-                }
-                if mem_total_kb > 0 {
-                    // MemAvailable missing (old kernels): estimate from total.
-                    self.available_memory_mb = (mem_total_kb / 1024) / 2;
-                    return;
-                }
-            }
-            self.available_memory_mb = 2048;
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            // macOS/other: no /proc — keep a conservative estimate, but only
-            // log once at construction (see ResourceMonitor::new).
-            self.available_memory_mb = 2048;
-        }
+        // The shared helper combines host availability with a finite Linux
+        // cgroup budget, so resource pressure never assumes memory allocated
+        // to another container is available to this download process.
+        self.available_memory_mb =
+            crate::daemon::engine::sysinfo::available_physical_memory_bytes() / (1024 * 1024);
     }
 
     #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]

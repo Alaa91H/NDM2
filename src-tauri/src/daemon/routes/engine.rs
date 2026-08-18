@@ -333,15 +333,16 @@ pub async fn handle_profiles_set_active(
     let success = state.profile_manager.set_active(&body.profile_id);
     if success {
         let profile = state.profile_manager.active_profile();
-        // Applying a profile updates the engine-wide retry policy and, when
-        // the profile declares one, the global rate limit.
+        // Applying a profile replaces the engine-wide retry policy and rate
+        // limit as one coherent setting. A profile without a limit explicitly
+        // restores unlimited bandwidth (0); otherwise switching from
+        // economical/background to balanced would leave the old cap active.
         if let Ok(mut policy) = state.default_retry_policy.write() {
             *policy = profile.to_retry_policy();
         }
-        if let Some(kbps) = profile.rate_limit_kbps {
-            state.bandwidth_manager.set_global_limit(kbps);
-            state.priority_queue.set_total_bandwidth(kbps);
-        }
+        let kbps = profile.rate_limit_kbps.unwrap_or(0);
+        state.bandwidth_manager.set_global_limit(kbps);
+        state.priority_queue.set_total_bandwidth(kbps);
         state.event_bus.publish(
             crate::daemon::engine::event_bus::EngineEvent::ProfileSwitched {
                 task_id: "global".to_owned(),
@@ -398,17 +399,20 @@ pub async fn handle_profiles_add_custom(
         return Json(serde_json::json!({"ok": false, "error": "Profile id is required"}));
     }
     let profile_id = profile.id.clone();
-    state.profile_manager.add_profile(profile);
+    if !state.profile_manager.add_profile(profile) {
+        return Json(serde_json::json!({
+            "ok": false,
+            "error": "Built-in profile ids are reserved or the profile store is unavailable"
+        }));
+    }
     Json(serde_json::json!({"ok": true, "profile_id": profile_id}))
 }
-
-const BUILTIN_PROFILE_IDS: [&str; 4] = ["maximum-speed", "balanced", "economical", "background"];
 
 pub async fn handle_profiles_delete(
     State(state): State<SharedState>,
     Path(profile_id): Path<String>,
 ) -> Json<serde_json::Value> {
-    if BUILTIN_PROFILE_IDS.contains(&profile_id.as_str()) {
+    if crate::daemon::engine::profiles::DownloadProfile::is_builtin_id(&profile_id) {
         return Json(
             serde_json::json!({"ok": false, "error": "Built-in profiles cannot be removed"}),
         );
@@ -1636,6 +1640,42 @@ mod tests {
             err.contains("Failed to open downloaded archive"),
             "unexpected error: {err}"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn profile_switch_to_unlimited_clears_previous_bandwidth_cap() {
+        use axum::{extract::State, Json};
+        use std::sync::Arc;
+
+        let dir = test_dir("profile-limit");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = Arc::new(crate::daemon::persist::tests::test_state(
+            &dir.to_string_lossy(),
+        ));
+
+        let Json(economical) = super::handle_profiles_set_active(
+            State(state.clone()),
+            Json(super::ProfileSetActiveBody {
+                profile_id: "economical".to_owned(),
+            }),
+        )
+        .await;
+        assert_eq!(economical["ok"], true);
+        assert_eq!(state.bandwidth_manager.effective_global_limit(), 1024);
+        assert_eq!(state.priority_queue.total_bandwidth(), 1024);
+
+        let Json(balanced) = super::handle_profiles_set_active(
+            State(state.clone()),
+            Json(super::ProfileSetActiveBody {
+                profile_id: "balanced".to_owned(),
+            }),
+        )
+        .await;
+        assert_eq!(balanced["ok"], true);
+        assert_eq!(state.bandwidth_manager.effective_global_limit(), 0);
+        assert_eq!(state.priority_queue.total_bandwidth(), 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

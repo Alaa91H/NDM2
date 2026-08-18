@@ -38,6 +38,13 @@ pub struct RetryProfileConfig {
 }
 
 impl DownloadProfile {
+    pub const BUILTIN_IDS: [&'static str; 4] =
+        ["maximum-speed", "balanced", "economical", "background"];
+
+    pub fn is_builtin_id(id: &str) -> bool {
+        Self::BUILTIN_IDS.contains(&id)
+    }
+
     pub fn maximum_speed() -> Self {
         Self {
             id: "maximum-speed".to_owned(),
@@ -169,12 +176,31 @@ impl DownloadProfile {
                 std::time::Duration::from_secs(2),
             )
         };
+        // Profiles can arrive through the public HTTP API, so normalize every
+        // caller-provided bound and floating-point threshold before exposing it
+        // to the live connection manager. This keeps the profile endpoint and
+        // runtime behavior aligned even for zero, negative, NaN, or infinite
+        // values supplied by an external client.
+        let max_connections = self.max_connections.max(1);
+        let min_connections = self.default_connections.clamp(1, max_connections);
+        let threshold_to_bps = |value: f64, multiplier: f64| {
+            if value.is_finite() && value > 0.0 {
+                (value * multiplier).clamp(0.0, u64::MAX as f64) as u64
+            } else {
+                0
+            }
+        };
         AdaptiveConfig {
-            min_connections: self.default_connections.min(self.max_connections),
-            max_connections: self.max_connections,
-            speed_high_threshold: (self.adaptive_config.speed_high_threshold_mbps * 125_000.0)
-                as u64,
-            speed_low_threshold: (self.adaptive_config.speed_low_threshold_kbps * 125.0) as u64,
+            min_connections,
+            max_connections,
+            speed_high_threshold: threshold_to_bps(
+                self.adaptive_config.speed_high_threshold_mbps,
+                125_000.0,
+            ),
+            speed_low_threshold: threshold_to_bps(
+                self.adaptive_config.speed_low_threshold_kbps,
+                125.0,
+            ),
             stall_threshold,
             eval_interval,
         }
@@ -231,14 +257,20 @@ impl ProfileManager {
     }
 
     pub fn set_active(&self, profile_id: &str) -> bool {
-        // Always lock `active_profile` before `profiles` to match `active_profile()`
-        // and prevent ABBA deadlock. An invalid ID simply sets the field; the next
-        // `active_profile()` call will fall back to `DownloadProfile::balanced`.
-        if let Ok(mut active) = self.active_profile.lock() {
-            *active = profile_id.to_owned();
-            return true;
+        // Always lock `active_profile` before `profiles` to match
+        // `active_profile()` and prevent ABBA deadlocks. Reject an unknown id
+        // rather than reporting success while silently falling back to balanced.
+        let Ok(mut active) = self.active_profile.lock() else {
+            return false;
+        };
+        let Ok(profiles) = self.profiles.lock() else {
+            return false;
+        };
+        if !profiles.contains_key(profile_id) {
+            return false;
         }
-        false
+        *active = profile_id.to_owned();
+        true
     }
 
     pub fn get_profile(&self, id: &str) -> Option<DownloadProfile> {
@@ -248,22 +280,44 @@ impl ProfileManager {
     pub fn list_profiles(&self) -> Vec<DownloadProfile> {
         self.profiles
             .lock()
-            .map(|p| p.values().cloned().collect())
+            .map(|p| {
+                let mut profiles: Vec<_> = p.values().cloned().collect();
+                profiles.sort_by(|left, right| left.id.cmp(&right.id));
+                profiles
+            })
             .unwrap_or_default()
     }
 
-    pub fn add_profile(&self, profile: DownloadProfile) {
+    /// Add or replace a custom profile. Built-in profile ids are immutable so
+    /// an HTTP client cannot overwrite the safe defaults used as fallbacks.
+    pub fn add_profile(&self, profile: DownloadProfile) -> bool {
+        if profile.id.trim().is_empty() || DownloadProfile::is_builtin_id(&profile.id) {
+            return false;
+        }
         if let Ok(mut profiles) = self.profiles.lock() {
             profiles.insert(profile.id.clone(), profile);
+            true
+        } else {
+            false
         }
     }
 
     pub fn remove_profile(&self, id: &str) -> bool {
-        if let Ok(mut profiles) = self.profiles.lock() {
-            profiles.remove(id).is_some()
-        } else {
-            false
+        if DownloadProfile::is_builtin_id(id) {
+            return false;
         }
+        // Keep lock ordering consistent with active_profile()/set_active().
+        let Ok(mut active) = self.active_profile.lock() else {
+            return false;
+        };
+        let Ok(mut profiles) = self.profiles.lock() else {
+            return false;
+        };
+        let removed = profiles.remove(id).is_some();
+        if removed && active.as_str() == id {
+            *active = "balanced".to_owned();
+        }
+        removed
     }
 }
 
@@ -307,11 +361,9 @@ mod tests {
     }
 
     #[test]
-    fn set_active_nonexistent_still_succeeds() {
+    fn set_active_nonexistent_is_rejected_without_changing_profile() {
         let pm = ProfileManager::new();
-        // set_active always succeeds — the ID is stored and resolved lazily
-        // by active_profile(), which falls back to balanced if missing.
-        assert!(pm.set_active("nonexistent"));
+        assert!(!pm.set_active("nonexistent"));
         assert_eq!(pm.active_profile().id, "balanced");
     }
 
@@ -342,7 +394,7 @@ mod tests {
             checksum_algorithm: None,
             segment_size_bytes: None,
         };
-        pm.add_profile(custom);
+        assert!(pm.add_profile(custom));
         assert!(pm.get_profile("custom").is_some());
         assert_eq!(pm.list_profiles().len(), 5);
         assert!(pm.remove_profile("custom"));
@@ -354,6 +406,41 @@ mod tests {
     fn remove_nonexistent_profile_returns_false() {
         let pm = ProfileManager::new();
         assert!(!pm.remove_profile("nonexistent"));
+    }
+
+    #[test]
+    fn builtins_cannot_be_overwritten_or_removed() {
+        let pm = ProfileManager::new();
+        let mut replacement = DownloadProfile::balanced();
+        replacement.name = "Replacement".to_owned();
+        assert!(!pm.add_profile(replacement));
+        assert_eq!(pm.get_profile("balanced").unwrap().name, "Balanced");
+        assert!(!pm.remove_profile("balanced"));
+    }
+
+    #[test]
+    fn removing_active_custom_profile_restores_balanced() {
+        let pm = ProfileManager::new();
+        let mut custom = DownloadProfile::background();
+        custom.id = "custom-active".to_owned();
+        assert!(pm.add_profile(custom));
+        assert!(pm.set_active("custom-active"));
+        assert!(pm.remove_profile("custom-active"));
+        assert_eq!(pm.active_profile().id, "balanced");
+    }
+
+    #[test]
+    fn adaptive_config_normalizes_untrusted_bounds_and_thresholds() {
+        let mut profile = DownloadProfile::balanced();
+        profile.default_connections = 0;
+        profile.max_connections = 0;
+        profile.adaptive_config.speed_high_threshold_mbps = f64::NAN;
+        profile.adaptive_config.speed_low_threshold_kbps = -1.0;
+        let config = profile.to_adaptive_config();
+        assert_eq!(config.min_connections, 1);
+        assert_eq!(config.max_connections, 1);
+        assert_eq!(config.speed_high_threshold, 0);
+        assert_eq!(config.speed_low_threshold, 0);
     }
 
     #[test]
