@@ -51,6 +51,9 @@ impl PluginApi {
     }
 
     pub fn register_plugin(&self, manifest: PluginManifest) -> Result<(), String> {
+        if manifest.id.trim().is_empty() {
+            return Err("Plugin id cannot be empty".to_owned());
+        }
         // M12: the manifest's api_version must be compatible with the
         // engine's supported version — a plugin written against a different
         // API surface must not be silently accepted as bookkeeping.
@@ -132,9 +135,16 @@ impl PluginApi {
             .lock()
             .map_err(|e| format!("Lock poisoned: {e}"))?;
         if let Some(plugin) = plugins.iter_mut().find(|p| p.manifest.id == plugin_id) {
-            for (key, value) in settings {
-                plugin.state.settings.insert(key, value);
+            // Settings are an externally supplied map. Validate every key
+            // before mutating state so a request with an unknown key cannot
+            // create undeclared configuration or partially apply an update.
+            if let Some(unknown_key) = settings
+                .keys()
+                .find(|key| !plugin.manifest.settings.contains_key(*key))
+            {
+                return Err(format!("Unknown plugin setting: {unknown_key}"));
             }
+            plugin.state.settings.extend(settings);
             Ok(())
         } else {
             Err("Plugin not found".to_owned())
@@ -213,6 +223,14 @@ mod tests {
     }
 
     #[test]
+    fn register_plugin_rejects_empty_id() {
+        let api = PluginApi::new();
+        let err = api.register_plugin(make_manifest(" ")).unwrap_err();
+        assert!(err.contains("id cannot be empty"));
+        assert!(api.list_plugins().is_empty());
+    }
+
+    #[test]
     fn register_duplicate_plugin_fails() {
         let api = PluginApi::new();
         api.register_plugin(make_manifest("p1")).unwrap();
@@ -261,12 +279,50 @@ mod tests {
     #[test]
     fn update_plugin_settings() {
         let api = PluginApi::new();
-        api.register_plugin(make_manifest("p1")).unwrap();
+        let mut manifest = make_manifest("p1");
+        manifest.settings.insert(
+            "key".to_owned(),
+            PluginSetting {
+                name: "key".to_owned(),
+                setting_type: "string".to_owned(),
+                default_value: serde_json::json!("default"),
+                description: "Test setting".to_owned(),
+                required: false,
+            },
+        );
+        api.register_plugin(manifest).unwrap();
         let mut settings = HashMap::new();
         settings.insert("key".to_string(), serde_json::json!("value"));
         api.update_plugin_settings("p1", settings).unwrap();
         let info = api.get_plugin("p1").unwrap();
         assert_eq!(info.state.settings.get("key").unwrap(), "value");
+    }
+
+    #[test]
+    fn update_settings_rejects_unknown_keys_atomically() {
+        let api = PluginApi::new();
+        let mut manifest = make_manifest("p1");
+        manifest.settings.insert(
+            "known".to_owned(),
+            PluginSetting {
+                name: "known".to_owned(),
+                setting_type: "string".to_owned(),
+                default_value: serde_json::json!("default"),
+                description: "Known setting".to_owned(),
+                required: false,
+            },
+        );
+        api.register_plugin(manifest).unwrap();
+
+        let mut settings = HashMap::new();
+        settings.insert("known".to_owned(), serde_json::json!("updated"));
+        settings.insert("unknown".to_owned(), serde_json::json!(true));
+        let err = api.update_plugin_settings("p1", settings).unwrap_err();
+        assert!(err.contains("Unknown plugin setting: unknown"));
+        assert_eq!(
+            api.get_plugin("p1").unwrap().state.settings.get("known"),
+            Some(&serde_json::json!("default"))
+        );
     }
 
     #[test]
