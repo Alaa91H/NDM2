@@ -731,17 +731,19 @@ impl From<&HashMap<String, Value>> for CurlTransferConfig {
             rie_connections: map
                 .get("rieConnections")
                 .and_then(serde_json::Value::as_u64)
-                .map(|n| n as u32),
+                .map(|n| n.clamp(1, u64::from(u32::MAX)) as u32),
             adaptive: map
                 .get("adaptive")
                 .and_then(serde_json::Value::as_bool)
                 .unwrap_or(true),
             adaptive_eval_ms: map
                 .get("adaptiveEvalMs")
-                .and_then(serde_json::Value::as_u64),
+                .and_then(serde_json::Value::as_u64)
+                .map(|value| value.clamp(100, 60_000)),
             adaptive_rebuild_ms: map
                 .get("adaptiveRebuildMs")
-                .and_then(serde_json::Value::as_u64),
+                .and_then(serde_json::Value::as_u64)
+                .map(|value| value.clamp(100, 600_000)),
         }
     }
 }
@@ -850,6 +852,19 @@ mod tests {
         assert!(!policy.retry_all_errors);
         assert_eq!(policy.backoff_multiplier, 3.0);
         assert!(!policy.jitter);
+    }
+
+    #[test]
+    fn config_clamps_untrusted_adaptive_and_rie_values() {
+        let mut map = HashMap::new();
+        map.insert("rieConnections".to_owned(), Value::from(u64::MAX));
+        map.insert("adaptiveEvalMs".to_owned(), Value::from(0));
+        map.insert("adaptiveRebuildMs".to_owned(), Value::from(u64::MAX));
+
+        let config = CurlTransferConfig::from(&map);
+        assert_eq!(config.rie_connections, Some(u32::MAX));
+        assert_eq!(config.adaptive_eval_ms, Some(100));
+        assert_eq!(config.adaptive_rebuild_ms, Some(600_000));
     }
 
     #[test]

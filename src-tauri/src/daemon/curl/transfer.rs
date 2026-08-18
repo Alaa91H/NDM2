@@ -1273,7 +1273,11 @@ fn run_segmented_libcurl(
             "HTTP/1.0" => crate::daemon::engine::adaptive::server_profiler::ProtocolVersion::Http11,
             _ => crate::daemon::engine::adaptive::server_profiler::ProtocolVersion::Unknown,
         };
-        let rie_connections = plan.config.rie_connections.unwrap_or(effective_connections);
+        let rie_connections = plan
+            .config
+            .rie_connections
+            .unwrap_or(effective_connections)
+            .clamp(1, cfg.max_connections_per_download.max(1));
         let mut engine = crate::daemon::engine::adaptive::AdaptiveEngine::new(
             host,
             plan.total_size,
@@ -1285,7 +1289,7 @@ fn run_segmented_libcurl(
         // config but never applied, so tests that set a fast evaluation
         // interval were silently ignored (the engine kept its 2s default).
         if let Some(eval_ms) = plan.config.adaptive_eval_ms {
-            let interval = std::time::Duration::from_millis(eval_ms);
+            let interval = std::time::Duration::from_millis(eval_ms.clamp(100, 60_000));
             engine.set_tick_interval(interval);
             engine.segment_ctrl.set_eval_interval(interval);
         }
@@ -1700,7 +1704,9 @@ fn run_segmented_libcurl(
                                 let rebuild_debounce = plan
                                     .config
                                     .adaptive_rebuild_ms
-                                    .map(std::time::Duration::from_millis)
+                                    .map(|ms| {
+                                        std::time::Duration::from_millis(ms.clamp(100, 600_000))
+                                    })
                                     .unwrap_or(std::time::Duration::from_secs(10));
                                 if last_rebuild_at.get().elapsed() >= rebuild_debounce {
                                     pending_rebuild.set(true);
