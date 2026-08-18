@@ -32,7 +32,12 @@ impl SegmentState {
         if total == 0 {
             return 1.0;
         }
-        self.downloaded.load(Ordering::Relaxed) as f64 / total as f64
+        let downloaded = self.downloaded.load(Ordering::Relaxed).min(total);
+        downloaded as f64 / total as f64
+    }
+
+    fn clamp_downloaded(&self, downloaded: u64) -> u64 {
+        downloaded.min(self.total_bytes())
     }
 }
 
@@ -58,7 +63,11 @@ impl DynamicSegmentScheduler {
         if total_size == 0 {
             return vec![SegmentState::new(0, 0, 0)];
         }
-        let conns = connections.max(1);
+        // There cannot be more non-empty byte ranges than bytes. Capping the
+        // connection count prevents zero-length active segments for tiny files.
+        let conns = connections
+            .max(1)
+            .min(total_size.min(u64::from(u32::MAX)) as u32);
         let per_seg = total_size / u64::from(conns);
         let mut segs = Vec::with_capacity(conns as usize);
         for i in 0..conns {
@@ -76,7 +85,8 @@ impl DynamicSegmentScheduler {
     pub fn update_segment(&self, id: u32, downloaded: u64, speed: u64, active: bool) {
         if let Ok(segments) = self.segments.lock() {
             if let Some(seg) = segments.iter().find(|s| s.id == id) {
-                seg.downloaded.store(downloaded, Ordering::Relaxed);
+                seg.downloaded
+                    .store(seg.clamp_downloaded(downloaded), Ordering::Relaxed);
                 seg.speed.store(speed, Ordering::Relaxed);
                 seg.active.store(active, Ordering::Relaxed);
             }
@@ -91,18 +101,27 @@ impl DynamicSegmentScheduler {
                 .iter()
                 .map(|(id, start, end, downloaded, speed, active)| {
                     let state = SegmentState::new(*id, *start, *end);
-                    state.downloaded.store(*downloaded, Ordering::Relaxed);
+                    state
+                        .downloaded
+                        .store(state.clamp_downloaded(*downloaded), Ordering::Relaxed);
                     state.speed.store(*speed, Ordering::Relaxed);
                     state.active.store(*active, Ordering::Relaxed);
                     state
                 })
                 .collect();
-            // Preserve live progress for ids that survive the reshape.
+            // Preserve a concurrent live update only when the segment's
+            // geometry is unchanged. Reusing a byte count after a split or
+            // rebalance can report bytes that do not exist in the new range.
             for state in next.iter_mut() {
-                if let Some(old) = current.iter().find(|s| s.id == state.id) {
-                    state
-                        .downloaded
-                        .store(old.downloaded.load(Ordering::Relaxed), Ordering::Relaxed);
+                if let Some(old) = current.iter().find(|s| {
+                    s.id == state.id
+                        && s.start_byte == state.start_byte
+                        && s.end_byte == state.end_byte
+                }) {
+                    state.downloaded.store(
+                        state.clamp_downloaded(old.downloaded.load(Ordering::Relaxed)),
+                        Ordering::Relaxed,
+                    );
                     state
                         .speed
                         .store(old.speed.load(Ordering::Relaxed), Ordering::Relaxed);
@@ -140,12 +159,17 @@ impl DynamicSegmentScheduler {
         if total == 0 {
             return 1.0;
         }
-        let downloaded: u64 = self.segments.lock().map_or(0, |segs| {
-            segs.iter()
-                .map(|s| s.downloaded.load(Ordering::Relaxed))
-                .sum()
+        let downloaded = self.segments.lock().map_or(0, |segs| {
+            segs.iter().fold(0u64, |sum, segment| {
+                sum.saturating_add(
+                    segment
+                        .downloaded
+                        .load(Ordering::Relaxed)
+                        .min(segment.total_bytes()),
+                )
+            })
         });
-        downloaded as f64 / total as f64
+        downloaded.min(total) as f64 / total as f64
     }
 }
 
@@ -227,6 +251,42 @@ mod tests {
         assert_eq!(s0.downloaded, 300);
         assert_eq!(s0.speed, 1024);
         assert!(!s0.active);
+    }
+
+    #[test]
+    fn progress_is_clamped_to_segment_and_file_bounds() {
+        let sched = DynamicSegmentScheduler::new(1000, 2, 4);
+        sched.update_segment(0, 9_999, 0, true);
+        sched.update_segment(1, 9_999, 0, true);
+
+        let segments = sched.segments();
+        assert_eq!(segments[0].downloaded, 500);
+        assert_eq!(segments[1].downloaded, 500);
+        assert_eq!(segments[0].progress, 1.0);
+        assert_eq!(sched.total_progress(), 1.0);
+    }
+
+    #[test]
+    fn tiny_files_do_not_create_empty_active_segments() {
+        let sched = DynamicSegmentScheduler::new(2, 8, 8);
+        let segments = sched.segments();
+        assert_eq!(segments.len(), 2);
+        assert!(segments.iter().all(|segment| segment.total_bytes > 0));
+    }
+
+    #[test]
+    fn reshaping_a_segment_does_not_reuse_stale_downloaded_bytes() {
+        let sched = DynamicSegmentScheduler::new(1000, 2, 4);
+        sched.update_segment(0, 500, 123, true);
+
+        // Segment zero is replaced with a different 250-byte range. Its
+        // supplied persisted count must win; the old 500-byte count belongs
+        // to the previous geometry and must not inflate progress.
+        sched.replace_segments(&[(0, 0, 250, 0, 0, true), (1, 250, 1000, 0, 0, true)]);
+        let segments = sched.segments();
+        assert_eq!(segments[0].downloaded, 0);
+        assert_eq!(segments[0].speed, 0);
+        assert_eq!(sched.total_progress(), 0.0);
     }
 
     #[test]

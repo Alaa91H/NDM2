@@ -4,14 +4,14 @@ import { loadDict } from './i18n-dicts.mjs';
 
 const sourceKeys = Object.keys(en);
 const sourceKeySet = new Set(sourceKeys);
-const sourcePlaceholders = new Map(sourceKeys.map(key => [key, placeholders(en[key]).join(',')]));
+const sourcePlaceholders = new Map(sourceKeys.map((key) => [key, placeholders(en[key]).join(',')]));
 const tokenArtifactPattern = /(NOVA[_\s-]*I18N|НОВА[_\s-]*И18Н|نوفا[_\s-]*I18N|I18N[_\s-]*\d{3}\|?)/i;
-const invalidEncodingPattern = /�/;
+const invalidEncodingPattern = /\uFFFD/;
 
 let failures = 0;
 
 function placeholders(value) {
-  return [...String(value).matchAll(/\{([a-zA-Z0-9_]+)\}/g)].map(match => match[1]).sort();
+  return [...String(value).matchAll(/\{([a-zA-Z0-9_]+)\}/g)].map((match) => match[1]).sort();
 }
 
 function fail(message) {

@@ -1,14 +1,10 @@
 #!/usr/bin/env node
 /**
- * Repair U+FFFD mojibake in browser-extension locale files.
- *
- * The corruption pattern is uniform: a UTF-8 multi-byte char lost its high
- * bytes and collapsed to U+FFFD followed by a surviving ASCII char. The
- * surviving char (plus language context) reveals the original letter:
- *   de:  Grö�Ye -> Größe      (�Y = ß),  �-ffnen -> Öffnen (�- = Ö)
- *   ro:  Român�f -> Română    (�f = ă),  fi�Tier -> fișier (�T = ș)
- *   tr:  ba�Ylantı -> bağlantı (�Y = ğ/ş by context)
- *   sv:  �-ppna -> Öppna      (�- = Ö),  mer�?� -> mer…    (�?� = …)
+ * Repair Unicode replacement-character mojibake in browser-extension locale
+ * files. The corruption pattern is a lost UTF-8 prefix followed by a
+ * surviving ASCII character. Each mapping key below uses a Unicode escape for
+ * the replacement character plus the surviving bytes, so this source remains
+ * clean while continuing to detect and repair corrupted locale input.
  *
  * Latin-script locales are repaired with a per-language mapping table.
  * Non-Latin scripts (bn, fa, th) collapsed beyond recovery and must be
@@ -19,13 +15,13 @@ import { join } from 'node:path';
 
 const LOCALE_DIR = 'src/i18n/locales';
 
-// Per-language replacement maps. Keys are the literal corrupted sequence
-// (U+FFFD + following chars), values the correct string. Longer keys FIRST
-// so e.g. `�?�` (…) wins over `�?t` (Ét) — ordering matters.
+// Per-language replacement maps. Keys contain an escaped replacement
+// character plus following chars; values are the correct string. Longer keys
+// must precede their prefixes, so ordering matters.
 const MAPS = {
   // German: ß, Ö, Ü, …, —
   de: {
-    '…\uFFFD': '…', // leftover after �?� -> …
+    '…\uFFFD': '…', // removes a leftover escaped replacement-character suffix
     '\uFFFDY': 'ß',
     '\uFFFD?': '…',
     '\uFFFD-ffnen': 'Öffnen',
@@ -37,26 +33,26 @@ const MAPS = {
   sv: {
     '…\uFFFD': '…',
     '\uFFFD-': 'Ö',
-    '\uFFFD.': 'Å', // �.teransluter -> Återansluter
+    '\uFFFD.': 'Å', // replacement-character prefix in a Swedish word
     '\uFFFD?': '…',
   },
   // Romanian: ă, ș, ț, Î, Ș, …
   ro: {
     '…\uFFFD': '…',
-    '\uFFFDZn': 'În', // �Zncă -> Încă
-    '\uFFFD~': 'Ș', // �~tergeși -> Ștergeși
+    '\uFFFDZn': 'În', // replacement-character prefix in a Romanian word
+    '\uFFFD~': 'Ș', // replacement-character prefix in a Romanian word
     '\uFFFDf': 'ă',
-    '\uFFFDc': 'ț', // pun�>e -> punțe
+    '\uFFFDc': 'ț', // replacement-character prefix in a Romanian word
     '\uFFFD>': 'ș',
-    '\uFFFDT': 'ș', // fi�Tier -> fișier
+    '\uFFFDT': 'ș', // replacement-character prefix in a Romanian word
     '\uFFFDF': 'Ă',
     '\uFFFD?': '…',
   },
   // Turkish: ğ, ş, …, ö, ı, Ş
   tr: {
     '…\uFFFD': '…',
-    '\uFFFD-': 'Ö', // �-lü -> Ölü
-    '\uFFFDz': 'Şi', // �zifreli -> Şifreli
+    '\uFFFD-': 'Ö', // replacement-character prefix in a Turkish word
+    '\uFFFDz': 'Şi', // replacement-character prefix in a Turkish word
     '\uFFFDe': 'Ş',
     '\uFFFDY': 'ğ',
     '\uFFFD?': '…',
@@ -68,7 +64,7 @@ const MAPS = {
   // Spanish: …, ú
   es: {
     '…\uFFFD': '…',
-    '\uFFFDs': 'ús', // �sltima -> última, �stil -> útil
+    '\uFFFDs': 'ús', // replacement-character prefix in Spanish words
     '\uFFFD?': '…',
   },
   // French: …, É/é/œ
@@ -95,7 +91,7 @@ const MAPS = {
   // Portuguese: …, ú, ã/õ/ç
   pt: {
     '…\uFFFD': '…',
-    '\uFFFDs': 'ús', // �sltima -> última, �stil -> útil
+    '\uFFFDs': 'ús', // replacement-character prefix in Spanish words
     '\uFFFD?': '…',
     '\uFFFDa': 'ã',
     '\uFFFDo': 'õ',
