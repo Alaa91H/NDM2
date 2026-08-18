@@ -145,8 +145,20 @@ pub(crate) fn proxy_resolves_to_internal(proxy: &str) -> bool {
         let _ = tx.send(result);
     });
     match rx.recv_timeout(std::time::Duration::from_secs(10)) {
-        Ok(Ok(mut addrs)) => addrs.any(|addr| crate::daemon::utils::is_internal_ip(addr.ip())),
-        _ => false,
+        Ok(Ok(addrs)) => {
+            let mut resolved_any = false;
+            let has_internal = addrs.into_iter().any(|addr| {
+                resolved_any = true;
+                crate::daemon::utils::is_internal_ip(addr.ip())
+            });
+            // An empty result is as unsafe as a resolver error: allowing it
+            // would let curl perform a later, unpinned lookup that can rebind
+            // to a private address after validation.
+            has_internal || !resolved_any
+        }
+        // Fail closed on lookup errors/timeouts. A proxy is a network hop, so
+        // its hostname must be resolved and checked at validation time.
+        _ => true,
     }
 }
 
@@ -197,7 +209,7 @@ fn push_header_lines(args: &mut Vec<String>, raw_headers: &str) {
         .map(str::trim)
         .filter(|line| !line.is_empty())
     {
-        if line.contains(':') {
+        if line.contains(':') && safe_value(line) {
             push_arg(args, "--header", line);
         }
     }
@@ -473,4 +485,21 @@ pub fn build_curl_args_with_capabilities(
 
     args.push(url.to_owned());
     Ok(args)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::proxy_resolves_to_internal;
+
+    #[test]
+    fn proxy_validation_rejects_internal_and_malformed_hosts() {
+        assert!(proxy_resolves_to_internal("http://127.0.0.1:8080"));
+        assert!(proxy_resolves_to_internal("http://[::1]:8080"));
+        assert!(proxy_resolves_to_internal("http://:8080"));
+    }
+
+    #[test]
+    fn proxy_validation_allows_public_literal_ip() {
+        assert!(!proxy_resolves_to_internal("http://8.8.8.8:8080"));
+    }
 }
