@@ -661,12 +661,16 @@ impl Extractor for CurlExtractor {
         if has_media_options {
             return false;
         }
-        url.starts_with("http://")
-            || url.starts_with("https://")
-            || url.starts_with("ftp://")
-            || url.starts_with("ftps://")
-            || url.starts_with("sftp://")
-            || url.starts_with("scp://")
+        // URI schemes are case-insensitive (RFC 3986). A textual lowercase
+        // prefix check rejects otherwise valid links such as `HTTPS://...`
+        // before the probe/download pipeline has a chance to parse them.
+        let scheme = url.split_once(':').map_or("", |(scheme, _)| scheme);
+        scheme.eq_ignore_ascii_case("http")
+            || scheme.eq_ignore_ascii_case("https")
+            || scheme.eq_ignore_ascii_case("ftp")
+            || scheme.eq_ignore_ascii_case("ftps")
+            || scheme.eq_ignore_ascii_case("sftp")
+            || scheme.eq_ignore_ascii_case("scp")
     }
 
     fn validate(&self, body: &CreateDownloadBody) -> Result<(), ValidateError> {
@@ -708,8 +712,9 @@ impl Extractor for CurlExtractor {
 mod tests {
     use crate::daemon::curl::{
         build_curl_args, destination_from_body, drive_multi_wait_perform, split_ranges,
-        CurlMultiGuard,
+        CurlExtractor, CurlMultiGuard,
     };
+    use crate::daemon::engine::extractor::Extractor;
     use crate::daemon::types::CreateDownloadBody;
     use ::curl::easy::Easy2;
     use std::io::Read;
@@ -902,5 +907,24 @@ mod tests {
         for pair in ranges.windows(2) {
             assert_eq!(pair[0].end + 1, pair[1].start);
         }
+    }
+
+    #[test]
+    fn curl_extractor_accepts_case_insensitive_uri_schemes() {
+        let extractor = CurlExtractor;
+        for url in [
+            "HTTPS://example.com/file.bin",
+            "HtTp://example.com/file.bin",
+            "FTP://example.com/file.bin",
+            "SFTP://example.com/file.bin",
+            "ScP://example.com/file.bin",
+        ] {
+            assert!(
+                extractor.can_handle(url, false),
+                "expected {url} to be handled"
+            );
+        }
+        assert!(!extractor.can_handle("HTTPS://example.com/file.bin", true));
+        assert!(!extractor.can_handle("mailto:user@example.com", false));
     }
 }
