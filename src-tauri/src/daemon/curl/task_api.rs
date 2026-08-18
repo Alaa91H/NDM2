@@ -360,6 +360,23 @@ fn clear_stale_validators(
     }
 }
 
+/// Replace the generated DNS pin after a task URL changes. Retaining the old
+/// `--resolve` entry can silently send the new host to the previous host's IP;
+/// replacing it is both correct and preserves the rebinding protection used on
+/// initial task creation.
+fn replace_pinned_resolve(
+    direct_options: &mut std::collections::HashMap<String, serde_json::Value>,
+    resolve_entry: String,
+) {
+    direct_options.insert(
+        "resolve".to_owned(),
+        serde_json::Value::Array(vec![serde_json::Value::String(resolve_entry)]),
+    );
+    // Probe results describe the old URL and must not suppress a new preflight.
+    direct_options.remove("preflightResolved");
+    direct_options.remove("preflightSupportsRange");
+}
+
 pub async fn update_task_metadata(
     state: &SharedState,
     id: &str,
@@ -428,10 +445,18 @@ pub async fn update_task_metadata(
             }
             if let Some(ref u) = new_url {
                 let parsed = DirectUrl::parse(u)?;
-                crate::daemon::utils::is_safe_target_url(&parsed.normalized)?;
+                let (_pinned_ip, resolve_entry) =
+                    crate::daemon::utils::is_safe_target_url_pinned(&parsed.normalized)?;
                 let old_url = std::mem::replace(&mut job.task.url, parsed.normalized.clone());
                 if old_url != parsed.normalized {
                     clear_stale_validators(&mut job.direct_options);
+                    replace_pinned_resolve(&mut job.direct_options, resolve_entry);
+                    if let Some(last_arg) = job.args.last_mut() {
+                        // Curl argv uses the URL as its final positional
+                        // argument; keep persisted diagnostics consistent with
+                        // the authoritative task URL.
+                        *last_arg = parsed.normalized.clone();
+                    }
                     if !old_url.is_empty() {
                         state.metadata_cache.remove(&old_url);
                     }
@@ -710,6 +735,7 @@ impl Extractor for CurlExtractor {
 
 #[cfg(test)]
 mod tests {
+    use super::replace_pinned_resolve;
     use crate::daemon::curl::{
         build_curl_args, destination_from_body, drive_multi_wait_perform, split_ranges,
         CurlExtractor, CurlMultiGuard,
@@ -926,5 +952,24 @@ mod tests {
         }
         assert!(!extractor.can_handle("HTTPS://example.com/file.bin", true));
         assert!(!extractor.can_handle("mailto:user@example.com", false));
+    }
+
+    #[test]
+    fn url_update_replaces_stale_dns_pin_and_preflight_metadata() {
+        let mut options = std::collections::HashMap::from([
+            (
+                "resolve".to_owned(),
+                serde_json::json!(["old.example:443:203.0.113.10"]),
+            ),
+            ("preflightResolved".to_owned(), serde_json::json!(true)),
+            ("preflightSupportsRange".to_owned(), serde_json::json!(true)),
+        ]);
+        replace_pinned_resolve(&mut options, "new.example:443:198.51.100.20".to_owned());
+        assert_eq!(
+            options.get("resolve"),
+            Some(&serde_json::json!(["new.example:443:198.51.100.20"]))
+        );
+        assert!(!options.contains_key("preflightResolved"));
+        assert!(!options.contains_key("preflightSupportsRange"));
     }
 }

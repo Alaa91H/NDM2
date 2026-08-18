@@ -17,6 +17,11 @@ pub struct PersistedState {
     pub media_args: HashMap<String, Vec<String>>,
     #[serde(default)]
     pub curl_args: HashMap<String, Vec<String>>,
+    /// Per-task libcurl options are persisted separately from diagnostic CLI
+    /// arguments. They contain the effective proxy, headers, validators and
+    /// DNS pinning needed to resume with the same security and behavior.
+    #[serde(default)]
+    pub curl_direct_options: HashMap<String, HashMap<String, serde_json::Value>>,
     #[serde(default)]
     pub telegram_last_update_id: i64,
     #[serde(default)]
@@ -61,7 +66,7 @@ fn build_snapshot(state: &AppState) -> PersistedState {
     // Acquire locks in documented order (media_jobs → curl_jobs → task_snapshot)
     // within a block scope so curl_jobs is released before download_stats,
     // preventing AB-BA deadlock with transfer.rs (which locks download_stats → curl_jobs).
-    let (media_args, curl_args, tasks, telegram_last_update_id) = {
+    let (media_args, curl_args, curl_direct_options, tasks, telegram_last_update_id) = {
         let media_jobs = lock_or_err!(state.media_jobs);
         let curl_jobs = lock_or_err!(state.curl_jobs);
         let snapshot = lock_or_err!(state.task_snapshot);
@@ -74,9 +79,19 @@ fn build_snapshot(state: &AppState) -> PersistedState {
             .iter()
             .map(|(id, job)| (id.clone(), job.args.clone()))
             .collect();
+        let curl_direct_options: HashMap<String, HashMap<String, serde_json::Value>> = curl_jobs
+            .iter()
+            .map(|(id, job)| (id.clone(), job.direct_options.clone()))
+            .collect();
         let tasks: Vec<Task> = snapshot.values().cloned().collect();
         let telegram_last_update_id = *lock_or_err!(state.telegram_last_update_id);
-        (media_args, curl_args, tasks, telegram_last_update_id)
+        (
+            media_args,
+            curl_args,
+            curl_direct_options,
+            tasks,
+            telegram_last_update_id,
+        )
     };
     let scheduler_rules = state.scheduler.rules();
     let stats = lock_or_err!(state.download_stats).clone();
@@ -86,6 +101,7 @@ fn build_snapshot(state: &AppState) -> PersistedState {
         tasks,
         media_args,
         curl_args,
+        curl_direct_options,
         telegram_last_update_id,
         scheduler_rules,
         stats,
@@ -334,7 +350,14 @@ pub(crate) mod tests {
             "c1".to_string(),
             CurlJob {
                 task: sample_task("c1", "libcurl-multi", "downloading"),
-                direct_options: HashMap::new(),
+                direct_options: {
+                    let mut options = HashMap::new();
+                    options.insert(
+                        "headers".to_owned(),
+                        serde_json::Value::String("X-Resume: persisted".to_owned()),
+                    );
+                    options
+                },
                 cancel_token: Arc::new(AtomicBool::new(false)),
                 run_generation: Arc::new(AtomicU64::new(0)),
                 start_time: Instant::now(),
@@ -360,6 +383,14 @@ pub(crate) mod tests {
                 "--location".to_string(),
                 "https://example.com/c1".to_string()
             ])
+        );
+        assert_eq!(
+            loaded
+                .curl_direct_options
+                .get("c1")
+                .and_then(|options| options.get("headers"))
+                .and_then(serde_json::Value::as_str),
+            Some("X-Resume: persisted")
         );
 
         std::fs::remove_dir_all(&dir).ok();

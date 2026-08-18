@@ -787,7 +787,11 @@ fn restore_persisted_tasks(
                         task.id.clone(),
                         CurlJob {
                             task: task.clone(),
-                            direct_options: HashMap::new(),
+                            direct_options: restored
+                                .curl_direct_options
+                                .get(&task.id)
+                                .cloned()
+                                .unwrap_or_default(),
                             cancel_token: Arc::new(AtomicBool::new(false)),
                             run_generation: Arc::new(AtomicU64::new(0)),
                             start_time: Instant::now(),
