@@ -127,7 +127,14 @@ impl PriorityBandwidthQueue {
     }
 
     pub fn start_download(&self) {
-        self.active_downloads.fetch_add(1, AtomicOrder::Relaxed);
+        // Do not let repeated or racing lifecycle notifications wrap the
+        // active count to zero; that would make the queue admit unlimited
+        // additional work while downloads are still in flight.
+        let _ = self.active_downloads.fetch_update(
+            AtomicOrder::AcqRel,
+            AtomicOrder::Relaxed,
+            |current| Some(current.saturating_add(1)),
+        );
         self.reallocate();
     }
 
@@ -472,6 +479,14 @@ mod tests {
         assert_eq!(q.active_count(), 1);
         q.start_download();
         assert_eq!(q.active_count(), 2);
+    }
+
+    #[test]
+    fn start_download_saturates_at_u32_max() {
+        let q = PriorityBandwidthQueue::new(1000);
+        q.active_downloads.store(u32::MAX, AtomicOrder::Relaxed);
+        q.start_download();
+        assert_eq!(q.active_count(), u32::MAX);
     }
 
     #[test]
