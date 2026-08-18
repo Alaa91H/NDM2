@@ -60,6 +60,14 @@ unsafe fn raw_setopt_long(
     }
 }
 
+fn configured_speed_limit_bytes(config: &CurlTransferConfig) -> Option<u64> {
+    config.u64_("speedLimitBytes").or_else(|| {
+        config
+            .u64_("speedLimitKbs")
+            .map(|value| value.saturating_mul(1024))
+    })
+}
+
 fn parse_rate_to_bytes(rate_str: &str) -> Option<u64> {
     let trimmed = rate_str.trim();
     if trimmed.is_empty() {
@@ -642,12 +650,7 @@ pub fn apply_easy_options<H: Handler>(
         easy.buffer_size(size as usize)
             .map_err(|e| format!("Could not configure buffer size: {e}"))?;
     }
-    if let Some(speed) = plan
-        .config
-        .u64_("speedLimitBytes")
-        .or_else(|| plan.config.u64_("speedLimitKbs").map(|v| v * 1024))
-        .filter(|v| *v > 0)
-    {
+    if let Some(speed) = configured_speed_limit_bytes(&plan.config).filter(|v| *v > 0) {
         easy.max_recv_speed(speed)
             .map_err(|e| format!("Could not configure speed limit: {e}"))?;
     } else if let Some(rate_str) = plan.config.str_("rate") {
@@ -1525,6 +1528,16 @@ mod tests {
         assert!(w.header(b"Content-Range: bytes 0-9/*\r\n"));
         let cap = captured(&w);
         assert_eq!(cap.content_length, None);
+    }
+
+    #[test]
+    fn speed_limit_kilobytes_saturates_without_overflow() {
+        let mut config = CurlTransferConfig::new();
+        config.speed_limit_kbs = Some(u64::MAX);
+        assert_eq!(configured_speed_limit_bytes(&config), Some(u64::MAX));
+
+        config.speed_limit_bytes = Some(7);
+        assert_eq!(configured_speed_limit_bytes(&config), Some(7));
     }
 
     #[test]
