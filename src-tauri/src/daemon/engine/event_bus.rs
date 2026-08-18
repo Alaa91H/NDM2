@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -242,7 +242,7 @@ impl EventBus {
                 event_log: Vec::new(),
                 task_index: HashMap::new(),
                 next_id: 1,
-                max_log_size,
+                max_log_size: max_log_size.max(1),
                 publish_depth: 0,
                 pending_events: Vec::new(),
             })),
@@ -250,109 +250,106 @@ impl EventBus {
     }
 
     pub fn publish(&self, event: EngineEvent) {
-        // Phase 1: lock + decide whether to store or queue
-        let (ts_event, subscriber_clone) = {
-            let mut inner = match self.inner.lock() {
-                Ok(g) => g,
-                Err(poison) => {
-                    log::error!("EventBus: mutex poisoned, recovering");
-                    let mut recovered = poison.into_inner();
-                    // A previous publish may have panicked while holding the
-                    // lock. Clear the reentrancy guard so the bus can publish
-                    // again; any events that publish had queued are drained by
-                    // this (or the next) publish's Phase 3.
-                    recovered.publish_depth = 0;
-                    recovered
-                }
-            };
-
-            if inner.publish_depth > 0 {
-                // Reentrant call: queue for processing after outer publish
-                // completes. Bounded: drop oldest first (M3).
-                if inner.pending_events.len() >= MAX_PENDING_EVENTS {
-                    inner.pending_events.remove(0);
-                }
-                inner.pending_events.push(event);
-                return;
-            }
-
-            inner.publish_depth = 1;
-
-            let id = inner.next_id;
-            inner.next_id += 1;
-            let task_id_opt = event.task_id().map(std::borrow::ToOwned::to_owned);
-            let ts_event = TimestampedEvent {
-                id,
-                event,
-                timestamp: Instant::now(),
-                timestamp_millis: chrono::Utc::now().timestamp_millis().max(0) as u128,
-            };
-
-            // Rotate log if at capacity.
-            if inner.event_log.len() >= inner.max_log_size {
-                let drain_count = (inner.max_log_size / 4).max(1);
-                for indices in inner.task_index.values_mut() {
-                    indices.retain(|&idx| idx >= drain_count);
-                    for idx in indices.iter_mut() {
-                        *idx -= drain_count;
+        // Process queued re-entrant events iteratively. Calling `publish`
+        // recursively here lets a subscriber that publishes one follow-up per
+        // event grow the call stack without ever reaching the pending-event
+        // cap. A local FIFO preserves publication order with bounded stack use.
+        let mut to_publish = VecDeque::from([event]);
+        while let Some(event) = to_publish.pop_front() {
+            // Phase 1: lock + decide whether to store or queue.
+            let (ts_event, subscriber_clone) = {
+                let mut inner = match self.inner.lock() {
+                    Ok(g) => g,
+                    Err(poison) => {
+                        log::error!("EventBus: mutex poisoned, recovering");
+                        let mut recovered = poison.into_inner();
+                        // A previous publish may have panicked while holding the
+                        // lock. Clear the reentrancy guard so the bus can publish
+                        // again; any events that publish had queued are drained by
+                        // this (or the next) publish's Phase 3.
+                        recovered.publish_depth = 0;
+                        recovered
                     }
-                }
-                inner.task_index.retain(|_, v| !v.is_empty());
-                inner.event_log.drain(..drain_count);
-            }
-            if let Some(ref tid) = task_id_opt {
-                let idx = inner.event_log.len();
-                inner.task_index.entry(tid.clone()).or_default().push(idx);
-            }
-            inner.event_log.push(ts_event.clone());
-            let subscriber_clone = inner
-                .subscribers
-                .iter()
-                .map(|(_, s)| s.clone())
-                .collect::<Vec<_>>();
-            (ts_event, subscriber_clone)
-        };
-
-        // `PublishGuard` guarantees `publish_depth` is reset — and any
-        // re-entrant events are collected — even if a panic unwinds past
-        // Phase 2, so the bus can never be permanently stuck in "publishing".
-        let guard = PublishGuard {
-            bus: self,
-            pending: Vec::new(),
-            finished: false,
-        };
-
-        // Phase 2: notify subscribers outside the lock so they can safely call
-        // back into `publish`.
-        //
-        // SAFETY NOTE: `catch_unwind` requires the closure to be `UnwindSafe`,
-        // which `dyn Fn` cannot guarantee statically, hence `AssertUnwindSafe`.
-        // This is a deliberate trade-off: a panicking subscriber must not take
-        // the whole daemon down. The risk is that a subscriber holding interior
-        // mutability (e.g. `RefCell`) can be left in a corrupted state after a
-        // panic — that subscriber should still treat panics as fatal for its
-        // own data. We log every panic defensively so such corruption is
-        // visible in the logs instead of silent.
-        for sub in &subscriber_clone {
-            let _ = catch_unwind(AssertUnwindSafe(|| sub(&ts_event))).map_err(|e| {
-                let msg = if let Some(s) = e.downcast_ref::<&str>() {
-                    (*s).to_owned()
-                } else if let Some(s) = e.downcast_ref::<String>() {
-                    s.clone()
-                } else {
-                    "unknown panic".to_owned()
                 };
-                log::error!(
-                    "EventBus: subscriber panicked ({msg}); subscriber state may be corrupted"
-                );
-            });
-        }
 
-        // Phase 3: reset the depth + collect events queued re-entrantly, then
-        // process them in publication order.
-        let pending = guard.finish();
-        for evt in pending {
-            self.publish(evt);
+                if inner.publish_depth > 0 {
+                    // Reentrant call: queue for processing after the current
+                    // notification completes. Bounded: drop oldest first.
+                    if inner.pending_events.len() >= MAX_PENDING_EVENTS {
+                        inner.pending_events.remove(0);
+                    }
+                    inner.pending_events.push(event);
+                    return;
+                }
+
+                inner.publish_depth = 1;
+
+                let id = inner.next_id;
+                inner.next_id = inner.next_id.saturating_add(1);
+                let task_id_opt = event.task_id().map(std::borrow::ToOwned::to_owned);
+                let ts_event = TimestampedEvent {
+                    id,
+                    event,
+                    timestamp: Instant::now(),
+                    timestamp_millis: chrono::Utc::now().timestamp_millis().max(0) as u128,
+                };
+
+                // Rotate log if at capacity.
+                if inner.event_log.len() >= inner.max_log_size {
+                    let drain_count = (inner.max_log_size / 4).max(1);
+                    for indices in inner.task_index.values_mut() {
+                        indices.retain(|&idx| idx >= drain_count);
+                        for idx in indices.iter_mut() {
+                            *idx -= drain_count;
+                        }
+                    }
+                    inner.task_index.retain(|_, v| !v.is_empty());
+                    inner.event_log.drain(..drain_count);
+                }
+                if let Some(ref tid) = task_id_opt {
+                    let idx = inner.event_log.len();
+                    inner.task_index.entry(tid.clone()).or_default().push(idx);
+                }
+                inner.event_log.push(ts_event.clone());
+                let subscriber_clone = inner
+                    .subscribers
+                    .iter()
+                    .map(|(_, s)| s.clone())
+                    .collect::<Vec<_>>();
+                (ts_event, subscriber_clone)
+            };
+
+            // `PublishGuard` guarantees `publish_depth` is reset — and any
+            // re-entrant events are collected — even if a panic unwinds past
+            // subscriber notification, so the bus cannot remain stuck in a
+            // publishing state.
+            let guard = PublishGuard {
+                bus: self,
+                pending: Vec::new(),
+                finished: false,
+            };
+
+            // Phase 2: notify subscribers outside the lock so they can safely
+            // call back into `publish`. A subscriber panic is isolated so it
+            // cannot take down the daemon or suppress later subscribers.
+            for sub in &subscriber_clone {
+                let _ = catch_unwind(AssertUnwindSafe(|| sub(&ts_event))).map_err(|e| {
+                    let msg = if let Some(s) = e.downcast_ref::<&str>() {
+                        (*s).to_owned()
+                    } else if let Some(s) = e.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "unknown panic".to_owned()
+                    };
+                    log::error!(
+                        "EventBus: subscriber panicked ({msg}); subscriber state may be corrupted"
+                    );
+                });
+            }
+
+            // Phase 3: append re-entrant events to the local FIFO instead of
+            // recursively invoking `publish` for each event.
+            to_publish.extend(guard.finish());
         }
     }
 
@@ -362,6 +359,14 @@ impl EventBus {
     {
         if let Ok(mut inner) = self.inner.lock() {
             let id = inner.next_subscriber_id;
+            // `0` is the documented failure sentinel. Do not issue `u64::MAX`
+            // because its successor cannot be represented and would make the
+            // next registration reuse the same ID, so `unsubscribe` could
+            // remove an unrelated subscriber.
+            if id == u64::MAX {
+                log::error!("EventBus: subscriber ID space exhausted");
+                return 0;
+            }
             inner.next_subscriber_id += 1;
             inner.subscribers.push((id, Arc::new(callback)));
             id
@@ -504,6 +509,69 @@ mod tests {
                 "pending queue must be capped at {MAX_PENDING_EVENTS}, got {len}"
             );
         }
+    }
+
+    #[test]
+    fn deep_reentrant_publish_chain_is_iterative_and_ordered() {
+        const CHAIN_LENGTH: u64 = 4_096;
+        let bus = EventBus::new_with_capacity((CHAIN_LENGTH + 1) as usize);
+        let weak_inner = Arc::downgrade(&bus.inner);
+        let notifications = Arc::new(AtomicUsize::new(0));
+        let notifications_for_subscriber = notifications.clone();
+
+        bus.subscribe(move |event| {
+            notifications_for_subscriber.fetch_add(1, Ordering::SeqCst);
+            if let EngineEvent::DownloadProgress {
+                task_id,
+                downloaded_bytes,
+                ..
+            } = &event.event
+            {
+                if *downloaded_bytes < CHAIN_LENGTH {
+                    if let Some(inner) = weak_inner.upgrade() {
+                        EventBus { inner }.publish(make_progress(task_id, downloaded_bytes + 1));
+                    }
+                }
+            }
+        });
+
+        bus.publish(make_progress("t1", 0));
+        let events = bus.events_for_task("t1", (CHAIN_LENGTH + 1) as usize);
+        assert_eq!(
+            notifications.load(Ordering::SeqCst),
+            (CHAIN_LENGTH + 1) as usize
+        );
+        assert_eq!(events.len(), (CHAIN_LENGTH + 1) as usize);
+        assert!(matches!(
+            events.first().map(|event| &event.event),
+            Some(EngineEvent::DownloadProgress {
+                downloaded_bytes: CHAIN_LENGTH,
+                ..
+            })
+        ));
+        assert!(matches!(
+            events.last().map(|event| &event.event),
+            Some(EngineEvent::DownloadProgress {
+                downloaded_bytes: 0,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn zero_log_capacity_is_normalized_to_one() {
+        let bus = EventBus::new_with_capacity(0);
+        bus.publish(make_progress("t1", 1));
+        bus.publish(make_progress("t1", 2));
+        let events = bus.recent_events(10);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events[0].event,
+            EngineEvent::DownloadProgress {
+                downloaded_bytes: 2,
+                ..
+            }
+        ));
     }
 
     // ── 2. publish assigns sequential IDs ─────────────────────────────
@@ -778,6 +846,18 @@ mod tests {
 
         bus.subscribe(|_| {});
         assert_eq!(bus.subscriber_count(), 3);
+    }
+
+    #[test]
+    fn subscriber_id_exhaustion_returns_failure_sentinel_without_reuse() {
+        let bus = EventBus::new();
+        {
+            let mut inner = bus.inner.lock().unwrap();
+            inner.next_subscriber_id = u64::MAX;
+        }
+        assert_eq!(bus.subscribe(|_| {}), 0);
+        assert_eq!(bus.subscribe(|_| {}), 0);
+        assert_eq!(bus.subscriber_count(), 0);
     }
 
     // ── 10. Log rotation: publishing beyond max_log_size drains ───────
