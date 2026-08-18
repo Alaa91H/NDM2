@@ -17,13 +17,16 @@ impl ProtocolAdapter {
     }
 
     pub fn connection_range(&self, cpu_count: u32) -> (u32, u32) {
+        // Resource sampling may temporarily report zero CPUs in constrained
+        // containers. Never produce min > max: downstream `clamp` requires a
+        // valid interval and would otherwise panic while a download is active.
+        let scaled = cpu_count.max(1).saturating_mul(2);
         match self.negotiated {
-            ProtocolVersion::Http2 => (2, (cpu_count * 2).min(16)),
-            ProtocolVersion::Http3 => (2, (cpu_count * 2).min(16)),
-            ProtocolVersion::Http11 => (1, (cpu_count * 2).min(32)),
+            ProtocolVersion::Http2 | ProtocolVersion::Http3 => (2, scaled.min(16).max(2)),
+            ProtocolVersion::Http11 => (1, scaled.min(32).max(1)),
             ProtocolVersion::Ftp => (1, 1),
             ProtocolVersion::Sftp | ProtocolVersion::Scp => (1, 1),
-            ProtocolVersion::Unknown => (2, (cpu_count * 2).min(16)),
+            ProtocolVersion::Unknown => (2, scaled.min(16).max(2)),
         }
     }
 
@@ -131,5 +134,19 @@ mod tests {
         let (min, max) = a.connection_range(8);
         assert_eq!(min, 2);
         assert_eq!(max, 16);
+    }
+
+    #[test]
+    fn zero_cpu_count_still_produces_a_valid_connection_interval() {
+        for protocol in [
+            ProtocolVersion::Http2,
+            ProtocolVersion::Http3,
+            ProtocolVersion::Http11,
+            ProtocolVersion::Unknown,
+        ] {
+            let (min, max) = ProtocolAdapter::new(protocol).connection_range(0);
+            assert!(min >= 1);
+            assert!(min <= max, "invalid interval {min}..={max}");
+        }
     }
 }
