@@ -33,7 +33,12 @@ describe('encryptCredentials', () => {
     const result = await encryptCredentials(settings);
     expect(result).not.toBe(settings);
     expect(result.connection.proxyPass).toMatch(/^enc:/);
-    expect(result.connection.proxyPass).not.toContain('pw');
+    // Base64 ciphertext is arbitrary text and can coincidentally contain a
+    // plaintext substring. Instead assert the AES-GCM envelope structure:
+    // 12-byte IV + 16-byte authentication tag + plaintext bytes.
+    const proxyPassPayload = atob(result.connection.proxyPass.slice('enc:'.length));
+    expect(proxyPassPayload).toHaveLength(12 + 16 + new TextEncoder().encode('pw').byteLength);
+    expect(result.connection.proxyPass).not.toBe('enc:pw');
     expect(result.connection.proxyUser).toMatch(/^enc:/);
     expect(result.extra.tgBotToken).toMatch(/^enc:/);
   });
