@@ -892,6 +892,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.version != ''
     timeout-minutes: 10
     permissions:
+      actions: write
       contents: write
     environment:
       name: release
@@ -1017,12 +1018,21 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ inputs.version }}
-          name: "Nova Download Manager v${{ inputs.version }}"
+          name: 'Nova Download Manager v${{ inputs.version }}'
           draft: true
           generate_release_notes: false
           body: ${{ steps.changelog.outputs.notes }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # A tag pushed with the workflow's GITHUB_TOKEN does not by itself launch
+      # another workflow run. Explicitly dispatch on the new tag so the tag-only
+      # `publish` job builds the versioned sources and uploads the release assets.
+      - name: Dispatch tagged publish workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: gh workflow run ci.yml --repo "$GITHUB_REPOSITORY" --ref "v${INPUT_VERSION}"
 
       - name: Summary
         env:
