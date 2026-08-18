@@ -218,8 +218,10 @@ impl BandwidthManager {
                 if entries.is_empty() {
                     return 0;
                 }
-                let sum: u64 = entries.iter().map(|(_, s)| s).sum();
-                sum / entries.len() as u64
+                let sum = entries.iter().fold(0u128, |total, (_, speed)| {
+                    total.saturating_add(u128::from(*speed))
+                });
+                (sum / entries.len() as u128).min(u128::from(u64::MAX)) as u64
             })
             .unwrap_or(0)
     }
@@ -349,6 +351,15 @@ mod tests {
         m.report_speed("t1", 2000);
         m.report_speed("t1", 3000);
         assert_eq!(m.average_speed("t1"), 2000);
+    }
+
+    #[test]
+    fn average_speed_handles_extreme_samples_without_overflow() {
+        let m = mgr_with_global(1000);
+        for _ in 0..SPEED_WINDOW_SIZE {
+            m.report_speed("t1", u64::MAX);
+        }
+        assert_eq!(m.average_speed("t1"), u64::MAX);
     }
 
     #[test]
