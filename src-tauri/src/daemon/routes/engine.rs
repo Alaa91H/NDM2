@@ -500,8 +500,10 @@ pub async fn handle_rules_add(
     Json(body): Json<RuleAddBody>,
 ) -> Json<serde_json::Value> {
     let rule_id = body.rule.id.clone();
-    state.rule_engine.add_rule(body.rule);
-    Json(serde_json::json!({"ok": true, "rule_id": rule_id}))
+    match state.rule_engine.try_add_rule(body.rule) {
+        Ok(()) => Json(serde_json::json!({"ok": true, "rule_id": rule_id})),
+        Err(error) => Json(serde_json::json!({"ok": false, "error": error})),
+    }
 }
 
 pub async fn handle_rules_delete(

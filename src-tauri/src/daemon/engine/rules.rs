@@ -69,24 +69,25 @@ impl DownloadRuleEngine {
         }
     }
 
-    pub fn add_rule(&self, rule: DownloadRule) {
+    /// Attempts to add a rule and surfaces validation/identity failures to the
+    /// API boundary. This is the authoritative entry point for untrusted rule
+    /// payloads received from clients.
+    pub fn try_add_rule(&self, rule: DownloadRule) -> Result<(), String> {
+        if rule.id.trim().is_empty() {
+            return Err("Rule id cannot be empty".to_owned());
+        }
+
         let mut compiled_conditions = Vec::new();
         for cond in &rule.conditions {
             let regex = match cond {
-                RuleCondition::UrlMatches { pattern } => match Regex::new(pattern) {
-                    Ok(re) => Some(re),
-                    // L8: an invalid regex must never be silently inert —
-                    // reject the rule so the caller knows the condition is
-                    // broken instead of watching it never match.
-                    Err(e) => {
-                        log::error!(
-                            "rules: rejecting rule '{}' — invalid UrlMatches regex {:?}: {e}",
-                            rule.id,
-                            pattern
-                        );
-                        return;
-                    }
-                },
+                RuleCondition::UrlMatches { pattern } => {
+                    Regex::new(pattern).map(Some).map_err(|e| {
+                        format!(
+                            "Invalid UrlMatches regex for rule '{}': {pattern:?}: {e}",
+                            rule.id
+                        )
+                    })?
+                }
                 _ => None,
             };
             compiled_conditions.push(CompiledCondition {
@@ -94,14 +95,30 @@ impl DownloadRuleEngine {
                 condition: cond.clone(),
             });
         }
-        if let Ok(mut inner) = self.inner.lock() {
-            inner.rules.push(rule.clone());
-            inner.compiled.push((rule.id, compiled_conditions));
-            // Sort both vectors by priority using a permutation index
-            let mut indices: Vec<usize> = (0..inner.rules.len()).collect();
-            indices.sort_by_key(|&i| inner.rules[i].priority);
-            inner.rules = indices.iter().map(|&i| inner.rules[i].clone()).collect();
-            inner.compiled = indices.iter().map(|&i| inner.compiled[i].clone()).collect();
+
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|e| format!("Rules lock poisoned: {e}"))?;
+        if inner.rules.iter().any(|existing| existing.id == rule.id) {
+            return Err(format!("Rule already exists: {}", rule.id));
+        }
+        inner.rules.push(rule.clone());
+        inner.compiled.push((rule.id, compiled_conditions));
+        // Sort both vectors by priority using a permutation index.
+        let mut indices: Vec<usize> = (0..inner.rules.len()).collect();
+        indices.sort_by_key(|&i| inner.rules[i].priority);
+        inner.rules = indices.iter().map(|&i| inner.rules[i].clone()).collect();
+        inner.compiled = indices.iter().map(|&i| inner.compiled[i].clone()).collect();
+        Ok(())
+    }
+
+    /// Test-only helper that asserts the rule can be accepted. Production
+    /// callers must use `try_add_rule` so validation failures reach callers.
+    #[cfg(test)]
+    pub fn add_rule(&self, rule: DownloadRule) {
+        if let Err(error) = self.try_add_rule(rule) {
+            log::error!("rules: rejected rule: {error}");
         }
     }
 
@@ -147,7 +164,11 @@ impl DownloadRuleEngine {
                 }
                 RuleCondition::UrlContains { text } => url.contains(text.as_str()),
                 RuleCondition::UrlExtension { extensions } => {
-                    let lower = url.to_lowercase();
+                    // Query parameters and fragments are not part of the path,
+                    // so they must not hide the file extension of a signed or
+                    // otherwise complex download link.
+                    let path = url.split(['?', '#']).next().unwrap_or(url);
+                    let lower = path.to_lowercase();
                     // L8: normalize the configured extension to lowercase too,
                     // so ["MP4"] matches a .mp4 URL.
                     extensions.iter().any(|ext| {
@@ -813,6 +834,64 @@ mod tests {
         assert!(
             engine.rules().is_empty(),
             "rule with invalid regex must be rejected"
+        );
+    }
+
+    #[test]
+    fn try_add_rule_rejects_invalid_and_duplicate_ids() {
+        let engine = DownloadRuleEngine::new();
+        let empty = make_rule(" ", 0, vec![], reject_action("empty"));
+        assert!(engine
+            .try_add_rule(empty)
+            .unwrap_err()
+            .contains("cannot be empty"));
+
+        let rule = make_rule("unique", 0, vec![], reject_action("first"));
+        engine.try_add_rule(rule.clone()).unwrap();
+        assert!(engine
+            .try_add_rule(rule)
+            .unwrap_err()
+            .contains("Rule already exists"));
+        assert_eq!(engine.rules().len(), 1);
+    }
+
+    #[test]
+    fn try_add_rule_returns_invalid_regex_error_without_storing_rule() {
+        let engine = DownloadRuleEngine::new();
+        let error = engine
+            .try_add_rule(make_rule(
+                "bad-regex",
+                0,
+                vec![RuleCondition::UrlMatches {
+                    pattern: "[unclosed".to_string(),
+                }],
+                reject_action("regex"),
+            ))
+            .unwrap_err();
+        assert!(error.contains("Invalid UrlMatches regex"));
+        assert!(engine.rules().is_empty());
+    }
+
+    #[test]
+    fn url_extension_matches_signed_url_query_and_fragment() {
+        let engine = DownloadRuleEngine::new();
+        engine.add_rule(make_rule(
+            "signed-extension",
+            0,
+            vec![RuleCondition::UrlExtension {
+                extensions: vec!["zip".to_string()],
+            }],
+            reject_action("extension"),
+        ));
+        assert_eq!(
+            engine
+                .evaluate(
+                    "https://example.com/archive.ZIP?signature=abc#download",
+                    "example.com",
+                    None
+                )
+                .len(),
+            1
         );
     }
 }
