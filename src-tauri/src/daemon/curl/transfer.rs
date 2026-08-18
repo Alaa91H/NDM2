@@ -8,9 +8,9 @@ use ::curl::easy::Easy2;
 use ::curl::multi::Easy2Handle;
 
 use super::{
-    apply_easy_options, create_easy_for_range_ext, drive_multi_wait_perform, requested_connections,
-    CurlMultiGuard, CurlTransferConfig, DirectDownloadPlan, HtmlHeadCapture, ResponseCapture,
-    SegmentProgress,
+    apply_easy_options, create_easy_for_range_ext, drive_multi_wait_perform,
+    drive_multi_wait_perform_until, requested_connections, CurlMultiGuard, CurlTransferConfig,
+    DirectDownloadPlan, HtmlHeadCapture, ResponseCapture, SegmentProgress,
 };
 use crate::daemon::direct::{
     FileWriter, IntegrityMetadata, IntegrityValidator, RetryPolicy, SegmentPlanner,
@@ -73,15 +73,23 @@ fn build_decision_context(
     // two can differ when bandwidth-aware clamping reduces the connection
     // count at dispatch time. Fall back to plan.connections when the tracker
     // has no segment info (single-connection / unknown-size path).
-    let attempted_segments = if let Ok(trackers) = state.engine_trackers.read() {
-        trackers
-            .get(id)
-            .and_then(|t| t.segments.as_ref())
-            .map(|seg| seg.segments().len() as u32)
-            .unwrap_or(plan.connections)
-    } else {
-        plan.connections
-    };
+    let (attempted_segments, current_connections) =
+        if let Ok(trackers) = state.engine_trackers.read() {
+            if let Some(tracker) = trackers.get(id) {
+                (
+                    tracker
+                        .segments
+                        .as_ref()
+                        .map(|seg| seg.segments().len() as u32)
+                        .unwrap_or(plan.connections),
+                    tracker.adaptive.connections(),
+                )
+            } else {
+                (plan.connections, plan.connections)
+            }
+        } else {
+            (plan.connections, plan.connections)
+        };
     let mut completed_segments = 0u32;
     let mut failed_segments = 0u32;
     if let Ok(trackers) = state.engine_trackers.read() {
@@ -133,7 +141,7 @@ fn build_decision_context(
         host,
         file_size: plan.total_size,
         current_speed,
-        current_connections: plan.connections,
+        current_connections,
         active_downloads,
         memory_pressure,
         cpu_pressure,
@@ -1242,6 +1250,7 @@ fn run_segmented_libcurl(
     );
 
     let ranges = split_ranges(plan.total_size, effective_connections, &plan.output_path);
+    let live_connections = u32::try_from(ranges.len()).unwrap_or(u32::MAX).max(1);
 
     let segment_scheduler = crate::daemon::engine::dynamic_segments::DynamicSegmentScheduler::new(
         plan.total_size,
@@ -1336,7 +1345,7 @@ fn run_segmented_libcurl(
             crate::daemon::state::TaskEngineTracker {
                 adaptive:
                     crate::daemon::engine::adaptive_connections::AdaptiveConnectionManager::new(
-                        plan.connections,
+                        live_connections,
                         Default::default(),
                     ),
                 segments: Some(segment_scheduler.clone()),
@@ -1738,18 +1747,18 @@ fn run_segmented_libcurl(
     // Phase 5 outer drive loop: drive until completion, rebuilding the easy
     // handles whenever the adaptive engine changes the segment geometry.
     'drive: loop {
-        let result = drive_multi_wait_perform(
+        let rebuild_requested = drive_multi_wait_perform_until(
             guard.multi()?,
             &handles_cell.borrow(),
             &cancel,
             "segment",
             &mut tick,
             state.bandwidth_manager.paused_flag(),
-        );
-        // If the drive loop finished because the engine requested a rebuild
-        // (not because transfers completed), rebuild and continue.
-        if !pending_rebuild.get() {
-            result?;
+            || pending_rebuild.get(),
+        )?;
+        // The driver returns immediately after a tick requests a geometry
+        // change, so rebuild while the old handle layout is still live.
+        if !rebuild_requested {
             break 'drive;
         }
         pending_rebuild.set(false);
@@ -1874,6 +1883,12 @@ fn run_segmented_libcurl(
         last_tick_cell.set(Instant::now());
         *prev_seg_bytes_cell.borrow_mut() = vec![0; active.len()];
         drop(active);
+        if let Ok(trackers) = state.engine_trackers.read() {
+            if let Some(tracker) = trackers.get(id) {
+                let live_count = u32::try_from(handles_cell.borrow().len()).unwrap_or(u32::MAX);
+                tracker.adaptive.set_connections(live_count);
+            }
+        }
         if handles_cell.borrow().is_empty() {
             break 'drive;
         }
@@ -5001,9 +5016,11 @@ mod tests {
         // must grow beyond the initial 2 (proof a rebuild actually happened).
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
         let mut max_segments = 2usize;
+        let mut max_live_connections = 2u32;
         let task = loop {
             if let Ok(trackers) = state.engine_trackers.read() {
                 if let Some(tracker) = trackers.get(id) {
+                    max_live_connections = max_live_connections.max(tracker.adaptive.connections());
                     if let Ok(guard) = tracker.adaptive_engine.lock() {
                         if let Some(engine) = guard.as_ref() {
                             max_segments = max_segments.max(engine.segment_ctrl.segment_count());
@@ -5033,6 +5050,10 @@ mod tests {
         assert!(
             max_segments > 2,
             "adaptive engine never rebuilt geometry mid-transfer (max segments {max_segments})"
+        );
+        assert!(
+            max_live_connections > 2,
+            "live connection count was never refreshed after adaptive rebuild (max {max_live_connections})"
         );
         let written = std::fs::read(&out).unwrap();
         assert_eq!(

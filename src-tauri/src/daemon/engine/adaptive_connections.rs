@@ -44,13 +44,36 @@ pub struct AdaptiveConnectionManager {
 
 impl AdaptiveConnectionManager {
     pub fn new(initial_connections: u32, config: AdaptiveConfig) -> Self {
-        let conns = initial_connections.clamp(config.min_connections, config.max_connections);
+        // `AdaptiveConfig` is public and can be supplied by callers other than
+        // the validated global configuration. Normalize its bounds before
+        // calling `clamp`, which panics when min > max, and preserve the
+        // invariant that a live manager always represents at least one slot.
+        let max_connections = config.max_connections.max(MIN_CONNECTIONS);
+        let min_connections = config
+            .min_connections
+            .clamp(MIN_CONNECTIONS, max_connections);
+        let conns = initial_connections.clamp(min_connections, max_connections);
         Self {
             current_connections: Arc::new(AtomicU32::new(conns)),
-            max_connections: Arc::new(AtomicU32::new(config.max_connections)),
+            max_connections: Arc::new(AtomicU32::new(max_connections)),
             current_speed: Arc::new(AtomicU64::new(0)),
             peak_speed: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// Update the reported live connection count while preserving the manager's
+    /// configured bounds. The transfer engine calls this after bandwidth-aware
+    /// planning and every adaptive handle rebuild, so API consumers do not see
+    /// the stale user-requested count while a different number is actually live.
+    pub fn set_connections(&self, connections: u32) {
+        let max_connections = self
+            .max_connections
+            .load(Ordering::Relaxed)
+            .max(MIN_CONNECTIONS);
+        self.current_connections.store(
+            connections.clamp(MIN_CONNECTIONS, max_connections),
+            Ordering::Relaxed,
+        );
     }
 
     pub fn report_speed(&self, bytes_per_sec: u64) {
@@ -103,5 +126,28 @@ mod tests {
         mgr.report_speed(200_000);
         assert_eq!(mgr.speed(), 200_000);
         assert_eq!(mgr.peak_speed(), 500_000);
+    }
+
+    #[test]
+    fn invalid_config_bounds_are_normalized_without_panicking() {
+        let config = AdaptiveConfig {
+            min_connections: 8,
+            max_connections: 0,
+            ..fast_config()
+        };
+        let mgr = AdaptiveConnectionManager::new(0, config);
+        assert_eq!(mgr.connections(), 1);
+        assert_eq!(mgr.max_connections.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn set_connections_tracks_live_count_within_bounds() {
+        let mgr = AdaptiveConnectionManager::new(4, fast_config());
+        mgr.set_connections(7);
+        assert_eq!(mgr.connections(), 7);
+        mgr.set_connections(100);
+        assert_eq!(mgr.connections(), 16);
+        mgr.set_connections(0);
+        assert_eq!(mgr.connections(), 1);
     }
 }

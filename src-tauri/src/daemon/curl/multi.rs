@@ -102,62 +102,6 @@ impl Drop for CurlMultiGuard {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn multi_guard_new_has_zero_handles() {
-        let guard = CurlMultiGuard::new();
-        assert_eq!(guard.handle_count(), 0);
-    }
-
-    #[test]
-    fn multi_guard_error_kind_display() {
-        assert_eq!(MultiErrorKind::Perform.to_string(), "multi perform");
-        assert_eq!(MultiErrorKind::Wait.to_string(), "multi wait");
-    }
-
-    #[test]
-    fn multi_guard_drop_logs_when_handles_registered() {
-        let guard = CurlMultiGuard::new();
-        assert_eq!(guard.handle_count(), 0);
-        drop(guard);
-    }
-
-    #[test]
-    fn multi_guard_configure_limits_succeeds() {
-        let mut guard = CurlMultiGuard::new();
-        let limits = ConnectionLimits {
-            total: 4,
-            per_host: 2,
-            cache: 8,
-        };
-        assert!(guard.configure_limits(limits).is_ok());
-    }
-
-    #[test]
-    fn connection_limits_from_config() {
-        use crate::daemon::engine::config::global_config;
-        let limits = global_config().connection_limits_for(4, "https://example.com/file");
-        assert!(limits.total >= 1);
-        assert!(limits.total <= 128);
-        assert!(limits.per_host >= 1);
-        assert!(limits.cache >= limits.total);
-    }
-
-    #[test]
-    fn connection_limits_clamp_to_config() {
-        use crate::daemon::engine::config::global_config;
-        let limits = global_config().connection_limits_for(1000, "https://example.com/file");
-        let cfg = global_config();
-        assert!(limits.total <= cfg.max_connections_per_download as usize);
-        assert!(limits.per_host <= limits.total);
-        assert!(limits.total >= 1);
-        assert!(limits.per_host >= 1);
-    }
-}
-
 pub fn configure_multi_limits(multi: &mut Multi, limits: ConnectionLimits) -> Result<(), String> {
     multi
         .set_max_total_connections(limits.total)
@@ -212,17 +156,26 @@ fn check_multi_messages<H: Handler>(
     }
 }
 
-pub fn drive_multi_wait_perform<H, F>(
+/// Drive a libcurl multi handle until every transfer completes, cancellation
+/// occurs, or `stop_when` requests that the caller reclaim the live handles.
+///
+/// A `true` result means the caller requested the stop. This is deliberately
+/// checked immediately after `tick`: adaptive transfer logic records a new
+/// segment geometry during that callback, and continuing with `perform` would
+/// otherwise keep the old easy handles alive until the entire download ended.
+pub fn drive_multi_wait_perform_until<H, F, S>(
     multi: &Multi,
     handles: &[Easy2Handle<H>],
     cancel: &AtomicBool,
     label: &str,
     mut tick: F,
     paused: &AtomicBool,
-) -> Result<(), String>
+    mut stop_when: S,
+) -> Result<bool, String>
 where
     H: Handler,
     F: FnMut(),
+    S: FnMut() -> bool,
 {
     let mut running = multi
         .perform()
@@ -237,17 +190,98 @@ where
             // resume is detected promptly.
             std::thread::sleep(Duration::from_millis(PROGRESS_INTERVAL_MS));
             tick();
+            if stop_when() {
+                return Ok(true);
+            }
             continue;
         }
         multi
             .wait(&mut [], Duration::from_millis(PROGRESS_INTERVAL_MS))
             .map_err(|e| wrap_multi_error(MultiErrorKind::Wait, e.to_string()))?;
         tick();
+        // Stop before another perform call so the caller can remove/rebuild the
+        // old handles while their byte ranges still correspond to disk state.
+        if stop_when() {
+            return Ok(true);
+        }
         running = multi
             .perform()
             .map_err(|e| wrap_multi_error(MultiErrorKind::Perform, e.to_string()))?;
         check_multi_messages(multi, handles, label)?;
     }
     tick();
-    check_multi_messages(multi, handles, label)
+    check_multi_messages(multi, handles, label)?;
+    Ok(false)
+}
+
+pub fn drive_multi_wait_perform<H, F>(
+    multi: &Multi,
+    handles: &[Easy2Handle<H>],
+    cancel: &AtomicBool,
+    label: &str,
+    tick: F,
+    paused: &AtomicBool,
+) -> Result<(), String>
+where
+    H: Handler,
+    F: FnMut(),
+{
+    drive_multi_wait_perform_until(multi, handles, cancel, label, tick, paused, || false)
+        .map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn multi_guard_new_has_zero_handles() {
+        let guard = CurlMultiGuard::new();
+        assert_eq!(guard.handle_count(), 0);
+    }
+
+    #[test]
+    fn multi_guard_error_kind_display() {
+        assert_eq!(MultiErrorKind::Perform.to_string(), "multi perform");
+        assert_eq!(MultiErrorKind::Wait.to_string(), "multi wait");
+    }
+
+    #[test]
+    fn multi_guard_drop_logs_when_handles_registered() {
+        let guard = CurlMultiGuard::new();
+        assert_eq!(guard.handle_count(), 0);
+        drop(guard);
+    }
+
+    #[test]
+    fn multi_guard_configure_limits_succeeds() {
+        let mut guard = CurlMultiGuard::new();
+        let limits = ConnectionLimits {
+            total: 4,
+            per_host: 2,
+            cache: 8,
+        };
+        assert!(guard.configure_limits(limits).is_ok());
+    }
+
+    #[test]
+    fn connection_limits_from_config() {
+        use crate::daemon::engine::config::global_config;
+        let limits = global_config().connection_limits_for(4, "https://example.com/file");
+        assert!(limits.total >= 1);
+        assert!(limits.total <= 128);
+        assert!(limits.per_host >= 1);
+        assert!(limits.cache >= limits.total);
+    }
+
+    #[test]
+    fn connection_limits_clamp_to_config() {
+        use crate::daemon::engine::config::global_config;
+        let limits = global_config().connection_limits_for(1000, "https://example.com/file");
+        let cfg = global_config();
+        assert!(limits.total <= cfg.max_connections_per_download as usize);
+        assert!(limits.per_host <= limits.total);
+        assert!(limits.total >= 1);
+        assert!(limits.per_host >= 1);
+    }
 }

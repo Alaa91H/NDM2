@@ -726,46 +726,6 @@ async fn probe_url_uncached(
     Ok(Json(fallback))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::probe_payload_from_cache;
-    use crate::daemon::engine::metadata_cache::CachedMetadata;
-    use std::collections::HashMap;
-
-    #[test]
-    fn cached_probe_preserves_digest_and_mirror_priorities() {
-        let mut headers = HashMap::new();
-        headers.insert(
-            "linkMirrors".to_owned(),
-            r#"["https://mirror-a.example/file.zip","https://mirror-b.example/file.zip"]"#
-                .to_owned(),
-        );
-        headers.insert("mirrorPriorities".to_owned(), "[1,3]".to_owned());
-        let cached = CachedMetadata {
-            url: "https://origin.example/file.zip".to_owned(),
-            filename: "file.zip".to_owned(),
-            content_type: Some("application/zip".to_owned()),
-            content_length: Some(1024),
-            content_range: None,
-            content_disposition: None,
-            etag: Some("\"etag\"".to_owned()),
-            last_modified: None,
-            accept_ranges: true,
-            checksum: Some("a".repeat(64)),
-            headers,
-            cached_at: "2026-08-17 00:00:00".to_owned(),
-        };
-
-        let payload = probe_payload_from_cache(&cached);
-        assert_eq!(payload["digestSha256"], "a".repeat(64));
-        assert_eq!(
-            payload["linkMirrors"][0],
-            "https://mirror-a.example/file.zip"
-        );
-        assert_eq!(payload["mirrorPriorities"], serde_json::json!([1, 3]));
-    }
-}
-
 pub async fn handle_probe(
     Query(params): Query<HashMap<String, String>>,
     State(state): State<SharedState>,
@@ -1023,4 +983,44 @@ pub fn register_routes(router: Router<SharedState>) -> Router<SharedState> {
             get(handle_ytdlp_probe_playlist),
         )
         .route("/api/ytdlp/ffmpeg", get(handle_ytdlp_ffmpeg))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::probe_payload_from_cache;
+    use crate::daemon::engine::metadata_cache::CachedMetadata;
+    use std::collections::HashMap;
+
+    #[test]
+    fn cached_probe_preserves_digest_and_mirror_priorities() {
+        let mut headers = HashMap::new();
+        headers.insert(
+            "linkMirrors".to_owned(),
+            r#"["https://mirror-a.example/file.zip","https://mirror-b.example/file.zip"]"#
+                .to_owned(),
+        );
+        headers.insert("mirrorPriorities".to_owned(), "[1,3]".to_owned());
+        let cached = CachedMetadata {
+            url: "https://origin.example/file.zip".to_owned(),
+            filename: "file.zip".to_owned(),
+            content_type: Some("application/zip".to_owned()),
+            content_length: Some(1024),
+            content_range: None,
+            content_disposition: None,
+            etag: Some("\"etag\"".to_owned()),
+            last_modified: None,
+            accept_ranges: true,
+            checksum: Some("a".repeat(64)),
+            headers,
+            cached_at: "2026-08-17 00:00:00".to_owned(),
+        };
+
+        let payload = probe_payload_from_cache(&cached);
+        assert_eq!(payload["digestSha256"], "a".repeat(64));
+        assert_eq!(
+            payload["linkMirrors"][0],
+            "https://mirror-a.example/file.zip"
+        );
+        assert_eq!(payload["mirrorPriorities"], serde_json::json!([1, 3]));
+    }
 }

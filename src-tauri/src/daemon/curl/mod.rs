@@ -17,7 +17,7 @@ pub(super) use args::{
     destination_from_body, proxy_resolves_to_internal, requested_connections, safe_value,
 };
 pub(super) use easy_config::{apply_easy_options, create_easy_for_range_ext, HtmlHeadCapture};
-pub(super) use multi::{drive_multi_wait_perform, CurlMultiGuard};
+pub(super) use multi::{drive_multi_wait_perform, drive_multi_wait_perform_until, CurlMultiGuard};
 #[allow(unused_imports)]
 pub(super) use transfer::{remove_stale_parts_for, split_ranges, task_from_body};
 pub(super) use transfer_config::CurlTransferConfig;

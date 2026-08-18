@@ -1325,36 +1325,6 @@ fn content_type_to_ext(content_type: &str) -> &str {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::analyze_probe_body;
-
-    #[test]
-    fn analyze_probe_body_preserves_explicit_referrer_then_page_url() {
-        let url = "https://cdn.example.test/file.zip";
-        let with_referrer = analyze_probe_body(
-            url,
-            &serde_json::json!({
-                "pageUrl": "https://page.example.test/download",
-                "referrer": "https://referrer.example.test/source"
-            }),
-        );
-        assert_eq!(
-            with_referrer.referer.as_deref(),
-            Some("https://referrer.example.test/source")
-        );
-
-        let with_page_url = analyze_probe_body(
-            url,
-            &serde_json::json!({"pageUrl": "https://page.example.test/download"}),
-        );
-        assert_eq!(
-            with_page_url.referer.as_deref(),
-            Some("https://page.example.test/download")
-        );
-    }
-}
-
 pub fn register_routes(router: Router<SharedState>) -> Router<SharedState> {
     router
         .route(
@@ -1383,4 +1353,34 @@ pub fn register_routes(router: Router<SharedState>) -> Router<SharedState> {
         .route("/v1/stream/add", post(handle_v1_stream_add))
         .route("/v1/analyze", post(handle_v1_analyze))
         .route("/v1/analyze/progress", post(handle_v1_analyze_progress))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::analyze_probe_body;
+
+    #[test]
+    fn analyze_probe_body_preserves_explicit_referrer_then_page_url() {
+        let url = "https://cdn.example.test/file.zip";
+        let with_referrer = analyze_probe_body(
+            url,
+            &serde_json::json!({
+                "pageUrl": "https://page.example.test/download",
+                "referrer": "https://referrer.example.test/source"
+            }),
+        );
+        assert_eq!(
+            with_referrer.referer.as_deref(),
+            Some("https://referrer.example.test/source")
+        );
+
+        let with_page_url = analyze_probe_body(
+            url,
+            &serde_json::json!({"pageUrl": "https://page.example.test/download"}),
+        );
+        assert_eq!(
+            with_page_url.referer.as_deref(),
+            Some("https://page.example.test/download")
+        );
+    }
 }
