@@ -233,7 +233,7 @@ impl UnifiedProfileStore {
                 ..Default::default()
             });
 
-        entry.total_probes += 1;
+        entry.total_probes = entry.total_probes.saturating_add(1);
         if rtt_us > 0 {
             let alpha = 0.2;
             entry.median_rtt_us = if entry.median_rtt_us == 0 {
@@ -246,7 +246,7 @@ impl UnifiedProfileStore {
             entry.throughput_ceiling = speed;
         }
         if http_status == 200 || http_status == 206 {
-            entry.successful_probes += 1;
+            entry.successful_probes = entry.successful_probes.saturating_add(1);
         }
         if http_status == 429 || http_status == 503 {
             entry.rate_limit_cooldown_until = Some(
@@ -269,7 +269,14 @@ impl UnifiedProfileStore {
             return false;
         }
         let window = &recent_speeds[recent_speeds.len().saturating_sub(10)..];
-        let avg = window.iter().sum::<u64>() / window.len() as u64;
+        // Aggregate in u128: long-lived telemetry can legitimately contain
+        // high transfer rates, and summing a window of u64 values must never
+        // overflow and interrupt adaptive scheduling.
+        let avg = (window
+            .iter()
+            .fold(0u128, |sum, &speed| sum.saturating_add(u128::from(speed)))
+            / window.len() as u128)
+            .min(u128::from(u64::MAX)) as u64;
         if avg == 0 {
             return false;
         }
@@ -529,6 +536,35 @@ mod tests {
         let p = store.get_for_host("host.com").unwrap();
         assert_eq!(p.total_probes, 1);
         assert_eq!(p.successful_probes, 1);
+        cleanup(&store);
+    }
+
+    #[test]
+    fn telemetry_counters_and_plateau_average_saturate_at_extreme_values() {
+        let mut store = temp_store();
+        store.profiles.insert(
+            "host.com".to_owned(),
+            PersistedProfile {
+                host: "host.com".to_owned(),
+                total_probes: u64::MAX,
+                successful_probes: u64::MAX,
+                ..Default::default()
+            },
+        );
+        store.merge_telemetry("host.com", 1, u64::MAX, 200);
+        let p = store.get_for_host("host.com").unwrap();
+        assert_eq!(p.total_probes, u64::MAX);
+        assert_eq!(p.successful_probes, u64::MAX);
+
+        let plateau = store.detect_bandwidth_plateau("host.com", &[u64::MAX; 5]);
+        assert!(plateau);
+        assert_eq!(
+            store
+                .get_for_host("host.com")
+                .unwrap()
+                .per_connection_ceiling,
+            u64::MAX
+        );
         cleanup(&store);
     }
 
