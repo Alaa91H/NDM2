@@ -96,11 +96,13 @@ impl ResourceMonitor {
     }
 
     pub fn max_safe_connections(&self) -> u32 {
-        let base = self.cpu_count * 2;
+        // Keep resource telemetry defensive: an abnormal host report must not
+        // overflow in debug builds and interrupt an active download.
+        let base = self.cpu_count.max(1).saturating_mul(2);
         let mem_factor = if self.available_memory_mb > 1024 {
             base
         } else if self.available_memory_mb > 512 {
-            (base * 3) / 4
+            base.saturating_mul(3) / 4
         } else {
             base / 2
         };
@@ -501,6 +503,14 @@ mod tests {
         m.cpu_count = 64;
         m.available_memory_mb = 8192;
         assert!(m.max_safe_connections() <= 32);
+    }
+
+    #[test]
+    fn max_safe_connections_handles_extreme_cpu_telemetry() {
+        let mut m = ResourceMonitor::new();
+        m.cpu_count = u32::MAX;
+        m.available_memory_mb = 8192;
+        assert_eq!(m.max_safe_connections(), 32);
     }
 
     #[test]
