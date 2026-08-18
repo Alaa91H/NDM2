@@ -227,6 +227,12 @@ impl SegmentPlanner {
     }
 
     pub fn plan(&self, total_size: u64, connections: u32, output_path: &Path) -> Vec<SegmentRange> {
+        // A zero-sized/unknown resource cannot be represented by an inclusive
+        // byte range. Without this guard the saturated `end` computation below
+        // would fabricate 0..=u64::MAX and spawn a bogus segmented transfer.
+        if total_size == 0 {
+            return Vec::new();
+        }
         const MAX_SEGMENTS: u32 = 256;
         let count = connections
             .max(1)
@@ -604,5 +610,11 @@ mod tests {
         assert!(DirectUrl::parse("https://example.com/file.iso").is_ok());
         assert!(DirectUrl::parse("sftp://example.com/file.iso").is_ok());
         assert!(DirectUrl::parse("scp://example.com/file.iso").is_ok());
+    }
+
+    #[test]
+    fn segment_planner_returns_no_ranges_for_zero_size() {
+        let ranges = SegmentPlanner::new(32).plan(0, 8, Path::new("empty.bin"));
+        assert!(ranges.is_empty());
     }
 }
