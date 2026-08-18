@@ -499,12 +499,13 @@ impl SegmentController {
                 if from_seg == to_seg {
                     return;
                 }
-                // M10: prefix-segment rebalance. Instead of moving the fast
-                // segment's start back (which re-downloads the overlapped
-                // bytes), shrink the slow segment and INSERT a prefix segment
-                // covering [slow.end_byte, fast.start_byte). The fast segment
-                // keeps its start/downloaded untouched, so no byte is ever
-                // downloaded twice.
+                // Rebalancing preserves the fast segment's start and creates
+                // a new prefix range between the shrunken slow segment and the
+                // existing fast segment. Its part file does not exist yet, so
+                // it MUST begin at zero progress: bytes beyond the shrunken
+                // slow range may still be present only in the old slow part
+                // file and are truncated during rebuild. Claiming them here
+                // makes the live UI over-report and can skip a required range.
                 let Some(slow_idx) = self.segments.iter().position(|s| s.id == *from_seg) else {
                     return;
                 };
@@ -523,21 +524,23 @@ impl SegmentController {
                 let new_id = self.segments.iter().map(|s| s.id).max().unwrap_or(0) + 1;
                 let now = Instant::now();
 
-                // Shrink the slow segment and mark it for truncation: its file
-                // already holds `transfer` extra bytes beyond its new end.
+                // Shrink the slow segment. Its reported downloaded count must
+                // be clamped to the NEW range length; the rebuild path truncates
+                // any stale tail on disk before resuming this part.
                 let slow_downloaded = self.segments[slow_idx].downloaded;
-                let slow_total = self.segments[slow_idx].total_bytes();
                 self.segments[slow_idx].end_byte = new_slow_end;
                 self.segments[slow_idx].truncate_on_complete = true;
-                self.segments[slow_idx].downloaded = slow_downloaded.min(slow_total);
+                let new_slow_total = self.segments[slow_idx].total_bytes();
+                self.segments[slow_idx].downloaded = slow_downloaded.min(new_slow_total);
 
-                // Insert the prefix segment that owns those already-written
-                // bytes — no re-download needed.
+                // The prefix owns an independent part file and must download
+                // from zero during the next rebuild. It cannot inherit bytes
+                // from the old slow part file safely.
                 self.segments.push(LiveSegment {
                     id: new_id,
                     start_byte: new_slow_end,
                     end_byte: old_slow_end,
-                    downloaded: transfer,
+                    downloaded: 0,
                     speed: 0,
                     assigned_connection: None,
                     state: SegmentState::Active,
@@ -1081,10 +1084,10 @@ mod tests {
     }
 
     #[test]
-    fn rebalance_uses_prefix_segment_no_overlap() {
-        // M10 regression: rebalance must NOT move the fast segment's start
-        // back (which re-downloads the overlapped tail). It inserts a prefix
-        // segment owning the already-written bytes instead.
+    fn rebalance_creates_zero_progress_prefix_without_overlap() {
+        // Regression: rebalance must NOT move the fast segment's start, and
+        // the newly independent prefix must start at zero progress because it
+        // has no part file of its own until the rebuild downloads it.
         let mut c = SegmentController::new(10_000_000, 1024 * 1024);
         c.redistribute_for_count(2);
         // Slow segment first, fast second, adjacent.
@@ -1121,13 +1124,17 @@ mod tests {
             fast.downloaded, fast_downloaded_before,
             "fast must keep progress"
         );
-        // The prefix owns exactly the transferred bytes, adjacent to both.
+        // The prefix covers exactly the transferred range, adjacent to both,
+        // but reports no bytes until its own part file is downloaded.
         let prefix = c
             .segments
             .iter()
             .find(|s| s.start_byte == slow.end_byte && s.end_byte == fast.start_byte)
             .expect("prefix segment must exist");
-        assert_eq!(prefix.downloaded, 5000);
+        assert_eq!(
+            prefix.downloaded, 0,
+            "a new prefix cannot inherit bytes from another part file"
+        );
         // No overlap anywhere and everything stays inside [slow_start, fast_end).
         let mut sorted: Vec<&LiveSegment> = c.segments.iter().collect();
         sorted.sort_by_key(|s| s.start_byte);
