@@ -87,11 +87,15 @@ impl ServerProfile {
         if self.optimal_connections > 0 {
             return self.optimal_connections;
         }
+        // CPU sampling can transiently return zero in constrained hosts;
+        // retain a valid nonzero connection recommendation and avoid overflow
+        // from malformed telemetry.
+        let scaled = cpu_count.max(1).saturating_mul(2);
         let base = match self.protocol {
-            ProtocolVersion::Http2 | ProtocolVersion::Http3 => (cpu_count * 2).min(16),
-            ProtocolVersion::Http11 => (cpu_count * 2).min(32),
+            ProtocolVersion::Http2 | ProtocolVersion::Http3 => scaled.min(16).max(2),
+            ProtocolVersion::Http11 => scaled.min(32).max(1),
             ProtocolVersion::Ftp | ProtocolVersion::Sftp | ProtocolVersion::Scp => 1,
-            ProtocolVersion::Unknown => (cpu_count * 2).min(16),
+            ProtocolVersion::Unknown => scaled.min(16).max(2),
         };
         if file_size < 1024 * 1024 {
             return 1;
@@ -259,8 +263,8 @@ impl ServerProfiler {
         if ttfb_us > 0 {
             profile.ttfb_samples.push(ttfb_us);
         }
-        profile.total_probes += 1;
-        profile.successful_probes += 1;
+        profile.total_probes = profile.total_probes.saturating_add(1);
+        profile.successful_probes = profile.successful_probes.saturating_add(1);
         profile.last_observed = Some(Instant::now());
         profile.update_statistics();
     }
@@ -286,11 +290,11 @@ impl ServerProfiler {
                 profile.throughput_samples.pop_front();
             }
         }
-        profile.total_probes += 1;
+        profile.total_probes = profile.total_probes.saturating_add(1);
         if error {
-            profile.consecutive_failures += 1;
+            profile.consecutive_failures = profile.consecutive_failures.saturating_add(1);
         } else {
-            profile.successful_probes += 1;
+            profile.successful_probes = profile.successful_probes.saturating_add(1);
             profile.consecutive_failures = 0;
         }
         match http_status {
@@ -315,8 +319,8 @@ impl ServerProfiler {
 
     pub fn report_success(&mut self, host: &str) {
         if let Some(profile) = self.profiles.get_mut(host) {
-            profile.successful_probes += 1;
-            profile.total_probes += 1;
+            profile.successful_probes = profile.successful_probes.saturating_add(1);
+            profile.total_probes = profile.total_probes.saturating_add(1);
             profile.consecutive_failures = 0;
             profile.last_observed = Some(Instant::now());
             profile.update_statistics();
@@ -325,8 +329,8 @@ impl ServerProfiler {
 
     pub fn report_failure(&mut self, host: &str) {
         if let Some(profile) = self.profiles.get_mut(host) {
-            profile.total_probes += 1;
-            profile.consecutive_failures += 1;
+            profile.total_probes = profile.total_probes.saturating_add(1);
+            profile.consecutive_failures = profile.consecutive_failures.saturating_add(1);
             profile.last_observed = Some(Instant::now());
             profile.update_statistics();
         }
@@ -490,6 +494,35 @@ mod tests {
         p.report_success("h");
         let prof = p.get("h").unwrap();
         assert_eq!(prof.consecutive_failures, 0);
+    }
+
+    #[test]
+    fn recommended_connections_is_nonzero_for_zero_or_extreme_cpu_samples() {
+        for protocol in [
+            ProtocolVersion::Http2,
+            ProtocolVersion::Http3,
+            ProtocolVersion::Http11,
+            ProtocolVersion::Unknown,
+        ] {
+            let mut profile = ServerProfile::new("host");
+            profile.protocol = protocol;
+            assert!(profile.recommended_connections(100 * 1024 * 1024, 0) >= 1);
+            assert!(profile.recommended_connections(100 * 1024 * 1024, u32::MAX) >= 1);
+        }
+    }
+
+    #[test]
+    fn telemetry_counters_saturate_at_their_numeric_limits() {
+        let mut p = ServerProfiler::new();
+        let profile = p.get_or_create("host");
+        profile.total_probes = u64::MAX;
+        profile.successful_probes = u64::MAX;
+        profile.consecutive_failures = u32::MAX;
+        p.update_from_telemetry("host", 0, 0, 500, true);
+        let profile = p.get("host").unwrap();
+        assert_eq!(profile.total_probes, u64::MAX);
+        assert_eq!(profile.successful_probes, u64::MAX);
+        assert_eq!(profile.consecutive_failures, u32::MAX);
     }
 
     #[test]
