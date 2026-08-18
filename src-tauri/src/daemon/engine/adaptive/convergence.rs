@@ -42,7 +42,14 @@ impl ConvergenceDetector {
         if self.last_adjustment.elapsed() < Duration::from_millis(thresholds.eval_interval_ms) {
             return false;
         }
-        if self.adjustments_in_window >= thresholds.max_adjustments_per_minute {
+        // The quota applies only inside its rolling minute. The counter is
+        // reset by record_adjustment(), but should_adjust() must also ignore
+        // an expired window; otherwise a saturated quota can block the very
+        // next adjustment forever because no adjustment is allowed to trigger
+        // that reset.
+        if self.window_start.elapsed() <= Duration::from_secs(60)
+            && self.adjustments_in_window >= thresholds.max_adjustments_per_minute
+        {
             return false;
         }
         true
@@ -211,6 +218,22 @@ mod tests {
         c.record_adjustment(1000);
         std::thread::sleep(Duration::from_millis(2));
         assert!(!c.should_adjust(&t));
+    }
+
+    #[test]
+    fn expired_adjustment_window_allows_the_next_adjustment() {
+        let mut c = ConvergenceDetector::new();
+        let t = AdaptiveThresholds {
+            eval_interval_ms: 1,
+            max_adjustments_per_minute: 2,
+            ..Default::default()
+        };
+        c.adjustments_in_window = 2;
+        c.window_start = Instant::now() - Duration::from_secs(61);
+        assert!(
+            c.should_adjust(&t),
+            "an expired rate-limit window must not permanently block adaptation"
+        );
     }
 
     #[test]
