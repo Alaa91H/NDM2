@@ -54,6 +54,14 @@ impl MirrorManager {
 
     pub fn add_mirror(&self, mirror: MirrorSource) {
         if let Ok(mut state) = self.mirrors.lock() {
+            // Keep the active mirror by URL across the priority sort. Holding
+            // a vector index here is not stable: adding a higher-priority
+            // mirror can shift indices and silently redirect a live transfer
+            // to a different, untested source.
+            let active_url = state
+                .active_mirror
+                .and_then(|index| state.mirrors.get(index))
+                .map(|source| source.url.clone());
             // M7: upsert by url — a duplicate URL must never be re-added
             // (the old code grew the list unboundedly on repeated failover).
             if let Some(existing) = state.mirrors.iter_mut().find(|m| m.url == mirror.url) {
@@ -65,6 +73,10 @@ impl MirrorManager {
                 state.mirrors.push(mirror);
             }
             state.mirrors.sort_by_key(|m| m.priority);
+            state.active_mirror = active_url
+                .as_deref()
+                .and_then(|url| state.mirrors.iter().position(|source| source.url == url))
+                .or_else(|| (!state.mirrors.is_empty()).then_some(0));
         }
     }
 
@@ -379,6 +391,22 @@ mod tests {
         mgr.add_mirror(mirror("https://m.example.com", 5));
         mgr.add_mirror(mirror("https://m.example.com", 5));
         assert_eq!(mgr.mirrors().len(), 2, "duplicate urls must be upserted");
+    }
+
+    #[test]
+    fn adding_a_higher_priority_mirror_preserves_the_active_failover_source() {
+        let mgr = MirrorManager::new("https://primary.example.com");
+        mgr.add_mirror(mirror("https://backup.example.com", 10));
+        assert_eq!(
+            mgr.report_failure("https://primary.example.com", "timeout")
+                .as_deref(),
+            Some("https://backup.example.com")
+        );
+
+        // This insertion moves indices after sorting, but it must not change
+        // the currently active backup until a real failover decision does so.
+        mgr.add_mirror(mirror("https://new.example.com", 1));
+        assert_eq!(mgr.active_url(), "https://backup.example.com");
     }
 
     #[test]
