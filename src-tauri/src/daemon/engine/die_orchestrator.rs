@@ -40,7 +40,10 @@ impl DieOrchestrator {
         let cfg = global_config();
         let max_per_download = cfg.max_connections_per_download;
         let max_total = cfg.max_total_connections;
-        let current_total: u32 = self.host_connections.values().sum();
+        let current_total = self
+            .host_connections
+            .values()
+            .fold(0u32, |total, count| total.saturating_add(*count));
 
         let host_used = self.host_connections.get(host).copied().unwrap_or(0);
         let host_available = max_per_download.saturating_sub(host_used);
@@ -65,13 +68,15 @@ impl DieOrchestrator {
                 }
             });
 
-        let mut result = learned.min(host_available).min(global_available);
-        result = result.max(1);
-        result
+        // A zero budget is a valid outcome: forcing one connection here would
+        // overcommit either the host or global limit. Callers must queue until
+        // a release makes capacity available.
+        learned.min(host_available).min(global_available)
     }
 
     pub fn register_connection(&mut self, host: &str, count: u32) {
-        *self.host_connections.entry(host.to_owned()).or_insert(0) += count;
+        let used = self.host_connections.entry(host.to_owned()).or_insert(0);
+        *used = used.saturating_add(count);
     }
 
     pub fn release_connections(&mut self, host: &str, count: u32) {
@@ -203,8 +208,35 @@ mod tests {
         let max_total = cfg.max_total_connections;
         orch.register_connection("a.com", max_total - 1);
         let rec = orch.recommended_connections_for_host("b.com", 16);
-        assert!(rec >= 1);
-        assert!(rec <= 2);
+        assert_eq!(rec, 1);
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn exhausted_connection_budget_returns_zero_instead_of_overcommitting() {
+        let (mut orch, dir) = temp_orchestrator();
+        let cfg = global_config();
+        orch.register_connection("a.com", cfg.max_total_connections);
+
+        assert_eq!(
+            orch.recommended_connections_for_host("b.com", 1),
+            0,
+            "no global budget must queue the next download"
+        );
+        assert_eq!(
+            orch.recommended_connections_for_host("a.com", 1),
+            0,
+            "no per-host budget must queue the next connection"
+        );
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn connection_registration_saturates_instead_of_wrapping() {
+        let (mut orch, dir) = temp_orchestrator();
+        orch.register_connection("host.com", u32::MAX);
+        orch.register_connection("host.com", 1);
+        assert_eq!(orch.host_connections.get("host.com"), Some(&u32::MAX));
         cleanup(&dir);
     }
 

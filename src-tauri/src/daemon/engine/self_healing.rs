@@ -72,7 +72,24 @@ impl SelfHealer {
             succeeded: false,
         });
         if self.failure_history.len() > self.max_history {
-            self.failure_history.pop_front();
+            if let Some(removed) = self.failure_history.pop_front() {
+                // Keep the per-host streak map bounded by the same retention
+                // window as the detailed history. A resolved record does not
+                // contribute to an active failure streak.
+                if !removed.succeeded {
+                    match self.recovery_counts.entry(removed.host) {
+                        std::collections::hash_map::Entry::Occupied(mut entry) => {
+                            let count = entry.get_mut();
+                            if *count <= 1 {
+                                entry.remove();
+                            } else {
+                                *count -= 1;
+                            }
+                        }
+                        std::collections::hash_map::Entry::Vacant(_) => {}
+                    }
+                }
+            }
         }
 
         *self.recovery_counts.entry(host.to_owned()).or_insert(0) += 1;
@@ -93,7 +110,7 @@ impl SelfHealer {
         };
 
         if let PolicyDecision::Recovery { ref action, .. } = decision {
-            self.total_recoveries += 1;
+            self.total_recoveries = self.total_recoveries.saturating_add(1);
             self.last_recovery = Some(Instant::now());
             if let Some(last) = self.failure_history.back_mut() {
                 last.recovery_applied = format!("{action:?}");
@@ -106,13 +123,15 @@ impl SelfHealer {
     #[allow(dead_code)]
     pub fn on_success(&mut self, host: &str) {
         self.recovery_counts.remove(host);
-        if let Some(last) = self
+        // A successful transfer ends the host's failure streak. Mark every
+        // retained record for that host as resolved so old failures neither
+        // keep health degraded nor interfere with later retention cleanup.
+        for record in self
             .failure_history
             .iter_mut()
-            .rev()
-            .find(|r| r.host == host)
+            .filter(|record| record.host == host)
         {
-            last.succeeded = true;
+            record.succeeded = true;
         }
     }
 
@@ -136,7 +155,7 @@ impl SelfHealer {
         let recent_failures = self
             .failure_history
             .iter()
-            .filter(|r| r.timestamp.elapsed() < Duration::from_secs(60))
+            .filter(|r| !r.succeeded && r.timestamp.elapsed() < Duration::from_secs(60))
             .count() as u32;
 
         if recent_failures == 0 {
@@ -262,6 +281,26 @@ mod tests {
         assert_eq!(sh.host_failure_count("test.com"), 2);
         sh.on_success("test.com");
         assert_eq!(sh.host_failure_count("test.com"), 0);
+        assert_eq!(sh.health_status(), HealthStatus::Healthy);
+        assert!(sh.failure_history.iter().all(|record| record.succeeded));
+    }
+
+    #[test]
+    fn history_retention_also_bounds_unresolved_host_counts() {
+        let pe = Arc::new(Mutex::new(PolicyEngine::new()));
+        let mut sh = SelfHealer::new(pe);
+        sh.max_history = 2;
+        let ctx = default_ctx();
+
+        sh.on_failure("one.example", "err", &ctx);
+        sh.on_failure("two.example", "err", &ctx);
+        sh.on_failure("three.example", "err", &ctx);
+
+        assert_eq!(sh.failure_history.len(), 2);
+        assert_eq!(sh.host_failure_count("one.example"), 0);
+        assert_eq!(sh.host_failure_count("two.example"), 1);
+        assert_eq!(sh.host_failure_count("three.example"), 1);
+        assert_eq!(sh.recovery_counts.len(), 2);
     }
 
     #[test]
