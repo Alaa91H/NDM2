@@ -1,5 +1,5 @@
 /* src/dialogs/Modal.tsx */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { Logo } from '../components/Logo';
 import { useI18n } from '../store/selectors';
@@ -26,6 +26,8 @@ export const Modal: React.FC<ModalProps> = ({
   preventLightDismiss = false,
 }) => {
   const t = useI18n();
+  const generatedTitleId = useId();
+  const titleId = id ? `${id}-title` : generatedTitleId;
   const modalRef = useRef<HTMLDivElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
 
@@ -215,14 +217,14 @@ export const Modal: React.FC<ModalProps> = ({
         bottom: 0,
         padding: '8px',
       }}
-      role={role}
-      aria-modal="true"
-      aria-labelledby="modal-title"
     >
       <div
         id={id}
         ref={modalRef}
         tabIndex={-1}
+        role={role}
+        aria-modal="true"
+        aria-labelledby={titleId}
         style={{
           transform: `translate(${String(position.x)}px, ${String(position.y)}px)`,
           transition: dragging ? 'none' : 'transform 0.05s ease-out',
@@ -255,7 +257,7 @@ export const Modal: React.FC<ModalProps> = ({
               <Logo size={14} className="shrink-0" />
             )}
             <h3
-              id="modal-title"
+              id={titleId}
               className="text-[11px] font-bold text-[var(--text-primary)] font-sans tracking-wide truncate"
               style={{ direction: 'ltr' }}
             >
@@ -275,6 +277,7 @@ export const Modal: React.FC<ModalProps> = ({
               onClick={handleCloseAttempt}
               className="w-7 h-6 flex items-center justify-center rounded hover:bg-[var(--danger)] text-[var(--text-secondary)] hover:text-white transition-colors cursor-pointer"
               title={t('btn_close')}
+              aria-label={t('btn_close')}
             >
               <X className="w-3 h-3" />
             </button>

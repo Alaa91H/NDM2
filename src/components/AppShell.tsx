@@ -509,8 +509,15 @@ const AppShellInner: React.FC = () => {
   if (bridge.status === 'connecting') {
     return (
       <main className="flex min-h-screen w-screen flex-col items-center justify-center gap-6 bg-[var(--bg-app)] px-6 text-center text-[var(--text-primary)]">
-        <Logo size={64} className={connectTimer >= CONNECTION_RECOVERY_AFTER_SECONDS ? 'opacity-80' : 'animate-pulse opacity-80'} />
-        <section className="flex max-w-sm flex-col items-center gap-3" aria-live="polite" aria-busy={connectTimer < CONNECTION_RECOVERY_AFTER_SECONDS}>
+        <Logo
+          size={64}
+          className={connectTimer >= CONNECTION_RECOVERY_AFTER_SECONDS ? 'opacity-80' : 'animate-pulse opacity-80'}
+        />
+        <section
+          className="flex max-w-sm flex-col items-center gap-3"
+          aria-live="polite"
+          aria-busy={connectTimer < CONNECTION_RECOVERY_AFTER_SECONDS}
+        >
           <h2 className="text-lg font-bold">{t('app_name')}</h2>
           <p className="text-sm leading-6 text-[var(--text-secondary)]">
             {connectTimer >= CONNECTION_RECOVERY_AFTER_SECONDS ? t('shell_connect_failed') : t('shell_connecting')}
@@ -527,7 +534,9 @@ const AppShellInner: React.FC = () => {
             </button>
           )}
         </section>
-        {connectTimer < CONNECTION_RECOVERY_AFTER_SECONDS && <RefreshCw className="h-5 w-5 animate-spin text-[var(--accent-primary)]" aria-hidden="true" />}
+        {connectTimer < CONNECTION_RECOVERY_AFTER_SECONDS && (
+          <RefreshCw className="h-5 w-5 animate-spin text-[var(--accent-primary)]" aria-hidden="true" />
+        )}
       </main>
     );
   }
