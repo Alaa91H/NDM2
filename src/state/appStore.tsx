@@ -381,6 +381,11 @@ function EffectsProvider({ children }: { children: ReactNode }) {
     let initialTimer: ReturnType<typeof setTimeout> | null = null;
     let interval: ReturnType<typeof setInterval> | null = null;
     let syncActive = false;
+    // A polling response can arrive after a newer SSE snapshot (or after a
+    // newer poll). Without an ordering guard it would overwrite live byte
+    // counters with stale values, producing the visible 0% → complete jump.
+    let appliedSyncEpoch = 0;
+    let latestPollRequest = 0;
     // Completion side-effect queue: burst of thousands of completions must not
     // fire thousands of native notifications / file-opens in one tick, but
     // every task's configured actions (openOnComplete, virusScan, …) must still
@@ -404,6 +409,7 @@ function EffectsProvider({ children }: { children: ReactNode }) {
 
     const applyDownloadsImmediate = (daemonTasks: DownloadItem[], fromStream = false) => {
       if (cancelled) return;
+      appliedSyncEpoch += 1;
       started = true;
       if (fromStream) sseFailed = false;
       const taskState = taskStore.getState();
@@ -475,8 +481,13 @@ function EffectsProvider({ children }: { children: ReactNode }) {
     };
 
     const syncDownloads = async () => {
+      const requestId = ++latestPollRequest;
+      const epochBeforeRequest = appliedSyncEpoch;
       try {
         const daemonTasks = await novaClient.listDownloads();
+        // Ignore an older overlapping poll or a response that was overtaken by
+        // SSE. The next regular poll remains a full reconciliation point.
+        if (cancelled || requestId !== latestPollRequest || epochBeforeRequest !== appliedSyncEpoch) return;
         applyDownloads(daemonTasks);
       } catch {
         if (!cancelled && started) bridgeStore.getState().setIsDegradedMode(true);
@@ -513,6 +524,8 @@ function EffectsProvider({ children }: { children: ReactNode }) {
       started = false;
       sseFailed = false;
       fallbackTick = 0;
+      appliedSyncEpoch = 0;
+      latestPollRequest = 0;
       const { enableSse } = settingsStore.getState().settings.extra;
       const canStreamDownloads = enableSse && typeof window.EventSource !== 'undefined';
       if (canStreamDownloads) {
