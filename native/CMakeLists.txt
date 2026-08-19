@@ -27,6 +27,8 @@ qt_add_qml_module(NDM2
         qml/dialogs/AddDownloadDialog.qml
         qml/dialogs/DetailsDrawer.qml
         qml/dialogs/SettingsDialog.qml
+        qml/pages/QueuePage.qml
+        qml/pages/DiagnosticsPage.qml
 )
 
 set_target_properties(NDM2 PROPERTIES
