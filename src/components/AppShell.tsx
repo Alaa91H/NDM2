@@ -3,6 +3,7 @@ import React, { useEffect, useState, useRef, lazy, Suspense } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow, ProgressBarStatus } from '@tauri-apps/api/window';
 import { logger } from '../utils/logger';
+import { tauriClient } from '../api/tauriClient';
 import {
   useTaskData,
   useTaskSelectors,
@@ -38,6 +39,8 @@ import { Logo } from './Logo';
 import { extractFirstHttpUrl, readClipboardText } from '../utils/clipboard';
 import { getDialogForUrl } from '../utils/urlDetector';
 import { ErrorBoundary } from './ErrorBoundary';
+
+const CONNECTION_RECOVERY_AFTER_SECONDS = 20;
 
 const isEditableTarget = (target: EventTarget | null) => {
   const element = target as HTMLElement | null;
@@ -96,6 +99,7 @@ const AppShellInner: React.FC = () => {
 
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [connectTimer, setConnectTimer] = useState(0);
+  const [isRecoveringConnection, setIsRecoveringConnection] = useState(false);
   const [isWindowMaximized, setIsWindowMaximized] = useState(false);
   const dragCounter = useRef(0);
   const lastClipboardText = useRef('');
@@ -477,6 +481,16 @@ const AppShellInner: React.FC = () => {
     }
   };
 
+  const retryConnection = () => {
+    setIsRecoveringConnection(true);
+    setConnectTimer(0);
+    void tauriClient.restartDaemon().finally(() => {
+      // A reload re-runs the full health/pairing bootstrap in both Tauri and
+      // browser development mode; restartDaemon is a safe no-op outside Tauri.
+      window.setTimeout(() => window.location.reload(), 750);
+    });
+  };
+
   const getToastIcon = (type: string) => {
     switch (type) {
       case 'success':
@@ -492,31 +506,27 @@ const AppShellInner: React.FC = () => {
 
   if (bridge.status === 'connecting') {
     return (
-      <div className="flex flex-col items-center justify-center h-screen w-screen bg-[var(--bg-app)] text-[var(--text-primary)] gap-6">
-        <Logo size={64} className="animate-pulse opacity-80" />
-        <div className="flex flex-col items-center gap-2">
+      <main className="flex min-h-screen w-screen flex-col items-center justify-center gap-6 bg-[var(--bg-app)] px-6 text-center text-[var(--text-primary)]">
+        <Logo size={64} className={connectTimer >= CONNECTION_RECOVERY_AFTER_SECONDS ? 'opacity-80' : 'animate-pulse opacity-80'} />
+        <section className="flex max-w-sm flex-col items-center gap-3" aria-live="polite" aria-busy={connectTimer < CONNECTION_RECOVERY_AFTER_SECONDS}>
           <h2 className="text-lg font-bold">{t('app_name')}</h2>
-          <p className="text-sm text-[var(--text-secondary)]">
-            {connectTimer > 45
-              ? t('shell_connect_failed')
-              : connectTimer > 20
-                ? t('shell_connect_still_trying')
-                : t('shell_connecting')}
+          <p className="text-sm leading-6 text-[var(--text-secondary)]">
+            {connectTimer >= CONNECTION_RECOVERY_AFTER_SECONDS ? t('shell_connect_failed') : t('shell_connecting')}
           </p>
-          {connectTimer > 45 && (
+          {connectTimer >= CONNECTION_RECOVERY_AFTER_SECONDS && (
             <button
-              onClick={() => {
-                setConnectTimer(0);
-                window.location.reload();
-              }}
-              className="mt-2 px-4 py-1.5 text-[11px] font-bold bg-[var(--accent-primary)] text-white rounded transition-all duration-150 hover:scale-[1.03] active:scale-[0.97] cursor-pointer"
+              type="button"
+              onClick={retryConnection}
+              disabled={isRecoveringConnection}
+              className="mt-1 inline-flex min-h-10 items-center gap-2 rounded-md bg-[var(--accent-primary)] px-4 py-2 text-sm font-bold text-white transition-all duration-150 hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent-primary)] disabled:cursor-wait disabled:opacity-70"
             >
+              <RefreshCw className={isRecoveringConnection ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} aria-hidden="true" />
               {t('shell_retry')}
             </button>
           )}
-        </div>
-        {connectTimer <= 45 && <RefreshCw className="w-5 h-5 animate-spin text-[var(--accent-primary)]" />}
-      </div>
+        </section>
+        {connectTimer < CONNECTION_RECOVERY_AFTER_SECONDS && <RefreshCw className="h-5 w-5 animate-spin text-[var(--accent-primary)]" aria-hidden="true" />}
+      </main>
     );
   }
 

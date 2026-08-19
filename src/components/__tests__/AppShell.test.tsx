@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/react';
-import { describe, it, expect, vi } from 'vitest';
+import { act, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { initialSettings } from '../../initialData';
 
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => false }));
@@ -18,6 +18,7 @@ vi.mock('@tauri-apps/api/window', () => ({
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ readText: vi.fn().mockResolvedValue('') }));
 
 const noop = vi.fn();
+const shellState = vi.hoisted(() => ({ bridgeStatus: 'connected' as 'connected' | 'connecting' }));
 const settings = { ...initialSettings, extra: { ...initialSettings.extra, language: 'en' } };
 
 vi.mock('../../store/selectors', () => ({
@@ -46,7 +47,7 @@ vi.mock('../../store/selectors', () => ({
   useSettingsData: () => settings,
   useSettingsActions: () => ({ updateSettings: noop, updateThemeSettings: noop }),
   useThemeData: () => ({ theme: 'dark', density: 'compact', accent: 'blue', progress: 'bar', contrast: 'normal' }),
-  useBridgeData: () => ({ status: 'connected' as const, version: '1.0', pid: 1234, speedLimit: null }),
+  useBridgeData: () => ({ status: shellState.bridgeStatus, version: '1.0', pid: 1234, speedLimit: null }),
   useIsDegraded: () => false,
   useDialogData: () => ({ active: null, payload: null }),
   useDialogActions: () => ({ openDialog: noop, closeDialog: noop }),
@@ -72,8 +73,29 @@ vi.mock('../../store/selectors', () => ({
 import { AppShell } from '../AppShell';
 
 describe('AppShell', () => {
+  beforeEach(() => {
+    shellState.bridgeStatus = 'connected';
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('renders the app title', () => {
     render(<AppShell />);
     expect(screen.getByText('NOVA Download Manager')).toBeInTheDocument();
+  });
+
+  it('offers an accessible recovery action after the connection wait threshold', async () => {
+    shellState.bridgeStatus = 'connecting';
+    vi.useFakeTimers();
+    render(<AppShell />);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(20_000);
+    });
+
+    expect(screen.getByText('Shell Connect Failed')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Shell Retry' })).toBeEnabled();
   });
 });
