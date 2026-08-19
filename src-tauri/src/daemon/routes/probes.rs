@@ -19,6 +19,32 @@ use super::common::{
 };
 use crate::daemon::utils::{parse_meta_refresh_url, refreshed_url};
 
+const MAX_PROBE_BODY_BYTES: usize = 2 * 1024 * 1024;
+
+fn append_limited_probe_chunk(body: &mut Vec<u8>, chunk: &[u8], max_bytes: usize) -> bool {
+    let remaining = max_bytes.saturating_sub(body.len());
+    if remaining == 0 {
+        return false;
+    }
+    let accepted = chunk.len().min(remaining);
+    body.extend_from_slice(&chunk[..accepted]);
+    accepted == chunk.len()
+}
+
+async fn read_probe_body_limited(
+    mut response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<String, reqwest::Error> {
+    let mut body = Vec::with_capacity(max_bytes.min(16 * 1024));
+    while let Some(chunk) = response.chunk().await? {
+        if !append_limited_probe_chunk(&mut body, &chunk, max_bytes) {
+            log::debug!("Probe response body exceeded the {max_bytes}-byte inspection limit");
+            break;
+        }
+    }
+    Ok(String::from_utf8_lossy(&body).into_owned())
+}
+
 fn probe_payload(
     url: &str,
     final_url: &str,
@@ -566,11 +592,16 @@ async fn probe_url_uncached(
         let content_type = header_string(resp.headers(), "content-type");
         let headers_snapshot = resp.headers().clone();
         let content_length = resp.content_length().unwrap_or(0);
-        const MAX_PROBE_BODY_BYTES: u64 = 2 * 1024 * 1024;
-        let body_text = if content_length > MAX_PROBE_BODY_BYTES {
+        let body_text = if content_length > MAX_PROBE_BODY_BYTES as u64 {
             String::new()
         } else {
-            resp.text().await.unwrap_or_default()
+            match read_probe_body_limited(resp, MAX_PROBE_BODY_BYTES).await {
+                Ok(body) => body,
+                Err(error) => {
+                    log::debug!("Could not read bounded Stage 3b probe body: {error}");
+                    String::new()
+                }
+            }
         };
         if status < 400 {
             let is_html = content_type.contains("text/html")
@@ -972,6 +1003,19 @@ pub async fn handle_ytdlp_ffmpeg(State(state): State<SharedState>) -> Json<serde
     let available =
         hidden_output(&state.ffmpeg_bin, &["-version"]).is_ok_and(|o| o.status.success());
     Json(serde_json::json!({"available": available, "binary": state.ffmpeg_bin.clone()}))
+}
+
+#[cfg(test)]
+mod bounded_body_tests {
+    use super::append_limited_probe_chunk;
+
+    #[test]
+    fn streamed_probe_body_never_exceeds_its_inspection_budget() {
+        let mut body = Vec::new();
+        assert!(append_limited_probe_chunk(&mut body, b"abcd", 6));
+        assert!(!append_limited_probe_chunk(&mut body, b"efgh", 6));
+        assert_eq!(body, b"abcdef");
+    }
 }
 
 pub fn register_routes(router: Router<SharedState>) -> Router<SharedState> {
