@@ -4,7 +4,7 @@ import { type BridgeState, initialBridgeState } from '../core/app-state';
 import { type BridgeGateway } from '../core/bridge-gateway';
 import { Logger } from '../core/logger';
 import { SingleFlight } from '../core/single-flight';
-import { isAuthError, toNovaExtensionError } from '../core/error-classification';
+import { isAuthError, NovaExtensionError, toNovaExtensionError } from '../core/error-classification';
 import { bridgeError } from '../contracts/errors.schema';
 import {
   AddBatchRequestSchema,
@@ -43,6 +43,19 @@ import { PairingManager } from './pairing-manager';
 import { ReconnectPolicy } from './reconnect-policy';
 
 const EVENT_RESUBSCRIBE_DELAY_MS = 5_000;
+
+export function assertTaskAccepted(response: AddTaskResponse): AddTaskResponse {
+  const acceptedTaskCount = response.taskIds?.length ?? (response.taskId ? 1 : 0);
+  if (!response.ok || !response.accepted || acceptedTaskCount === 0) {
+    throw new NovaExtensionError({
+      code: 'TASK_REJECTED',
+      message: response.message ?? 'NOVA rejected the download task.',
+      retryable: false,
+      details: response,
+    });
+  }
+  return response;
+}
 
 export class BridgeManager implements BridgeGateway {
   private readonly log = new Logger('bridge');
@@ -221,12 +234,12 @@ export class BridgeManager implements BridgeGateway {
     });
   }
 
-  // A silent event-stream drop leaves canSend=true but stops heartbeats. When the
-  // stream errors while we still believe we are connected, re-subscribe once after a
-  // short delay (guarded so transient errors cannot spin into a reconnect loop).
+  // A terminal SSE error is already evidence that the stream is unavailable.
+  // Do not wait for the heartbeat age to become stale: after an early close no
+  // further heartbeat can arrive, so the old guard left the bridge connected
+  // indefinitely without live task events.
   private scheduleEventResubscribe(): void {
-    if (this.eventResubscribeTimer !== undefined) return;
-    if (!this.state.canSend || !this.health.isStale()) return;
+    if (this.eventResubscribeTimer !== undefined || !this.state.canSend) return;
     this.eventResubscribeTimer = setTimeout(() => {
       this.eventResubscribeTimer = undefined;
       if (this.state.canSend) this.subscribeEvents();
@@ -296,7 +309,7 @@ export class BridgeManager implements BridgeGateway {
     this.requireCandidateCapabilities(candidate);
     this.caps.registry.require('task.add');
     const request = AddTaskRequestSchema.parse({ idempotencyKey, candidate, source: 'nova-extension' });
-    return this.authenticatedHttp('/v1/add', request, AddTaskResponseSchema, 'POST');
+    return assertTaskAccepted(await this.authenticatedHttp('/v1/add', request, AddTaskResponseSchema, 'POST'));
   }
 
   async sendBatchNow(candidates: Candidate[], idempotencyKey: string) {
@@ -305,7 +318,7 @@ export class BridgeManager implements BridgeGateway {
     this.caps.registry.require('task.addBatch');
     for (const candidate of candidates) this.requireCandidateCapabilities(candidate);
     const request = AddBatchRequestSchema.parse({ idempotencyKey, candidates, source: 'nova-extension' });
-    return this.authenticatedHttp('/captures', request, AddTaskResponseSchema, 'POST');
+    return assertTaskAccepted(await this.authenticatedHttp('/captures', request, AddTaskResponseSchema, 'POST'));
   }
 
 

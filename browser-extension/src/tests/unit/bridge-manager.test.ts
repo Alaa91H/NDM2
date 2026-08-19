@@ -26,7 +26,7 @@ const harness = vi.hoisted(() => {
 
 vi.mock('webextension-polyfill', () => ({ default: harness.browser }));
 
-import { BridgeManager } from '../../bridge/bridge-manager';
+import { assertTaskAccepted, BridgeManager } from '../../bridge/bridge-manager';
 import { type BridgeState, initialBridgeState } from '../../core/app-state';
 
 function fakeStateStore() {
@@ -43,6 +43,17 @@ function jsonResponse(body: unknown, status = 200): Response {
     headers: { 'content-type': 'application/json' },
   });
 }
+
+describe('BridgeManager task acceptance', () => {
+  it('rejects a daemon response that did not create any task', () => {
+    expect(() => assertTaskAccepted({ ok: false, accepted: false, message: 'invalid URL' })).toThrow('invalid URL');
+    expect(() => assertTaskAccepted({ ok: true, accepted: true, taskIds: [] })).toThrow('NOVA rejected the download task.');
+  });
+
+  it('preserves an accepted daemon response with created tasks', () => {
+    expect(assertTaskAccepted({ ok: true, accepted: true, taskId: 'task-1', taskIds: ['task-1'] })).toMatchObject({ taskId: 'task-1' });
+  });
+});
 
 describe('BridgeManager (daemon unreachable)', () => {
   beforeEach(() => {
@@ -151,5 +162,24 @@ describe('BridgeManager (loopback HTTP reachable)', () => {
     expect(state.status).toBe('connected');
     expect(state.canSend).toBe(true);
     expect(state.transport).toBe('http');
+  });
+});
+
+
+describe('BridgeManager (SSE recovery)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('re-subscribes after an immediate SSE error while the bridge remains send-ready', async () => {
+    vi.useFakeTimers();
+    const bridge = new BridgeManager(fakeStateStore() as never);
+    (bridge as unknown as { state: BridgeState }).state = { ...initialBridgeState, status: 'connected', canSend: true };
+    const subscribe = vi.spyOn(bridge, 'subscribeEvents').mockImplementation(() => {});
+
+    (bridge as unknown as { scheduleEventResubscribe(): void }).scheduleEventResubscribe();
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(subscribe).toHaveBeenCalledTimes(1);
   });
 });
