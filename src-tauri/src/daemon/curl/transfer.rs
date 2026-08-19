@@ -4454,6 +4454,7 @@ mod tests {
         std::thread::spawn(move || start_curl_process(&st, id));
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut observed_live_progress = false;
         loop {
             let (status, downloaded, size, segments) = {
                 let jobs = state.curl_jobs.lock().unwrap();
@@ -4465,6 +4466,12 @@ mod tests {
                     j.task.segments.clone(),
                 )
             };
+            // The local server emits bounded chunks. An intermediate byte count
+            // proves the real transfer exposes live progress, not only zero and
+            // the final completed total.
+            if size > 0 && downloaded > 0 && downloaded < size {
+                observed_live_progress = true;
+            }
             // Task-level honesty: the total can never exceed the known size.
             assert!(
                 size == 0 || downloaded <= size,
@@ -4492,6 +4499,10 @@ mod tests {
         }
 
         let task = run_task_to_completion(&state, id, std::time::Duration::from_secs(30));
+        assert!(
+            observed_live_progress,
+            "real local transfer never exposed an intermediate progress value"
+        );
         assert_eq!(task.status, "completed");
         assert_eq!(task.size_bytes, payload.len() as u64);
         assert_eq!(task.downloaded_bytes, payload.len() as u64);
