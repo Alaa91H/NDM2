@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "phase": "NDM2 Phase 3",
+  "updatedAt": "2026-08-19",
+  "statusDefinitions": {
+    "complete": "Native UI exists and the complete supported flow was verified against a real NOVA daemon.",
+    "partial": "A real Core-backed native subset exists; remaining supported behavior or E2E verification is explicitly listed.",
+    "planned": "Core/API capability exists but native UI has not yet been migrated.",
+    "core_limited": "No confirmed Core/API operation supports the requested behavior; NDM2 provides no client-side substitute."
+  },
+  "capabilities": [
+    {"id":"downloads","coreExists":true,"apiExists":true,"ndm2Ui":true,"realE2E":true,"status":"partial","evidence":"Real direct HTTPS lifecycle and authenticated SSE were verified; filter/sort/multi-select has Qt unit coverage.","remaining":"Manual desktop interaction and large real library load tests."},
+    {"id":"add_download","coreExists":true,"apiExists":true,"ndm2Ui":true,"realE2E":true,"status":"partial","evidence":"Confirmed direct-download creation contract and task lifecycle verified.","remaining":"Full property wizard and capability-gated media creation."},
+    {"id":"pause","coreExists":true,"apiExists":true,"ndm2Ui":true,"realE2E":true,"status":"complete","evidence":"Real active task paused through Core."},
+    {"id":"resume","coreExists":true,"apiExists":true,"ndm2Ui":true,"realE2E":true,"status":"complete","evidence":"Real paused task resumed through Core."},
+    {"id":"cancel","coreExists":true,"apiExists":true,"ndm2Ui":true,"realE2E":true,"status":"complete","evidence":"Real task removed through Core delete/cancel route."},
+    {"id":"retry","coreExists":true,"apiExists":true,"ndm2Ui":true,"realE2E":true,"status":"complete","evidence":"Real HTTP 404 task was retried through Core redownload."},
+    {"id":"delete","coreExists":true,"apiExists":true,"ndm2Ui":true,"realE2E":true,"status":"partial","evidence":"Real Core task deletion verified.","remaining":"Native confirmation and desktop multi-selection click-through audit."},
+    {"id":"queue","coreExists":true,"apiExists":true,"ndm2Ui":true,"realE2E":true,"status":"partial","evidence":"Real queue state and priority change verified.","remaining":"No Core route exists for persisted ordering or queue selection mutation."},
+    {"id":"queue_reordering","coreExists":false,"apiExists":false,"ndm2Ui":false,"realE2E":false,"status":"core_limited","evidence":"Audited routes supply queue listing and priority only.","remaining":"Requires a future Core persisted-order contract; no fake UI is provided."},
+    {"id":"scheduler","coreExists":true,"apiExists":true,"ndm2Ui":true,"realE2E":true,"status":"partial","evidence":"Native CRUD subset and actual QueueEmpty→SetBandwidthLimit execution verified on scheduler tick.","remaining":"TimeWindow and remaining action variants need native authoring and UI E2E."},
+    {"id":"rules","coreExists":true,"apiExists":true,"ndm2Ui":true,"realE2E":true,"status":"partial","evidence":"Native UrlContains→SetCategory creator created and applied a real Core rule.","remaining":"All typed conditions/actions; Core has no audited update or enable/disable route."},
+    {"id":"profiles","coreExists":true,"apiExists":true,"ndm2Ui":true,"realE2E":true,"status":"complete","evidence":"Active profile switch/read-back/restore verified."},
+    {"id":"bandwidth","coreExists":true,"apiExists":true,"ndm2Ui":true,"realE2E":true,"status":"complete","evidence":"Global 256 KB/s set/read-back and profile influence verified; direct task limit maps to supported Core option."},
+    {"id":"mirrors","coreExists":true,"apiExists":true,"ndm2Ui":true,"realE2E":true,"status":"partial","evidence":"Mirror manager creation, list and failover enable verified.","remaining":"Broader per-mirror status UX and manual UI flows."},
+    {"id":"metadata","coreExists":true,"apiExists":true,"ndm2Ui":true,"realE2E":true,"status":"partial","evidence":"Core PATCH rename verified; details consumes real metadata.","remaining":"Native editing form for confirmed fields."},
+    {"id":"media","coreExists":true,"apiExists":true,"ndm2Ui":true,"realE2E":false,"status":"partial","evidence":"Native real Core probe and FFmpeg status page is capability-gated.","remaining":"Current environment has yt-dlp unavailable, so real format selection/download cannot be truthfully tested."},
+    {"id":"browser_integration","coreExists":true,"apiExists":true,"ndm2Ui":true,"realE2E":false,"status":"partial","evidence":"Native page displays live Core bridge health without a new endpoint.","remaining":"Configuration parity and real Chrome/Edge/Firefox handoff need installed browser extension/profile."},
+    {"id":"notifications","coreExists":true,"apiExists":true,"ndm2Ui":true,"realE2E":false,"status":"partial","evidence":"Native tray transition notifications are built from true Core task-state changes with persisted preference.","remaining":"Manual platform notification delivery audit."},
+    {"id":"diagnostics","coreExists":true,"apiExists":true,"ndm2Ui":true,"realE2E":true,"status":"partial","evidence":"Health, stats, logs, level and Core route responses were verified; trace is wired on selection.","remaining":"Manual task-trace UI content audit and log-file controls."},
+    {"id":"settings","coreExists":true,"apiExists":true,"ndm2Ui":true,"realE2E":true,"status":"partial","evidence":"Appearance, density, language, profile, bandwidth and notifications exist.","remaining":"Broader meaningful Core settings categories."},
+    {"id":"themes","coreExists":true,"apiExists":true,"ndm2Ui":true,"realE2E":true,"status":"partial","evidence":"Dark/light/system startup configurations passed.","remaining":"Manual visual screen-by-screen audit."},
+    {"id":"rtl","coreExists":true,"apiExists":true,"ndm2Ui":true,"realE2E":true,"status":"partial","evidence":"Arabic/light/compact Qt startup passed with global layout direction.","remaining":"Translations and manual mixed-direction audit."},
+    {"id":"ltr","coreExists":true,"apiExists":true,"ndm2Ui":true,"realE2E":true,"status":"partial","evidence":"English/dark and German/system high-DPI startup passed.","remaining":"Manual desktop visual audit."}
+  ]
+}
