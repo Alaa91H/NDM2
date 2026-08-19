@@ -130,6 +130,25 @@ describe('mergeDaemonTasks', () => {
     expect(result[0].status).toBe('completed');
   });
 
+  it('does not hide metadata or direct-option changes from the daemon', () => {
+    const existing = makeTask('task1', 'paused');
+    taskStore.setState({ tasks: [existing] });
+    const updated = {
+      ...makeTask('task1', 'paused'),
+      url: 'https://cdn.example.com/refreshed.bin',
+      description: 'Refreshed signed link',
+      directOptions: { referer: 'https://example.com/page' },
+    };
+
+    const result = mergeDaemonTasks([updated]);
+    expect(result).not.toBe(taskStore.getState().tasks);
+    expect(result[0]).toMatchObject({
+      url: 'https://cdn.example.com/refreshed.bin',
+      description: 'Refreshed signed link',
+      directOptions: { referer: 'https://example.com/page' },
+    });
+  });
+
   it('returns a new array when the list changed size', () => {
     taskStore.setState({ tasks: [makeTask('task1', 'downloading')] });
     const prev = taskStore.getState().tasks;

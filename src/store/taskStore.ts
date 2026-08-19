@@ -64,9 +64,22 @@ function shallowEqualTask(a: DownloadItem, b: DownloadItem): boolean {
     a.engineStatus !== b.engineStatus ||
     a.errorMessage !== b.errorMessage ||
     a.name !== b.name ||
-    a.savePath !== b.savePath ||
+    a.url !== b.url ||
+    a.fileType !== b.fileType ||
+    a.dateAdded !== b.dateAdded ||
+    a.completedAt !== b.completedAt ||
+    a.category !== b.category ||
+    a.queueId !== b.queueId ||
     a.connections !== b.connections ||
-    a.retries !== b.retries
+    a.resumable !== b.resumable ||
+    a.savePath !== b.savePath ||
+    a.description !== b.description ||
+    a.referer !== b.referer ||
+    a.engine !== b.engine ||
+    a.engineId !== b.engineId ||
+    a.retries !== b.retries ||
+    JSON.stringify(a.mediaOptions) !== JSON.stringify(b.mediaOptions) ||
+    JSON.stringify(a.directOptions) !== JSON.stringify(b.directOptions)
   ) {
     return false;
   }
