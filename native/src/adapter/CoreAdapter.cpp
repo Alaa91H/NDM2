@@ -89,7 +89,7 @@ void CoreAdapter::refresh() {
     });
 }
 
-void CoreAdapter::refreshAll() { refresh(); refreshQueue(); refreshBandwidth(); refreshProfiles(); refreshStatistics(); refreshLogs(100); }
+void CoreAdapter::refreshAll() { refresh(); refreshQueue(); refreshBandwidth(); refreshProfiles(); refreshStatistics(); refreshLogs(100); refreshManagement(); refreshHealth(); refreshLogLevel(); refreshBrowserHealth(); refreshFfmpegStatus(); }
 
 void CoreAdapter::loadDownloads(const QByteArray &data) {
     const auto document = QJsonDocument::fromJson(data);
@@ -173,7 +173,7 @@ void CoreAdapter::retry(const QString &id) { send("retry", "/api/downloads/" + Q
 void CoreAdapter::deleteDownload(const QString &id, bool deleteFiles) { send("delete", "/api/downloads/" + QUrl::toPercentEncoding(id) + (deleteFiles ? "?deleteFiles=true" : ""), "DELETE", {}, id); }
 void CoreAdapter::setQueuePriority(const QString &id, int priority) { send("queue-priority", "/api/engine/queue", "POST", {{"task_id", id}, {"priority", priority}}, id); }
 void CoreAdapter::setBandwidthLimit(int kbps) { send("bandwidth", "/api/engine/bandwidth", "POST", {{"global_limit_kbps", kbps}}); }
-void CoreAdapter::updateSchedulerRule(const QVariantMap &rule) { send("scheduler", "/api/engine/scheduler/update", "POST", {{"rule", QJsonObject::fromVariantMap(rule)}}); }
+void CoreAdapter::updateSchedulerRule(const QVariantMap &rule) { send("scheduler-update", "/api/engine/scheduler/update", "POST", {{"rule", QJsonObject::fromVariantMap(rule)}}); }
 void CoreAdapter::setActiveProfile(const QString &profileId) { send("profile", "/api/engine/profiles", "POST", {{"profile_id", profileId}}); }
 
 void CoreAdapter::fetchCapabilities() {
@@ -226,5 +226,130 @@ void CoreAdapter::refreshLogs(int limit) {
     connect(reply, &QNetworkReply::finished, this, [this, reply] { const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt(); const auto data = reply->readAll(); const auto error = reply->error(); reply->deleteLater();
         if (error != QNetworkReply::NoError || status < 200 || status >= 300) return; const auto doc = QJsonDocument::fromJson(data); if (!doc.isObject()) return;
         const auto values = list(doc.object().value("entries").toArray()); if (m_logs != values) { m_logs = values; emit logsChanged(); }
+    });
+}
+
+
+void CoreAdapter::refreshManagement() { refreshRules(); refreshScheduler(); refreshMirrors(); }
+
+void CoreAdapter::refreshRules() {
+    if (!m_endpoint.isValid()) return;
+    auto *reply = m_network.get(requestFor("/api/engine/rules"));
+    connect(reply, &QNetworkReply::finished, this, [this, reply] {
+        const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt(); const auto data = reply->readAll(); const auto error = reply->error(); reply->deleteLater();
+        if (error != QNetworkReply::NoError || status < 200 || status >= 300) return;
+        const auto document = QJsonDocument::fromJson(data); if (!document.isObject()) return;
+        const auto values = list(document.object().value("rules").toArray());
+        if (m_rules != values) { m_rules = values; emit rulesChanged(); }
+    });
+}
+
+void CoreAdapter::addRule(const QVariantMap &rule) { send("rule-add", "/api/engine/rules", "POST", {{"rule", QJsonObject::fromVariantMap(rule)}}); }
+void CoreAdapter::deleteRule(const QString &id) { send("rule-delete", "/api/engine/rules/" + QUrl::toPercentEncoding(id), "DELETE", {}, id); }
+
+void CoreAdapter::refreshScheduler() {
+    if (!m_endpoint.isValid()) return;
+    auto *reply = m_network.get(requestFor("/api/engine/scheduler"));
+    connect(reply, &QNetworkReply::finished, this, [this, reply] {
+        const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt(); const auto data = reply->readAll(); const auto error = reply->error(); reply->deleteLater();
+        if (error != QNetworkReply::NoError || status < 200 || status >= 300) return;
+        const auto document = QJsonDocument::fromJson(data); if (!document.isObject()) return;
+        const auto object = document.object(); const auto rules = list(object.value("rules").toArray()); const auto active = list(object.value("active_rule_ids").toArray());
+        if (m_schedulerRules != rules || m_schedulerActiveIds != active) { m_schedulerRules = rules; m_schedulerActiveIds = active; emit schedulerChanged(); }
+    });
+}
+
+void CoreAdapter::addSchedulerRule(const QVariantMap &rule) { send("scheduler-add", "/api/engine/scheduler", "POST", {{"rule", QJsonObject::fromVariantMap(rule)}}); }
+void CoreAdapter::deleteSchedulerRule(const QString &id) { send("scheduler-delete", "/api/engine/scheduler/" + QUrl::toPercentEncoding(id), "DELETE", {}, id); }
+void CoreAdapter::setSchedulerPowerCommands(bool enabled) { send("scheduler-power", "/api/engine/scheduler/power-commands", "POST", {{"enabled", enabled}}); }
+
+void CoreAdapter::refreshMirrors() {
+    if (!m_endpoint.isValid()) return;
+    auto *reply = m_network.get(requestFor("/api/engine/mirrors"));
+    connect(reply, &QNetworkReply::finished, this, [this, reply] {
+        const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt(); const auto data = reply->readAll(); const auto error = reply->error(); reply->deleteLater();
+        if (error != QNetworkReply::NoError || status < 200 || status >= 300) return;
+        const auto document = QJsonDocument::fromJson(data); if (!document.isObject()) return;
+        const auto values = list(document.object().value("downloads").toArray());
+        if (m_mirrors != values) { m_mirrors = values; emit mirrorsChanged(); }
+    });
+}
+
+void CoreAdapter::addMirror(const QString &taskId, const QString &mirrorUrl, int priority) { send("mirror-add", "/api/engine/mirrors", "POST", {{"task_id", taskId}, {"mirror_url", mirrorUrl}, {"priority", priority}}, taskId); }
+void CoreAdapter::setMirrorFailover(const QString &taskId, bool enabled) { send("mirror-failover", "/api/engine/mirrors/enable-failover", "POST", {{"task_id", taskId}, {"enabled", enabled}}, taskId); }
+void CoreAdapter::triggerMirrorFailover(const QString &taskId) { send("mirror-trigger", "/api/engine/mirrors/failover", "POST", {{"task_id", taskId}}, taskId); }
+
+void CoreAdapter::fetchTaskTrace(const QString &taskId) {
+    if (!m_endpoint.isValid() || taskId.isEmpty()) return;
+    auto *reply = m_network.get(requestFor("/api/logs/trace?task=" + QUrl::toPercentEncoding(taskId) + "&limit=200"));
+    connect(reply, &QNetworkReply::finished, this, [this, reply] {
+        const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt(); const auto data = reply->readAll(); const auto error = reply->error(); reply->deleteLater();
+        if (error != QNetworkReply::NoError || status < 200 || status >= 300) return;
+        const auto document = QJsonDocument::fromJson(data); if (!document.isObject()) return;
+        const auto trace = map(document.object().value("trace").toObject());
+        if (m_taskTrace != trace) { m_taskTrace = trace; emit taskTraceChanged(); }
+    });
+}
+
+void CoreAdapter::refreshHealth() {
+    if (!m_endpoint.isValid()) return;
+    auto *reply = m_network.get(requestFor("/api/health"));
+    connect(reply, &QNetworkReply::finished, this, [this, reply] {
+        const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt(); const auto data = reply->readAll(); const auto error = reply->error(); reply->deleteLater();
+        if (error != QNetworkReply::NoError || status < 200 || status >= 300) return;
+        const auto document = QJsonDocument::fromJson(data); if (!document.isObject()) return;
+        const auto values = map(document.object()); if (m_health != values) { m_health = values; emit healthChanged(); }
+    });
+}
+
+void CoreAdapter::refreshLogLevel() {
+    if (!m_endpoint.isValid()) return;
+    auto *reply = m_network.get(requestFor("/api/logs/level"));
+    connect(reply, &QNetworkReply::finished, this, [this, reply] {
+        const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt(); const auto data = reply->readAll(); const auto error = reply->error(); reply->deleteLater();
+        if (error != QNetworkReply::NoError || status < 200 || status >= 300) return;
+        const auto document = QJsonDocument::fromJson(data); if (!document.isObject()) return;
+        const auto level = document.object().value("level").toString(); if (m_logLevel != level) { m_logLevel = level; emit logLevelChanged(); }
+    });
+}
+
+void CoreAdapter::setLogLevel(const QString &level) { send("log-level", "/api/logs/level", "PATCH", {{"level", level}}); }
+
+
+void CoreAdapter::refreshBrowserHealth() {
+    if (!m_endpoint.isValid()) return;
+    auto *reply = m_network.get(requestFor("/api/browser-extension/health"));
+    connect(reply, &QNetworkReply::finished, this, [this, reply] {
+        const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt(); const auto data = reply->readAll(); const auto error = reply->error(); reply->deleteLater();
+        if (error != QNetworkReply::NoError || status < 200 || status >= 300) return;
+        const auto doc = QJsonDocument::fromJson(data); if (!doc.isObject()) return;
+        const auto values = map(doc.object()); if (m_browserHealth != values) { m_browserHealth = values; emit browserHealthChanged(); }
+    });
+}
+
+void CoreAdapter::probeMedia(const QString &url) {
+    if (!m_endpoint.isValid() || url.trimmed().isEmpty()) { emit operationFailed("media-probe", tr("A media URL is required.")); return; }
+    auto *reply = m_network.get(requestFor("/api/ytdlp/probe?url=" + QUrl::toPercentEncoding(url.trimmed())));
+    connect(reply, &QNetworkReply::finished, this, [this, reply] {
+        const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt(); const auto data = reply->readAll(); const auto error = reply->error(); reply->deleteLater();
+        if (error != QNetworkReply::NoError || status < 200 || status >= 300) {
+            QString message = tr("Media probe failed."); const auto doc = QJsonDocument::fromJson(data); if (doc.isObject()) message = doc.object().value("error").toString(message);
+            if (m_mediaProbeError != message || !m_mediaProbe.isEmpty()) { m_mediaProbe.clear(); m_mediaProbeError = message; emit mediaProbeChanged(); }
+            emit operationFailed("media-probe", message); return;
+        }
+        const auto doc = QJsonDocument::fromJson(data); if (!doc.isObject()) return;
+        const auto values = map(doc.object()); if (m_mediaProbe != values || !m_mediaProbeError.isEmpty()) { m_mediaProbe = values; m_mediaProbeError.clear(); emit mediaProbeChanged(); }
+        emit operationSucceeded("media-probe", {});
+    });
+}
+
+void CoreAdapter::refreshFfmpegStatus() {
+    if (!m_endpoint.isValid()) return;
+    auto *reply = m_network.get(requestFor("/api/ytdlp/ffmpeg"));
+    connect(reply, &QNetworkReply::finished, this, [this, reply] {
+        const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt(); const auto data = reply->readAll(); const auto error = reply->error(); reply->deleteLater();
+        if (error != QNetworkReply::NoError || status < 200 || status >= 300) return;
+        const auto doc = QJsonDocument::fromJson(data); if (!doc.isObject()) return;
+        const auto values = map(doc.object()); if (m_ffmpegStatus != values) { m_ffmpegStatus = values; emit ffmpegStatusChanged(); }
     });
 }
