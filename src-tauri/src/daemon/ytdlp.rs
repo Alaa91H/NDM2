@@ -411,15 +411,20 @@ fn update_structured_progress(record: &mut MediaJob, payload: &str) {
     }
     record.task.elapsed_seconds = record.start_time.elapsed().as_secs();
     if record.task.size_bytes > 0 {
+        // Progress parsers can briefly report bytes beyond a just-refined
+        // total (for example while a post-processor finalizes a media file).
+        // Keep the raw task count for diagnostics, but the rendered segment is
+        // a bounded range so every progress surface remains 0..=100%.
+        let segment_downloaded = record.task.downloaded_bytes.min(record.task.size_bytes);
         record.task.segments = vec![Segment {
             id: 0,
-            progress: record.task.downloaded_bytes as f64 / record.task.size_bytes as f64,
-            downloaded_bytes: record.task.downloaded_bytes,
+            progress: segment_downloaded as f64 / record.task.size_bytes as f64,
+            downloaded_bytes: segment_downloaded,
             total_bytes: record.task.size_bytes,
             active: true,
             speed: record.task.speed_bytes_per_sec,
             start_byte: 0,
-            end_byte: record.task.size_bytes,
+            end_byte: record.task.size_bytes.saturating_sub(1),
         }];
     }
 }
@@ -1344,6 +1349,51 @@ mod tests {
         assert_eq!(task.name, "download");
         assert_eq!(task.save_path, "C:/Downloads/..%2F..%2F..%2FCON.mp4");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn structured_progress_clamps_segment_to_known_total() {
+        let mut record = MediaJob {
+            task: crate::daemon::types::Task {
+                id: "media-progress".to_owned(),
+                name: "media.mp4".to_owned(),
+                url: "https://example.com/watch?v=1".to_owned(),
+                file_type: "video".to_owned(),
+                status: "downloading".to_owned(),
+                size_bytes: 0,
+                downloaded_bytes: 0,
+                speed_bytes_per_sec: 0,
+                time_left_seconds: 0,
+                elapsed_seconds: 0,
+                date_added: String::new(),
+                category: "video".to_owned(),
+                queue_id: "main".to_owned(),
+                connections: 1,
+                resumable: true,
+                save_path: "media.mp4".to_owned(),
+                description: String::new(),
+                segments: Vec::new(),
+                referer: None,
+                engine: "yt-dlp".to_owned(),
+                engine_id: "media-progress".to_owned(),
+                engine_status: None,
+                error_message: None,
+            },
+            child: None,
+            args: Vec::new(),
+            start_time: std::time::Instant::now(),
+        };
+
+        update_structured_progress(
+            &mut record,
+            "NOVA_PROGRESS downloaded=150 total=100 speed=10 eta=1",
+        );
+        let segment = &record.task.segments[0];
+        assert_eq!(record.task.downloaded_bytes, 150);
+        assert_eq!(segment.downloaded_bytes, 100);
+        assert_eq!(segment.total_bytes, 100);
+        assert_eq!(segment.progress, 1.0);
+        assert_eq!(segment.end_byte, 99);
     }
 
     #[test]
