@@ -192,3 +192,12 @@ metadata.json
 
 # Local app database (not part of the source tree)
 .freebuff/
+
+# Native Qt/CMake artifacts
+/build/
+/build-*/
+/native/build/
+/native/build-*/
+*.user
+*.autosave
+*.qmlc
