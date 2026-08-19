@@ -161,13 +161,25 @@ impl ExternalToolManager {
         }
 
         let install_dir = self.get_install_dir(tool_id);
-        installer::download_and_install(
+        let path = installer::download_and_install(
             tool,
             &update_info,
             &install_dir,
             &self.http,
             &self.data_dir,
-        )
+        )?;
+        // Re-discover immediately so the capability resolver and Settings UI
+        // observe an app-managed binary without requiring a restart.
+        let installation = self.discover(tool_id);
+        if !installation.health_ok {
+            return Err(installation.error_message.unwrap_or_else(|| {
+                format!(
+                    "{} was installed but did not pass the post-install health check",
+                    tool.name()
+                )
+            }));
+        }
+        Ok(path)
     }
 
     pub fn set_custom_path(&self, tool_id: ToolId, path: &str) -> Result<ToolInstallation, String> {

@@ -148,6 +148,9 @@ pub struct UpdateInfo {
     pub current_version: Option<String>,
     pub latest_version: Option<String>,
     pub download_url: Option<String>,
+    /// SHA-256 published by the release provider for the selected asset.
+    /// Automatic installation is refused when a required checksum is absent.
+    pub expected_sha256: Option<String>,
     pub release_notes: Option<String>,
     pub published_at: Option<String>,
 }

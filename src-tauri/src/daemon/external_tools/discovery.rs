@@ -5,15 +5,20 @@ pub fn discover_tool(tool: &dyn ExternalTool, registry: &ToolRegistry) -> Vec<To
     let mut candidates = Vec::new();
 
     if let Some(entry) = registry.tools.get(tool.id().as_str()) {
-        if entry.custom_path {
-            let path = PathBuf::from(&entry.path);
-            candidates.push(ToolPathCandidate {
-                path: path.clone(),
-                source: "registry (custom)".to_owned(),
-                exists: path.exists(),
-                is_executable: is_executable_path(&path),
-            });
-        }
+        // Both manually configured paths and binaries installed by NOVA are
+        // authoritative. Ignoring managed entries made a successful update
+        // invisible to capability discovery until the user changed PATH.
+        let path = PathBuf::from(&entry.path);
+        candidates.push(ToolPathCandidate {
+            path: path.clone(),
+            source: if entry.custom_path {
+                "registry (custom)".to_owned()
+            } else {
+                "registry (managed)".to_owned()
+            },
+            exists: path.exists(),
+            is_executable: is_executable_path(&path),
+        });
     }
 
     for search_path in tool.default_search_paths() {
@@ -104,7 +109,46 @@ fn which_on_path(name: &str) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use super::discover_tool;
+    use crate::daemon::external_tools::tools::yt_dlp::YtDlpTool;
+    use crate::daemon::external_tools::types::{ToolRegistry, ToolRegistryEntry};
     use crate::daemon::external_tools::ToolId;
+    use std::collections::HashMap;
+
+    #[test]
+    fn managed_registry_path_is_discovered_before_system_paths() {
+        let managed_path = std::env::temp_dir().join("nova-managed-yt-dlp");
+        let registry = ToolRegistry {
+            tools: HashMap::from([(
+                "yt-dlp".to_owned(),
+                ToolRegistryEntry {
+                    tool_id: "yt-dlp".to_owned(),
+                    path: managed_path.display().to_string(),
+                    version: Some("2026.01.01".to_owned()),
+                    installed_by_app: true,
+                    installed_at: None,
+                    custom_path: false,
+                    auto_update: false,
+                    checksum_sha256: Some("a".repeat(64)),
+                },
+            )]),
+            auto_check_updates: true,
+            check_interval: "startup".to_owned(),
+            auto_update: false,
+        };
+
+        let candidates = discover_tool(&YtDlpTool, &registry);
+        assert_eq!(
+            candidates.first().map(|candidate| &candidate.path),
+            Some(&managed_path)
+        );
+        assert_eq!(
+            candidates
+                .first()
+                .map(|candidate| candidate.source.as_str()),
+            Some("registry (managed)")
+        );
+    }
 
     #[test]
     fn executable_names_windows() {
