@@ -12,6 +12,7 @@
 #include <QSettings>
 #include <QSystemTrayIcon>
 #include <QWindow>
+#include <QTimer>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 
@@ -53,13 +54,35 @@ int main(int argc, char *argv[]) {
         auto *tray = new QSystemTrayIcon(QIcon::fromTheme("folder-download"), &app);
         if (tray->icon().isNull()) tray->setIcon(QIcon::fromTheme("applications-internet"));
         auto *menu = new QMenu;
+        auto *summaryAction = menu->addAction(QObject::tr("NOVA Core: loading…"));
+        summaryAction->setEnabled(false);
         auto *showAction = menu->addAction(QObject::tr("Show NDM2"));
+        auto *pauseAllAction = menu->addAction(QObject::tr("Pause active downloads"));
+        auto *resumeAllAction = menu->addAction(QObject::tr("Resume queued and paused downloads"));
         menu->addSeparator();
         auto *quitAction = menu->addAction(QObject::tr("Quit"));
         tray->setContextMenu(menu);
+        auto updateTray = [&controller, tray, summaryAction, pauseAllAction, resumeAllAction] {
+            const int active = controller.downloads()->countForStatus("downloading");
+            const int paused = controller.downloads()->countForStatus("paused") + controller.downloads()->countForStatus("queued");
+            const QString status = controller.connected() ? QObject::tr("NOVA Core online") : QObject::tr("NOVA Core unavailable");
+            summaryAction->setText(QObject::tr("%1 · %2 active · %3 paused/queued").arg(status).arg(active).arg(paused));
+            pauseAllAction->setEnabled(controller.connected() && active > 0);
+            resumeAllAction->setEnabled(controller.connected() && paused > 0);
+            tray->setToolTip(QObject::tr("NDM2 — %1 active, %2 paused/queued").arg(active).arg(paused));
+        };
+        auto *trayTimer = new QTimer(&app);
+        trayTimer->setInterval(1500);
+        QObject::connect(trayTimer, &QTimer::timeout, &app, updateTray);
+        QObject::connect(controller.downloads(), &QAbstractItemModel::modelReset, &app, updateTray);
+        QObject::connect(&controller, &TaskController::connectionChanged, &app, updateTray);
         QObject::connect(showAction, &QAction::triggered, mainWindow, [mainWindow] { if (mainWindow) { mainWindow->show(); mainWindow->raise(); mainWindow->requestActivate(); } });
+        QObject::connect(pauseAllAction, &QAction::triggered, &controller, &TaskController::pauseAll);
+        QObject::connect(resumeAllAction, &QAction::triggered, &controller, &TaskController::resumeAll);
         QObject::connect(quitAction, &QAction::triggered, &app, &QCoreApplication::quit);
         QObject::connect(tray, &QSystemTrayIcon::activated, mainWindow, [mainWindow](QSystemTrayIcon::ActivationReason reason) { if (reason == QSystemTrayIcon::Trigger && mainWindow) { mainWindow->show(); mainWindow->raise(); mainWindow->requestActivate(); } });
+        updateTray();
+        trayTimer->start();
         tray->show();
     }
     return app.exec();
