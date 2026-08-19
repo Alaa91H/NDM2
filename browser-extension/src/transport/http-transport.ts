@@ -75,12 +75,18 @@ export class HttpTransport implements Transport {
     // so we never leave pending fetch connections hanging. Promise.any alone
     // resolves fast but leaves the remaining fetches running until timeout.
     const controller = new AbortController();
-    const candidates: Array<Promise<string | null>> = [];
+    const candidates: Array<Promise<string>> = [];
     for (let offset = 0; offset < PORT_SCAN_MAX; offset++) {
       const port = DEFAULT_PORT + offset;
       const base = novaBaseUrlForPort(port);
       candidates.push(
-        this.pingWithSignal(base, controller.signal, PORT_SCAN_TIMEOUT_MS).then((ok) => (ok ? base : null)),
+        this.pingWithSignal(base, controller.signal, PORT_SCAN_TIMEOUT_MS).then((ok) => {
+          // Promise.any resolves on the first fulfilled promise. A rejected
+          // connection is not a discovery result, so convert it to a rejection
+          // and keep waiting for another candidate that actually answers.
+          if (!ok) throw new Error(`NOVA loopback port ${String(port)} is unavailable`);
+          return base;
+        }),
       );
     }
     try {
