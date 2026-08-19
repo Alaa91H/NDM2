@@ -51,12 +51,15 @@ public:
     QHash<int, QByteArray> roleNames() const override;
 
     void replace(QVector<DownloadRecord> records);
+    void applyDelta(QVector<DownloadRecord> changed, const QStringList &removed);
     Q_INVOKABLE QVariantMap get(const QString &id) const;
     Q_INVOKABLE int countForStatus(const QString &status) const;
+    QStringList idsForStatuses(const QStringList &statuses) const;
 
 signals:
     void countChanged();
 
 private:
     QVector<DownloadRecord> m_records;
+    int indexOf(const QString &id) const;
 };
