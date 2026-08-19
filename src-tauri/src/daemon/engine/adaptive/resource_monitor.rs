@@ -1,5 +1,7 @@
 use std::time::{Duration, Instant};
 
+use crate::daemon::engine::config::MAX_CONNECTIONS_PER_DOWNLOAD;
+
 #[derive(Clone, Debug)]
 pub struct ResourceSnapshot {
     pub cpu_count: u32,
@@ -48,8 +50,12 @@ pub struct ResourceMonitor {
 impl ResourceMonitor {
     pub fn new() -> Self {
         let cpu_count = ResourceSnapshot::detect_cpu_count();
+        let now = Instant::now();
         Self {
-            last_sample: Instant::now(),
+            // Backdate the first sample so the adaptive engine receives real
+            // memory and disk headroom on its first evaluation, rather than a
+            // transient zero-memory snapshot that suppresses safe growth.
+            last_sample: now.checked_sub(Duration::from_secs(2)).unwrap_or(now),
             sample_interval: Duration::from_secs(2),
             cpu_count,
             available_memory_mb: 0,
@@ -96,17 +102,26 @@ impl ResourceMonitor {
     }
 
     pub fn max_safe_connections(&self) -> u32 {
-        // Keep resource telemetry defensive: an abnormal host report must not
-        // overflow in debug builds and interrupt an active download.
-        let base = self.cpu_count.max(1).saturating_mul(2);
-        let mem_factor = if self.available_memory_mb > 1024 {
-            base
-        } else if self.available_memory_mb > 512 {
-            base.saturating_mul(3) / 4
+        // Resource-derived headroom, not a fixed product limit. Each slot is
+        // budgeted at roughly 32 MiB (curl buffers, response metadata and
+        // in-flight writes). CPU gets eight event-loop slots per logical core;
+        // the smaller of the two budgets wins. A system under memory pressure
+        // is deliberately derated before the adaptive engine can grow.
+        let cpu_budget = self.cpu_count.max(1).saturating_mul(8);
+        let memory_budget = u32::try_from(self.available_memory_mb / 32).unwrap_or(u32::MAX);
+        let memory_adjusted = if self.available_memory_mb >= 2_048 {
+            cpu_budget
+        } else if self.available_memory_mb >= 1_024 {
+            cpu_budget.saturating_mul(3) / 4
+        } else if self.available_memory_mb >= 512 {
+            cpu_budget / 2
         } else {
-            base / 2
+            cpu_budget / 4
         };
-        mem_factor.clamp(2, 32)
+        cpu_budget
+            .min(memory_budget)
+            .min(memory_adjusted)
+            .clamp(2, MAX_CONNECTIONS_PER_DOWNLOAD)
     }
 
     pub const fn disk_bottleneck(&self) -> bool {
@@ -451,7 +466,7 @@ mod tests {
         m.available_memory_mb = 2048;
         m.cpu_count = 8;
         let max = m.max_safe_connections();
-        assert!((4..=32).contains(&max));
+        assert!((4..=MAX_CONNECTIONS_PER_DOWNLOAD).contains(&max));
 
         m.available_memory_mb = 256;
         let low_mem = m.max_safe_connections();
@@ -466,16 +481,17 @@ mod tests {
         assert!(m.max_safe_connections() >= 2);
 
         m.cpu_count = 64;
-        m.available_memory_mb = 8192;
-        assert!(m.max_safe_connections() <= 32);
+        m.available_memory_mb = 16_384;
+        assert!(m.max_safe_connections() > 32);
+        assert!(m.max_safe_connections() <= MAX_CONNECTIONS_PER_DOWNLOAD);
     }
 
     #[test]
     fn max_safe_connections_handles_extreme_cpu_telemetry() {
         let mut m = ResourceMonitor::new();
         m.cpu_count = u32::MAX;
-        m.available_memory_mb = 8192;
-        assert_eq!(m.max_safe_connections(), 32);
+        m.available_memory_mb = u64::MAX;
+        assert_eq!(m.max_safe_connections(), MAX_CONNECTIONS_PER_DOWNLOAD);
     }
 
     #[test]

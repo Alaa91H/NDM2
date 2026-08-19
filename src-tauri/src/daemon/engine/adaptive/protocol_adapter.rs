@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use super::server_profiler::ProtocolVersion;
+use crate::daemon::engine::config::MAX_CONNECTIONS_PER_DOWNLOAD;
 
 pub struct ProtocolAdapter {
     negotiated: ProtocolVersion,
@@ -20,13 +21,26 @@ impl ProtocolAdapter {
         // Resource sampling may temporarily report zero CPUs in constrained
         // containers. Never produce min > max: downstream `clamp` requires a
         // valid interval and would otherwise panic while a download is active.
-        let scaled = cpu_count.max(1).saturating_mul(2);
+        let conservative_scaled = cpu_count.max(1).saturating_mul(2);
+        let parallel_http11_scaled = cpu_count.max(1).saturating_mul(8);
         match self.negotiated {
-            ProtocolVersion::Http2 | ProtocolVersion::Http3 => (2, scaled.min(16).max(2)),
-            ProtocolVersion::Http11 => (1, scaled.min(32).max(1)),
+            // Multiplexed HTTP needs fewer TCP connections; exceeding this
+            // range commonly harms fairness and causes needless contention.
+            ProtocolVersion::Http2 | ProtocolVersion::Http3 => {
+                (2, conservative_scaled.min(16).max(2))
+            }
+            // Range-capable HTTP/1.1 can benefit from higher parallelism on
+            // capable hosts. ResourceMonitor and convergence still gate the
+            // actual target, and the central circuit-breaker stays absolute.
+            ProtocolVersion::Http11 => (
+                1,
+                parallel_http11_scaled
+                    .min(MAX_CONNECTIONS_PER_DOWNLOAD)
+                    .max(1),
+            ),
             ProtocolVersion::Ftp => (1, 1),
             ProtocolVersion::Sftp | ProtocolVersion::Scp => (1, 1),
-            ProtocolVersion::Unknown => (2, scaled.min(16).max(2)),
+            ProtocolVersion::Unknown => (2, conservative_scaled.min(16).max(2)),
         }
     }
 
@@ -83,8 +97,16 @@ mod tests {
         let a = ProtocolAdapter::new(ProtocolVersion::Http11);
         let (min, max) = a.connection_range(8);
         assert_eq!(min, 1);
-        assert_eq!(max, 16);
+        assert_eq!(max, 64);
         assert!(!a.prefer_multiplexing());
+    }
+
+    #[test]
+    fn http11_can_offer_more_than_legacy_connection_ceiling() {
+        let a = ProtocolAdapter::new(ProtocolVersion::Http11);
+        let (_, max) = a.connection_range(8);
+        assert!(max > 32);
+        assert!(max <= MAX_CONNECTIONS_PER_DOWNLOAD);
     }
 
     #[test]

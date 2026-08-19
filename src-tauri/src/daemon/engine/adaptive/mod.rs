@@ -22,10 +22,13 @@ use segment_controller::SegmentController;
 use server_profiler::ProtocolVersion;
 
 use crate::daemon::engine::chunk_manager::ChunkManager;
+use crate::daemon::engine::config::{global_config, MAX_CONNECTIONS_PER_DOWNLOAD};
 
 pub use buffer_manager::BufferManager;
 
-pub const MAX_TRACKED_CONNECTIONS: usize = 32;
+/// Telemetry covers the engine's absolute safety ceiling, so every live
+/// connection remains visible to convergence and backoff decisions.
+pub const MAX_TRACKED_CONNECTIONS: usize = MAX_CONNECTIONS_PER_DOWNLOAD as usize;
 
 #[derive(Clone, Debug)]
 pub struct AdaptiveThresholds {
@@ -354,6 +357,9 @@ pub struct AdaptiveEngine {
     current_connections: u32,
     last_decision: AdaptationDecision,
     last_tick: Instant,
+    /// Time of the last upward connection adjustment. Growing geometry needs a
+    /// settling window before another growth can be trusted.
+    last_growth: Instant,
     tick_interval: Duration,
 }
 
@@ -365,21 +371,24 @@ impl AdaptiveEngine {
         protocol: ProtocolVersion,
         min_segment_bytes: u64,
     ) -> Self {
+        let max_connections = global_config().max_connections_per_download;
+        let now = Instant::now();
+        let mut segment_ctrl = SegmentController::new(total_size, min_segment_bytes);
+        segment_ctrl.set_max_segments(max_connections);
         Self {
             profiler: server_profiler::ServerProfiler::new(),
             convergence: ConvergenceDetector::new(),
             resources: ResourceMonitor::new(),
             protocol: ProtocolAdapter::new(protocol),
-            segment_ctrl: SegmentController::new(total_size, min_segment_bytes),
+            segment_ctrl,
             chunk_manager: ChunkManager::new(total_size),
             buffer_manager: BufferManager::new(),
             host,
             total_size,
-            current_connections: connections,
+            current_connections: connections.clamp(1, max_connections),
             last_decision: AdaptationDecision::default(),
-            last_tick: Instant::now()
-                .checked_sub(Duration::from_secs(10))
-                .unwrap_or(Instant::now()),
+            last_tick: now.checked_sub(Duration::from_secs(10)).unwrap_or(now),
+            last_growth: now.checked_sub(Duration::from_secs(10)).unwrap_or(now),
             tick_interval: Duration::from_secs(2),
         }
     }
@@ -521,6 +530,30 @@ impl AdaptiveEngine {
 
         target = profile_conns.clamp(1, effective_max);
 
+        // Expand additively rather than jumping to a resource-derived ceiling.
+        // A large one-tick geometry rewrite can interrupt healthy range writes
+        // and make a fast host look unstable. The step grows with the current
+        // level (2→4→6→9…) and remains reversible by the existing backoff
+        // guards, eventually allowing >32 only after sustained evaluations.
+        let mut growth_settling = false;
+        if target > self.current_connections {
+            // Let the new geometry write and report at least several samples
+            // before any further expansion. This avoids overlapping rebuilds
+            // from turning a healthy range transfer into a corrupt merge.
+            if now.duration_since(self.last_growth) < Duration::from_secs(10) {
+                target = self.current_connections;
+                growth_settling = true;
+                decision.reason.push_str("[growth-settling] ");
+            } else {
+                let growth_step = (self.current_connections / 2).max(2);
+                let gradual_ceiling = self.current_connections.saturating_add(growth_step);
+                if target > gradual_ceiling {
+                    target = gradual_ceiling.min(effective_max);
+                    decision.reason.push_str("[gradual-growth] ");
+                }
+            }
+        }
+
         if self.resources.cpu_saturated() {
             target = target.saturating_sub(1).max(1);
             decision.reason.push_str("[cpu-saturated] ");
@@ -561,7 +594,12 @@ impl AdaptiveEngine {
 
         // M22: evaluate the segment plan exactly once per tick, then use it
         // on either path below (the old code called evaluate() twice).
-        let seg_plan = self.segment_ctrl.evaluate(&snapshot.connections);
+        // Segment-only changes are geometry rewrites too. Suppress them
+        // during the same settling interval as connection growth so handles
+        // are never rebuilt repeatedly before the prior layout is validated.
+        let seg_plan = (!growth_settling)
+            .then(|| self.segment_ctrl.evaluate(&snapshot.connections))
+            .flatten();
 
         if !self.convergence.should_adjust(&AdaptiveThresholds {
             eval_interval_ms: self.tick_interval.as_millis() as u64,
@@ -658,6 +696,9 @@ impl AdaptiveEngine {
 
         if target != self.current_connections {
             self.convergence.record_adjustment(agg_speed);
+            if target > self.current_connections {
+                self.last_growth = now;
+            }
             self.current_connections = target;
         }
 

@@ -4055,6 +4055,103 @@ mod tests {
     }
 
     #[test]
+    fn capable_hosts_execute_more_than_32_parallel_range_segments() {
+        // This is deliberately capability-gated: a two-core CI runner should
+        // not be forced into unsafe parallelism merely to satisfy a test. On
+        // a host whose autonomous ceiling exceeds 32, however, the real curl
+        // path must create and complete that many range-backed part files.
+        let target_connections = crate::daemon::engine::config::global_config()
+            .max_connections_per_download
+            .min(48);
+        if target_connections <= 32 {
+            return;
+        }
+
+        let payload: Vec<u8> = (0..(usize::try_from(target_connections).unwrap() * 512 * 1024))
+            .map(|index| (index % 251) as u8)
+            .collect();
+        let addr = spawn_slow_range_server(std::sync::Arc::new(payload.clone()), 32 * 1024, 12);
+        let url = format!("http://{addr}/parallel.bin");
+        let dir = std::env::temp_dir().join(format!(
+            "nova_test_parallel_{}_{}",
+            std::process::id(),
+            target_connections
+        ));
+        let out = dir.join("parallel.bin");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let state = std::sync::Arc::new(crate::daemon::persist::tests::test_state(
+            &dir.to_string_lossy(),
+        ));
+        let id = "parallel-over-32-test";
+        let body = download_body(
+            &url,
+            "parallel.bin",
+            payload.len() as u64,
+            target_connections,
+        );
+        let direct_options = std::collections::HashMap::from([
+            (
+                "preflightResolved".to_owned(),
+                serde_json::Value::Bool(true),
+            ),
+            (
+                "preflightSupportsRange".to_owned(),
+                serde_json::Value::Bool(true),
+            ),
+        ]);
+        let job = task_from_body(
+            &body,
+            id,
+            "parallel.bin".to_owned(),
+            &out,
+            direct_options,
+            Vec::new(),
+        );
+        state.curl_jobs.lock().unwrap().insert(id.to_owned(), job);
+        state.mark_dirty();
+
+        let transfer_state = state.clone();
+        std::thread::spawn(move || start_curl_process(&transfer_state, id));
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut peak_part_files = 0usize;
+        while std::time::Instant::now() < deadline {
+            let part_files = std::fs::read_dir(&dir)
+                .unwrap()
+                .flatten()
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with("parallel.bin.part")
+                })
+                .count();
+            peak_part_files = peak_part_files.max(part_files);
+            let status = state
+                .curl_jobs
+                .lock()
+                .unwrap()
+                .get(id)
+                .map(|job| job.task.status.clone())
+                .unwrap_or_default();
+            if status == "completed" || status == "error" {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        let task = run_task_to_completion(&state, id, std::time::Duration::from_secs(45));
+        assert_eq!(task.status, "completed");
+        assert!(
+            peak_part_files >= target_connections as usize,
+            "expected at least {target_connections} live range parts, observed {peak_part_files}"
+        );
+        assert_eq!(std::fs::read(&out).unwrap(), payload);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn unknown_size_download_learns_total_from_content_length_for_live_progress() {
         let payload: Vec<u8> = (0..(4 * 1024 * 1024)).map(|i| (i % 257) as u8).collect();
         // Use the throttled server: a plain localhost transfer can complete

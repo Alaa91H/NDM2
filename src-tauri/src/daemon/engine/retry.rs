@@ -336,8 +336,16 @@ mod tests {
         let min_d = samples[0];
         let max_d = *samples.last().unwrap();
         let median = samples[samples.len() / 2];
-        // Symmetry: the median of a symmetric distribution sits at the center
-        // of the observed range, and values must land on both sides of it.
+        // Symmetry: every value must stay within the theoretical ±12.5%
+        // envelope around the capped base delay. Comparing the full spread to
+        // a sampled median was flaky: a valid random median can sit slightly
+        // below the exact centre, making a valid 25% spread look excessive.
+        let capped_nanos = policy
+            .base_delay
+            .as_nanos()
+            .saturating_mul(u128::from(policy.backoff_multiplier.powi(4) as u64))
+            .min(policy.max_delay.as_nanos());
+        let half_range = capped_nanos / 8;
         let center_nanos = (min_d.as_nanos() + max_d.as_nanos()) / 2;
         let spread = max_d.as_nanos().saturating_sub(min_d.as_nanos());
         assert!(
@@ -345,9 +353,9 @@ mod tests {
             "jitter must produce varied delays (min={min_d:?}, max={max_d:?})"
         );
         assert!(
-            spread <= median.as_nanos() / 4,
-            "jitter spread {spread} exceeds ±12.5% of median {}",
-            median.as_nanos()
+            min_d.as_nanos() >= capped_nanos.saturating_sub(half_range)
+                && max_d.as_nanos() <= capped_nanos.saturating_add(half_range),
+            "jitter escaped ±12.5% envelope around {capped_nanos}ns: [{min_d:?}, {max_d:?}]"
         );
         // The median must sit near the middle of the range (±20% of spread).
         let median_offset = median.as_nanos().abs_diff(center_nanos);

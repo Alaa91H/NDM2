@@ -179,27 +179,25 @@ impl SegmentController {
             return None;
         }
 
-        // Active segments are bounded by `max_segments` (64 by default), so a
-        // fixed stack array avoids a heap allocation just for the median.
-        let mut speeds = [0u64; 64];
-        let mut speed_count = 0;
+        // The connection ceiling is resource-derived and can exceed the
+        // historical 64-segment default. Keep the median input bounded by the
+        // configured geometry while preserving every active segment eligible
+        // for the current plan.
+        let mut speeds = Vec::with_capacity(active_count.min(self.max_segments as usize));
         for seg in self
             .segments
             .iter()
             .filter(|s| s.state == SegmentState::Active)
+            .take(self.max_segments as usize)
         {
-            if speed_count < speeds.len() {
-                speeds[speed_count] = seg.speed;
-                speed_count += 1;
-            }
+            speeds.push(seg.speed);
         }
 
-        let median_speed = if speed_count == 0 {
+        let median_speed = if speeds.is_empty() {
             0
         } else {
-            let sorted = &mut speeds[..speed_count];
-            sorted.sort_unstable();
-            sorted[speed_count / 2]
+            speeds.sort_unstable();
+            speeds[speeds.len() / 2]
         };
 
         if median_speed == 0 {

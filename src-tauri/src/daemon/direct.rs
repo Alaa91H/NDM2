@@ -237,9 +237,8 @@ impl SegmentPlanner {
             return Vec::new();
         }
         let count = connections
-            .clamp(MIN_CONNECTIONS_PER_DOWNLOAD, MAX_CONNECTIONS_PER_DOWNLOAD)
-            .min(self.max_connections)
-            .min(u32::try_from(total_size.max(1)).unwrap_or(MAX_CONNECTIONS_PER_DOWNLOAD))
+            .clamp(MIN_CONNECTIONS_PER_DOWNLOAD, self.max_connections)
+            .min(u32::try_from(total_size.max(1)).unwrap_or(self.max_connections))
             as usize;
         let base = total_size / count as u64;
         let rem = total_size % count as u64;
@@ -614,7 +613,7 @@ mod tests {
     }
 
     #[test]
-    fn segment_planner_caps_excessive_connection_requests_at_engine_limit() {
+    fn segment_planner_caps_excessive_connection_requests_at_absolute_safety_limit() {
         let total_size = u64::from(MAX_CONNECTIONS_PER_DOWNLOAD) * 1024;
         let ranges = SegmentPlanner::new(u32::MAX).plan(u64::MAX, u32::MAX, Path::new("large.bin"));
         assert_eq!(ranges.len(), MAX_CONNECTIONS_PER_DOWNLOAD as usize);

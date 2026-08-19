@@ -2,9 +2,12 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 /// Safety bounds for concurrent connections assigned to a single download.
-/// They are internal engine limits, not user-facing controls.
+/// They are internal engine limits, not user-facing controls. The adaptive
+/// ceiling grows only when both processor and memory headroom justify it.
 pub const MIN_CONNECTIONS_PER_DOWNLOAD: u32 = 1;
-pub const MAX_CONNECTIONS_PER_DOWNLOAD: u32 = 32;
+pub const DEFAULT_CONNECTIONS_PER_DOWNLOAD_CEILING: u32 = 32;
+pub const MAX_CONNECTIONS_PER_DOWNLOAD: u32 = 512;
+pub const MAX_TOTAL_CONNECTIONS: u32 = 2_048;
 
 /// Unified autonomous engine configuration. All values are either system-derived
 /// at startup or adapted at runtime by the Download Intelligence Engine. No value
@@ -51,9 +54,22 @@ impl EngineConfig {
         let cpus = cpu_count();
         let total_ram = crate::daemon::engine::sysinfo::total_physical_memory_bytes();
 
-        let max_connections_per_download =
-            (cpus * 2).clamp(MIN_CONNECTIONS_PER_DOWNLOAD, MAX_CONNECTIONS_PER_DOWNLOAD);
-        let max_total_connections = (cpus * 4).clamp(4, 128);
+        // Permit growth beyond the former fixed 32-connection ceiling only
+        // when the host can sustain it. Eight connections per logical core is
+        // deliberately conservative for libcurl's event loop, while 32 MiB of
+        // available RAM per live transfer slot prevents memory pressure from
+        // turning parallelism into instability. The absolute cap is a final
+        // circuit-breaker, not a normal operating target.
+        let cpu_ceiling = cpus.saturating_mul(8);
+        let memory_ceiling = u32::try_from(total_ram / (32 * 1024 * 1024)).unwrap_or(u32::MAX);
+        let max_connections_per_download = cpu_ceiling
+            .min(memory_ceiling)
+            .max(DEFAULT_CONNECTIONS_PER_DOWNLOAD_CEILING.min(cpu_ceiling))
+            .clamp(MIN_CONNECTIONS_PER_DOWNLOAD, MAX_CONNECTIONS_PER_DOWNLOAD);
+        let max_total_connections = cpus.saturating_mul(16).clamp(
+            DEFAULT_CONNECTIONS_PER_DOWNLOAD_CEILING,
+            MAX_TOTAL_CONNECTIONS,
+        );
 
         let min_segment_bytes = 256 * 1024;
         let initial_segments = cpus.clamp(1, 4);
@@ -188,5 +204,14 @@ mod tests {
         let cfg = EngineConfig::detect();
         assert!(cfg.write_buffer_bytes >= 64 * 1024);
         assert!(cfg.read_buffer_bytes >= 32 * 1024);
+    }
+
+    #[test]
+    fn dynamic_connection_ceiling_can_exceed_legacy_default() {
+        let cfg = EngineConfig::detect();
+        assert!(cfg.max_connections_per_download >= MIN_CONNECTIONS_PER_DOWNLOAD);
+        assert!(cfg.max_connections_per_download <= MAX_CONNECTIONS_PER_DOWNLOAD);
+        assert!(cfg.max_total_connections >= DEFAULT_CONNECTIONS_PER_DOWNLOAD_CEILING);
+        assert!(cfg.max_total_connections <= MAX_TOTAL_CONNECTIONS);
     }
 }
