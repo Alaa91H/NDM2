@@ -240,6 +240,13 @@ FunctionEnd
 Var ReinstallPageCheck
 Page custom PageReinstall PageLeaveReinstall
 Function PageReinstall
+  ; A verified newer installer has already selected maintenance update mode in
+  ; .onInit. Skip this page entirely so upgrades replace program files in place
+  ; and preserve shortcuts, browser integration, and user data.
+  ${If} $UpdateMode = 1
+    Abort
+  ${EndIf}
+
   ; Uninstall previous WiX installation if exists.
   ;
   ; A WiX installer stores the installation info in registry
@@ -573,13 +580,42 @@ Function .onInit
     StrCpy $UpdateMode 1
   ${EndIf}
 
-  ; Auto-detect upgrade: if no /UPDATE flag, check the existing install receipt
-  ; and set $UpdateMode = 1 when this installer is a newer version.  This must
-  ; run here in .onInit so that $UpdateMode is correct *before* PageReinstall
-  ; is displayed (the old detection in NSIS_HOOK_PREINSTALL ran too late).
-  ${If} $UpdateMode != 1
-    IfFileExists "$INSTDIR\nova-install-receipt.ini" 0 _nova_oninit_no_receipt
-      ReadINIStr $R0 "$INSTDIR\nova-install-receipt.ini" "NOVA" "ProductVersion"
+  ; For the configured per-machine/current-user modes, resolve the prior
+  ; location before maintenance pages are created. The previous implementation
+  ; inspected the placeholder path, so a normal upgrade was mistaken for a
+  ; manual reinstall and prompted to uninstall first.
+  !if "${INSTALLMODE}" != "both"
+    !insertmacro SetContext
+    ${If} $INSTDIR == "${PLACEHOLDER_INSTALL_DIR}"
+      !if "${INSTALLMODE}" == "perMachine"
+        ${If} ${RunningX64}
+          !if "${ARCH}" == "x64"
+            StrCpy $INSTDIR "$PROGRAMFILES64\${PRODUCTNAME}"
+          !else if "${ARCH}" == "arm64"
+            StrCpy $INSTDIR "$PROGRAMFILES64\${PRODUCTNAME}"
+          !else
+            StrCpy $INSTDIR "$PROGRAMFILES\${PRODUCTNAME}"
+          !endif
+        ${Else}
+          StrCpy $INSTDIR "$PROGRAMFILES\${PRODUCTNAME}"
+        ${EndIf}
+      !else if "${INSTALLMODE}" == "currentUser"
+        StrCpy $INSTDIR "$LOCALAPPDATA\${PRODUCTNAME}"
+      !endif
+      Call RestorePreviousInstallLocation
+    ${EndIf}
+
+    ; Prefer the install receipt, then fall back to Apps & Features metadata
+    ; for versions that predate receipts. A newer installer enters update mode
+    ; before PageReinstall, so it overlays the old app in place.
+    ${If} $UpdateMode != 1
+      StrCpy $R0 ""
+      IfFileExists "$INSTDIR\nova-install-receipt.ini" 0 nova_oninit_read_registry_version
+        ReadINIStr $R0 "$INSTDIR\nova-install-receipt.ini" "NOVA" "ProductVersion"
+        Goto nova_oninit_compare_version
+      nova_oninit_read_registry_version:
+        ReadRegStr $R0 SHCTX "${UNINSTKEY}" "DisplayVersion"
+      nova_oninit_compare_version:
       ${If} $R0 != ""
         StrCpy $R1 $R0
         nsis_tauri_utils::SemverCompare "${VERSION}" $R0
@@ -588,8 +624,8 @@ Function .onInit
           StrCpy $UpdateMode 1
         ${EndIf}
       ${EndIf}
-    _nova_oninit_no_receipt:
-  ${EndIf}
+    ${EndIf}
+  !endif
 
   !if "${DISPLAYLANGUAGESELECTOR}" == "true"
     !insertmacro MUI_LANGDLL_DISPLAY

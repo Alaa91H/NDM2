@@ -1,5 +1,9 @@
 import { defineConfig, devices } from '@playwright/test';
 
+// Test-only token accepted exclusively by a daemon started with --integration.
+// It is intentionally not used by desktop or production daemon processes.
+const integrationApiToken = 'nova-e2e-integration-token-2026';
+
 export default defineConfig({
   testDir: './src/e2e',
   fullyParallel: true,
@@ -18,10 +22,20 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
   ],
-  webServer: {
-    command: 'pnpm run dev',
-    url: 'http://127.0.0.1:3000',
-    reuseExistingServer: !process.env.CI,
-    timeout: 120000,
-  },
+  webServer: [
+    {
+      command: 'NOVA_DAEMON_PORT=3199 cargo run --locked --manifest-path src-tauri/Cargo.toml -- --integration',
+      env: { ...process.env, NOVA_INTEGRATION_API_TOKEN: integrationApiToken },
+      url: 'http://127.0.0.1:3199/api/health',
+      reuseExistingServer: !process.env.CI,
+      timeout: 120000,
+    },
+    {
+      command: 'pnpm run dev',
+      env: { ...process.env, VITE_NOVA_API_TOKEN: integrationApiToken },
+      url: 'http://127.0.0.1:3000',
+      reuseExistingServer: !process.env.CI,
+      timeout: 120000,
+    },
+  ],
 });

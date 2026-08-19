@@ -26,7 +26,7 @@ test.describe('Diagnostics — dialog structure', () => {
   });
 
   test('dialog has title', async ({ page }) => {
-    const title = page.locator('#modal-title');
+    const title = page.locator('[role="dialog"] h3');
     if (await title.isVisible().catch(() => false)) {
       const text = await title.textContent();
       expect(text?.length).toBeGreaterThan(0);

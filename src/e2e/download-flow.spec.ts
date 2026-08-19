@@ -37,7 +37,7 @@ test.describe('Download Flow — add download dialog opens', () => {
 
   test('dialog has title referencing download', async ({ page }) => {
     await openNewDownload(page);
-    const title = page.locator('#modal-title');
+    const title = page.locator('[role="dialog"] h3');
     const text = await title.textContent();
     expect(text).toMatch(/add|new|download|تنزيل|إضافة/i);
     await closeDialog(page);
@@ -90,15 +90,15 @@ test.describe('Download Flow — URL validation', () => {
     expect(stillVisible).toBe(true);
   });
 
-  test('empty URL shows validation on submit', async ({ page }) => {
+  test('empty URL keeps the download action disabled', async ({ page }) => {
     const urlInput = page.locator('[role="dialog"] input[type="text"]').first();
     await urlInput.fill('');
     const downloadBtn = page
       .locator('[role="dialog"] button')
       .filter({ hasText: /download now|بدء|تنزيل/i })
       .first();
-    await downloadBtn.click();
-    await page.waitForTimeout(500);
+    await expect(downloadBtn).toBeDisabled();
+    await expect(page.locator('[role="dialog"]')).toBeVisible();
   });
 
   test('URL with special characters is preserved', async ({ page }) => {

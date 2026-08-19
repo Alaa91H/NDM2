@@ -74,12 +74,10 @@ def test_manifest_source_policy_is_part_of_highest_verification() -> None:
     assert 'src/manifest.json CSP must not contain unsafe-inline or unsafe-eval.' in guard
 
 
-def test_diagnostics_surface_active_security_policy() -> None:
+def test_diagnostics_payload_contains_active_security_policy() -> None:
     router = read('src/background/message-router.ts')
-    panel = read('src/ui/diagnostics/DiagnosticsPanel.tsx')
 
     assert 'securityPolicy: {' in router
     assert 'maxJsonLdTotalChars' in router
     assert 'uiOnlyDiagnosticsSettingsTasks' in router
-    assert 'securityPolicy?: Record<string, unknown>;' in panel
-    assert '<h2>Security policy</h2>' in panel
+    assert 'assertStorageBudget(\'diagnostics-export\', diagnosticPayload)' in router

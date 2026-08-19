@@ -12,6 +12,8 @@ interface ExternalTool {
   path?: string;
   capabilities: Array<{ id: string; name: string; available: boolean }>;
   healthOk: boolean;
+  installedByApp: boolean;
+  customPath: boolean;
   error?: string;
 }
 
@@ -114,6 +116,24 @@ export const ExternalToolsSettings: React.FC<Props> = ({ onAddToast }) => {
       onAddToast('error', 'Updates', extractErrorMessage(error, 'Update check failed.'));
     } finally {
       clearAction(toolId, 'updates');
+    }
+  };
+
+  const handleInstall = async (toolId: string) => {
+    setAction(toolId, 'install');
+    try {
+      const result = await novaClient.installExternalTool(toolId);
+      if (result.ok) {
+        onAddToast('success', 'Install', `${toolId} installed and verified successfully.`);
+        setUpdateInfo((prev) => ({ ...prev, [toolId]: { available: false } }));
+        await loadTools();
+      } else {
+        onAddToast('error', 'Install', result.error || 'Installation failed.');
+      }
+    } catch (error) {
+      onAddToast('error', 'Install', extractErrorMessage(error, 'Installation failed.'));
+    } finally {
+      clearAction(toolId, 'install');
     }
   };
 
@@ -250,6 +270,11 @@ export const ExternalToolsSettings: React.FC<Props> = ({ onAddToast }) => {
                     {tool.path}
                   </span>
                 )}
+                {tool.healthOk && (
+                  <span className="text-[9px] font-bold text-[var(--text-muted)] block">
+                    {tool.installedByApp ? 'Managed by NOVA' : tool.customPath ? 'Custom path' : 'System installation'}
+                  </span>
+                )}
                 {tool.error && <span className="text-[10px] font-mono text-[var(--danger)] block">{tool.error}</span>}
               </div>
             </div>
@@ -291,6 +316,21 @@ export const ExternalToolsSettings: React.FC<Props> = ({ onAddToast }) => {
 
             {/* Actions */}
             <div className="flex flex-wrap gap-1.5 pt-2 border-t border-[var(--border-color)]/50">
+              {!tool.healthOk && (
+                <button
+                  type="button"
+                  onClick={() => void handleInstall(tool.id)}
+                  disabled={isActionRunning(tool.id, 'install')}
+                  className="px-2 py-1 bg-[var(--accent-primary)]/10 border border-[var(--accent-border)] text-[var(--accent-primary)] rounded text-[10px] font-bold hover:bg-[var(--accent-primary)]/20 transition-all cursor-pointer flex items-center gap-1 disabled:opacity-50"
+                >
+                  {isActionRunning(tool.id, 'install') ? (
+                    <RefreshCw className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <Download className="w-3 h-3" />
+                  )}
+                  Install & Verify
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => void handleDiscover(tool.id)}
@@ -330,19 +370,21 @@ export const ExternalToolsSettings: React.FC<Props> = ({ onAddToast }) => {
                 )}
                 Check Updates
               </button>
-              <button
-                type="button"
-                onClick={() => void handleUninstall(tool.id)}
-                disabled={isActionRunning(tool.id, 'uninstall')}
-                className="px-2 py-1 bg-[var(--danger-bg)] border border-[var(--danger-border)] text-[var(--danger)] rounded text-[10px] font-bold hover:bg-[var(--danger-bg)] transition-all cursor-pointer flex items-center gap-1 disabled:opacity-50"
-              >
-                {isActionRunning(tool.id, 'uninstall') ? (
-                  <RefreshCw className="w-3 h-3 animate-spin" />
-                ) : (
-                  <Trash2 className="w-3 h-3" />
-                )}
-                Uninstall
-              </button>
+              {tool.installedByApp && (
+                <button
+                  type="button"
+                  onClick={() => void handleUninstall(tool.id)}
+                  disabled={isActionRunning(tool.id, 'uninstall')}
+                  className="px-2 py-1 bg-[var(--danger-bg)] border border-[var(--danger-border)] text-[var(--danger)] rounded text-[10px] font-bold hover:bg-[var(--danger-bg)] transition-all cursor-pointer flex items-center gap-1 disabled:opacity-50"
+                >
+                  {isActionRunning(tool.id, 'uninstall') ? (
+                    <RefreshCw className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <Trash2 className="w-3 h-3" />
+                  )}
+                  Uninstall
+                </button>
+              )}
             </div>
 
             {/* Custom path */}

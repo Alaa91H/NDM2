@@ -201,7 +201,9 @@ test.describe('Accessibility — ARIA roles', () => {
     const dialog = page.locator('[role="dialog"]');
     await expect(dialog).toBeVisible({ timeout: 3000 });
     await expect(dialog).toHaveAttribute('aria-modal', 'true');
-    await expect(dialog).toHaveAttribute('aria-labelledby', 'modal-title');
+    const titleId = await dialog.getAttribute('aria-labelledby');
+    if (!titleId) throw new Error('Dialog must reference its accessible title');
+    await expect(dialog.getByRole('heading')).toHaveAttribute('id', titleId);
     await page.keyboard.press('Escape');
   });
 

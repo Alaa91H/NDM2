@@ -45,10 +45,10 @@ def test_page_scan_requires_explicit_user_activation() -> None:
 
 def test_outbox_dead_letter_count_supports_store_shape() -> None:
     store = read('src/outbox/outbox-store.ts')
-    popup_status = read('src/ui/popup/OutboxStatus.tsx')
+    router = read('src/background/message-router.ts')
     assert 'deadLetter' in store
-    assert "'dead-letter' | 'deadLetter'" in popup_status
-    assert "counts?.deadLetter ?? counts?.['dead-letter']" in popup_status
+    assert "'outbox-terminal'" in router
+    assert 'outbox.clearTerminal()' in router
 
 
 def test_candidate_cache_clear_all_removes_stale_cache_keys() -> None:
@@ -58,9 +58,8 @@ def test_candidate_cache_clear_all_removes_stale_cache_keys() -> None:
     assert '...discoveredKeys' in cache
 
 
-def test_diagnostics_surface_storage_schema_status() -> None:
-    panel = read('src/ui/diagnostics/DiagnosticsPanel.tsx')
+def test_diagnostics_payload_includes_storage_schema_status() -> None:
     router = read('src/background/message-router.ts')
-    assert 'storageMigration?: { schemaVersion?: number; migratedAt?: string }' in panel
-    assert '<h2>Storage</h2>' in panel
+    assert 'storageMigration' in router
     assert 'migrationStore.status()' in router
+    assert "assertStorageBudget('diagnostics-export', diagnosticPayload)" in router

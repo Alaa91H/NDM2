@@ -152,12 +152,46 @@ impl ExternalToolManager {
         installer::check_latest_version(tool, &self.http)
     }
 
+    /// Download and register the current verified release for a tool that is
+    /// absent or unhealthy. System-managed tools are never overwritten: users
+    /// may adopt one explicitly through a custom path, while NOVA manages only
+    /// files it installs under its data directory.
+    pub fn install(&self, tool_id: ToolId) -> Result<String, String> {
+        let existing = self.discover(tool_id);
+        if existing.health_ok && !existing.installed_by_app {
+            return Err(format!(
+                "{} is already available at {} and is not managed by NOVA. Use its existing installation or set a custom path instead.",
+                self.tool_for_id(tool_id).name(),
+                existing
+                    .path
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "the system path".to_owned())
+            ));
+        }
+        self.install_verified_release(tool_id)
+    }
+
     pub fn update(&self, tool_id: ToolId) -> Result<String, String> {
+        let existing = self.discover(tool_id);
+        if !existing.installed_by_app {
+            return Err(format!(
+                "{} is not managed by NOVA and cannot be updated automatically.",
+                self.tool_for_id(tool_id).name()
+            ));
+        }
+        self.install_verified_release(tool_id)
+    }
+
+    fn install_verified_release(&self, tool_id: ToolId) -> Result<String, String> {
         let tool = self.tool_for_id(tool_id);
         let update_info = self.check_for_updates(tool_id);
 
         if !update_info.available {
-            return Err("No update available".to_owned());
+            return Err(
+                "No compatible verified release is currently available for automatic installation"
+                    .to_owned(),
+            );
         }
 
         let install_dir = self.get_install_dir(tool_id);

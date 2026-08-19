@@ -20,7 +20,9 @@ test.describe('New Download Dialog — full flow', () => {
   test('dialog has correct ARIA attributes', async ({ page }) => {
     const dialog = page.locator('[role="dialog"]');
     await expect(dialog).toHaveAttribute('aria-modal', 'true');
-    await expect(dialog).toHaveAttribute('aria-labelledby', 'modal-title');
+    const titleId = await dialog.getAttribute('aria-labelledby');
+    if (!titleId) throw new Error('Dialog must reference its accessible title');
+    await expect(dialog.getByRole('heading')).toHaveAttribute('id', titleId);
   });
 
   test('URL input is auto-focused on open', async ({ page }) => {

@@ -7,21 +7,18 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding='utf-8')
 
 
-def test_clear_local_data_really_clears_diagnostics_and_overlay_state() -> None:
+def test_clear_local_data_really_clears_supported_runtime_state() -> None:
     schema = read('src/contracts/messages.schema.ts')
     router = read('src/background/message-router.ts')
-    data_settings = read('src/ui/options/DataSettings.tsx')
 
-    for scope in ['diagnostics', 'overlay-diagnostics', 'overlay-positions']:
+    for scope in ['diagnostics', 'outbox-terminal', 'all-local']:
         assert scope in schema
         assert scope in router
-        assert scope in data_settings
 
-    assert "OVERLAY_DIAGNOSTICS_STORAGE_KEY" in router
-    assert "browser.storage.local.remove([OVERLAY_DIAGNOSTICS_STORAGE_KEY, 'nova.diagnostics'])" in router
-    assert "key.startsWith('nova.downloadOverlayPosition.v2.')" in router
-    assert "Clear overlay diagnostics" in data_settings
-    assert "Clear overlay positions" in data_settings
+    assert "browser.storage.local.remove(['nova.diagnostics'])" in router
+    assert 'outbox.clearTerminal()' in router
+    assert 'cache.clearAll()' in router
+    assert 'outbox.clearAll()' in router
 
 
 def test_production_preflight_is_wired_before_heavy_ci_jobs() -> None:
@@ -41,9 +38,9 @@ def test_production_preflight_is_wired_before_heavy_ci_jobs() -> None:
     assert "nodeMajor < 24 || nodeMajor >= 27" in preflight
     assert "packageManager must stay pnpm@11.6.0" in preflight
     assert "store permission policy term missing" in preflight
-    assert "floating overlay runtime hardening" in preflight
-    assert "floating overlay settings schema" in preflight
-    assert "floating overlay background filtering" in preflight
+    assert "'tools/production-guard.ts'" in preflight
+    assert "'tools/e2e-readiness-check.ts'" in preflight
+    assert "optional_host_permissions: store ? ['<all_urls>']" in preflight
 
 
 def test_ci_release_notification_is_tag_only_and_has_valid_job_shape() -> None:

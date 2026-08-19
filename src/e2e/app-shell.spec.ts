@@ -19,15 +19,14 @@ test.describe('App Shell — layout structure', () => {
     await expect(root).toBeVisible({ timeout: 5000 });
   });
 
-  test('sidebar is rendered as fixed or static nav', async ({ page }) => {
-    const sidebar = page.locator('nav, aside, [role="navigation"]').first();
-    await expect(sidebar).toBeVisible({ timeout: 5000 });
-    const display = await sidebar.evaluate((el) => window.getComputedStyle(el).display);
+  test('primary toolbar is rendered', async ({ page }) => {
+    const toolbar = page.locator('header').first();
+    await expect(toolbar).toBeVisible({ timeout: 5000 });
+    const display = await toolbar.evaluate((el) => window.getComputedStyle(el).display);
     expect(display).not.toBe('none');
   });
-
   test('status bar is rendered at bottom', async ({ page }) => {
-    const statusBar = page.locator('[role="status"]').first();
+    const statusBar = page.locator('footer').first();
     await expect(statusBar).toBeVisible({ timeout: 5000 });
     const box = await statusBar.boundingBox();
     if (box) {
@@ -36,13 +35,17 @@ test.describe('App Shell — layout structure', () => {
     }
   });
 
-  test('main content area exists between sidebar and status bar', async ({ page }) => {
-    const sidebar = page.locator('nav, aside, [role="navigation"]').first();
-    const statusBar = page.locator('[role="status"]').first();
-    const sidebarBox = await sidebar.boundingBox();
+  test('download content is rendered between toolbar and status bar', async ({ page }) => {
+    const toolbar = page.locator('header').first();
+    const table = page.locator('table').first();
+    const statusBar = page.locator('footer').first();
+    await expect(table).toBeVisible();
+    const toolbarBox = await toolbar.boundingBox();
+    const tableBox = await table.boundingBox();
     const statusBox = await statusBar.boundingBox();
-    if (sidebarBox && statusBox) {
-      expect(statusBox.y).toBeGreaterThan(sidebarBox.y);
+    if (toolbarBox && tableBox && statusBox) {
+      expect(tableBox.y).toBeGreaterThanOrEqual(toolbarBox.y + toolbarBox.height);
+      expect(statusBox.y).toBeGreaterThan(tableBox.y);
     }
   });
 });
@@ -69,21 +72,22 @@ test.describe('App Shell — custom title bar', () => {
     }
   });
 
-  test('title bar is draggable', async ({ page }) => {
-    const titleArea = page.locator('[class*="cursor-move"], [class*="select-none"]').first();
-    if (await titleArea.isVisible()) {
-      const cursor = await titleArea.evaluate((el) => window.getComputedStyle(el).cursor);
-      expect(cursor).toBe('move');
-    }
+  test('title bar declares its native drag region', async ({ page }) => {
+    const titleArea = page.locator('[data-tauri-drag-region]').first();
+    await expect(titleArea).toBeVisible();
+    await expect(titleArea).toHaveAttribute('data-tauri-drag-region', 'true');
   });
 });
 
 test.describe('App Shell — drag overlay', () => {
   test('drag overlay appears when files are dragged over', async ({ page }) => {
     await goto(page);
-    const body = page.locator('body');
-    // Simulate dragenter event
-    await body.dispatchEvent('dragenter', { dataTransfer: { types: ['Files'] } });
+    // Use a real browser DataTransfer object; a plain object cannot construct DragEvent.
+    await page.evaluate(() => {
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(new File(['nova'], 'nova-link.txt', { type: 'text/plain' }));
+      document.body.dispatchEvent(new DragEvent('dragenter', { bubbles: true, dataTransfer }));
+    });
     await page.waitForTimeout(300);
   });
 });
@@ -103,7 +107,7 @@ test.describe('App Shell — toast notification system', () => {
 
   test('toast container exists with live region', async ({ page }) => {
     const toastRegion = page.locator('[role="status"][aria-live="polite"]');
-    await expect(toastRegion).toBeVisible({ timeout: 3000 });
+    await expect(toastRegion).toHaveCount(1);
   });
 
   test('toast appears on action and auto-dismisses', async ({ page }) => {
@@ -113,9 +117,9 @@ test.describe('App Shell — toast notification system', () => {
     await expect(dialog).toBeVisible({ timeout: 3000 });
     await page.keyboard.press('Escape');
     await page.waitForTimeout(6000);
-    // Toasts auto-dismiss after 4.5s, container should still exist
+    // Toasts auto-dismiss after 4.5s; the live-region container remains attached.
     const toastRegion = page.locator('[role="status"][aria-live="polite"]');
-    await expect(toastRegion).toBeVisible();
+    await expect(toastRegion).toHaveCount(1);
   });
 
   test('toast has dismiss button', async ({ page }) => {
@@ -148,11 +152,11 @@ test.describe('App Shell — keyboard shortcut system', () => {
       },
     },
     {
-      keys: 'Control+j',
+      keys: 'Control+l',
       description: 'opens scheduler',
       check: async (page) => {
         await page.waitForTimeout(500);
-        const scheduler = page.locator('text=Scheduler, text=جدولة, text=排队').first();
+        const scheduler = page.getByRole('heading', { name: /download lists/i });
         await expect(scheduler).toBeVisible({ timeout: 3000 });
       },
     },
@@ -161,7 +165,7 @@ test.describe('App Shell — keyboard shortcut system', () => {
       description: 'opens settings',
       check: async (page) => {
         await page.waitForTimeout(500);
-        const settings = page.locator('text=Settings, text=الإعدادات, text=設定').first();
+        const settings = page.getByRole('heading', { name: /control center.*settings/i });
         await expect(settings).toBeVisible({ timeout: 3000 });
       },
     },
@@ -220,20 +224,20 @@ test.describe('App Shell — page routing', () => {
   test('navigating to settings shows settings content', async ({ page }) => {
     await page.keyboard.press('Control+,');
     await page.waitForTimeout(500);
-    await expect(page.locator('text=Settings').first()).toBeVisible({ timeout: 3000 });
+    await expect(page.getByRole('heading', { name: /control center.*settings/i })).toBeVisible({ timeout: 3000 });
   });
 
   test('navigating to scheduler shows scheduler content', async ({ page }) => {
-    await page.keyboard.press('Control+j');
+    await page.keyboard.press('Control+l');
     await page.waitForTimeout(500);
-    await expect(page.locator('text=Scheduler').first()).toBeVisible({ timeout: 3000 });
+    await expect(page.getByRole('heading', { name: /download lists/i })).toBeVisible({ timeout: 3000 });
   });
 });
 
 test.describe('App Shell — custom context menu suppression', () => {
   test('right-click shows custom context menu, not browser default', async ({ page }) => {
     await goto(page);
-    const mainContent = page.locator('main, [class*="content"]').first();
+    const mainContent = page.locator('table').first();
     if (await mainContent.isVisible()) {
       await mainContent.click({ button: 'right' });
       await page.waitForTimeout(300);

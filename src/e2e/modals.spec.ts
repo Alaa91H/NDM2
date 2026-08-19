@@ -21,7 +21,7 @@ test.describe('Modals — open and close', () => {
 
   test('dialog has accessible title', async ({ page }) => {
     await page.keyboard.press('Control+n');
-    const title = page.locator('#modal-title');
+    const title = page.locator('[role="dialog"] h3');
     await expect(title).toBeVisible({ timeout: 3000 });
     const text = await title.textContent();
     expect(text?.length).toBeGreaterThan(0);

@@ -2,6 +2,10 @@ import browser from 'webextension-polyfill';
 
 const HOST_ID = 'nova-media-panel-host';
 const CHECK_INTERVAL_MS = 3000;
+const PANEL_POSITION_KEY = 'nova-floating-panel-position-v1';
+const PANEL_MARGIN_PX = 4;
+
+type SavedPanelPosition = { xRatio: number; yRatio: number };
 
 let panelHost: ShadowRoot | null = null;
 let panelEl: HTMLDivElement | null = null;
@@ -12,7 +16,7 @@ let probing = false;
 let isDragging = false;
 let dragOffsetX = 0;
 let dragOffsetY = 0;
-let savedPosition: { top: string; right: string; left: string; bottom: string } | null = null;
+let savedPosition: SavedPanelPosition | null = null;
 let toastEl: HTMLDivElement | null = null;
 let probeData: YtdlpProbeData | null = null;
 
@@ -312,6 +316,58 @@ function ensurePanel(): ShadowRoot {
   return panelHost;
 }
 
+function clampPanelCoordinate(value: number, maximum: number): number {
+  return Math.max(PANEL_MARGIN_PX, Math.min(Math.max(PANEL_MARGIN_PX, maximum), value));
+}
+
+function applySavedPosition(): void {
+  if (!panelEl || !savedPosition) return;
+  const maxX = Math.max(PANEL_MARGIN_PX, window.innerWidth - panelEl.offsetWidth - PANEL_MARGIN_PX);
+  const maxY = Math.max(PANEL_MARGIN_PX, window.innerHeight - panelEl.offsetHeight - PANEL_MARGIN_PX);
+  panelEl.style.right = 'auto';
+  panelEl.style.bottom = 'auto';
+  panelEl.style.left = `${clampPanelCoordinate(savedPosition.xRatio * maxX, maxX)}px`;
+  panelEl.style.top = `${clampPanelCoordinate(savedPosition.yRatio * maxY, maxY)}px`;
+}
+
+async function restoreSavedPosition(): Promise<void> {
+  try {
+    const stored = await browser.storage.local.get(PANEL_POSITION_KEY) as Record<string, unknown>;
+    const value = stored[PANEL_POSITION_KEY];
+    if (
+      value
+      && typeof value === 'object'
+      && Number.isFinite((value as SavedPanelPosition).xRatio)
+      && Number.isFinite((value as SavedPanelPosition).yRatio)
+    ) {
+      savedPosition = {
+        xRatio: Math.max(0, Math.min(1, (value as SavedPanelPosition).xRatio)),
+        yRatio: Math.max(0, Math.min(1, (value as SavedPanelPosition).yRatio)),
+      };
+      applySavedPosition();
+    }
+  } catch {
+    // Storage is optional for the panel; a transient storage failure must not
+    // stop media detection or leave a page script in an error state.
+  }
+}
+
+function persistSavedPosition(x: number, y: number): void {
+  const maxX = Math.max(PANEL_MARGIN_PX, window.innerWidth - (panelEl?.offsetWidth ?? 0) - PANEL_MARGIN_PX);
+  const maxY = Math.max(PANEL_MARGIN_PX, window.innerHeight - (panelEl?.offsetHeight ?? 0) - PANEL_MARGIN_PX);
+  savedPosition = {
+    xRatio: Math.max(0, Math.min(1, x / maxX)),
+    yRatio: Math.max(0, Math.min(1, y / maxY)),
+  };
+  void browser.storage.local.set({ [PANEL_POSITION_KEY]: savedPosition }).catch(() => {});
+}
+
+function resetPositionToVideo(): void {
+  savedPosition = null;
+  void browser.storage.local.remove(PANEL_POSITION_KEY).catch(() => {});
+  positionAtVideo();
+}
+
 function setupDrag(el: HTMLDivElement): void {
   el.addEventListener('mousedown', (e) => {
     if (!(e.target instanceof Element)) return;
@@ -325,16 +381,28 @@ function setupDrag(el: HTMLDivElement): void {
   });
   document.addEventListener('mousemove', (e) => {
     if (!isDragging || !panelEl) return;
-    const x = Math.max(0, Math.min(window.innerWidth - 50, e.clientX - dragOffsetX));
-    const y = Math.max(0, Math.min(window.innerHeight - 50, e.clientY - dragOffsetY));
+    const x = clampPanelCoordinate(
+      e.clientX - dragOffsetX,
+      window.innerWidth - panelEl.offsetWidth - PANEL_MARGIN_PX,
+    );
+    const y = clampPanelCoordinate(
+      e.clientY - dragOffsetY,
+      window.innerHeight - panelEl.offsetHeight - PANEL_MARGIN_PX,
+    );
     panelEl.style.right = 'auto';
     panelEl.style.bottom = 'auto';
     panelEl.style.left = `${x}px`;
     panelEl.style.top = `${y}px`;
-    savedPosition = { top: panelEl.style.top, right: panelEl.style.right, left: panelEl.style.left, bottom: panelEl.style.bottom };
   });
   document.addEventListener('mouseup', () => {
-    if (isDragging && panelEl) { isDragging = false; panelEl.style.transition = ''; }
+    if (isDragging && panelEl) {
+      isDragging = false;
+      panelEl.style.transition = '';
+      persistSavedPosition(parseFloat(panelEl.style.left), parseFloat(panelEl.style.top));
+    }
+  });
+  el.addEventListener('dblclick', (e) => {
+    if (e.target instanceof Element && !e.target.closest('button')) resetPositionToVideo();
   });
 }
 
@@ -353,8 +421,8 @@ function positionAtVideo(): void {
   const r = best.getBoundingClientRect();
   panelEl.style.left = '';
   panelEl.style.bottom = '';
-  panelEl.style.top = `${Math.max(4, r.top + 8)}px`;
-  panelEl.style.right = `${Math.max(4, window.innerWidth - r.right + 8)}px`;
+  panelEl.style.top = `${Math.max(PANEL_MARGIN_PX, r.top + 8)}px`;
+  panelEl.style.right = `${Math.max(PANEL_MARGIN_PX, window.innerWidth - r.right + 8)}px`;
 }
 
 // --- Render ---
@@ -369,7 +437,7 @@ function render(): void {
   panelEl.style.opacity = '1';
   panelEl.style.pointerEvents = 'auto';
 
-  let html = '<div class="nova-bar" data-drag="header">';
+  let html = '<div class="nova-bar" data-drag="header" title="Drag to reposition; double-click to reset to the video">';
   html += `<button class="nova-dl" data-action="download"${probing ? ' disabled' : ''}>`;
   if (probing) {
     html += '<span class="nova-spin"></span> Probing...';
@@ -377,7 +445,7 @@ function render(): void {
     html += '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download';
   }
   html += '</button>';
-  html += '<button class="nova-x" data-action="close" title="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>';
+  html += '<button class="nova-x" data-action="close" title="Close" aria-label="Close download panel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>';
   html += '</div>';
 
   if (dropdownVisible && probeData) {
@@ -469,12 +537,16 @@ function scanMedia(): void {
 
 function init(): void {
   ensurePanel();
+  void restoreSavedPosition();
   checkBridge();
   scanMedia();
   setInterval(scanMedia, CHECK_INTERVAL_MS);
   setInterval(checkBridge, 5000);
   window.addEventListener('scroll', () => positionAtVideo(), { passive: true });
-  window.addEventListener('resize', () => positionAtVideo(), { passive: true });
+  window.addEventListener('resize', () => {
+    if (savedPosition) applySavedPosition();
+    else positionAtVideo();
+  }, { passive: true });
   new MutationObserver(() => scanMedia()).observe(
     document.body ?? document.documentElement,
     { childList: true, subtree: true },

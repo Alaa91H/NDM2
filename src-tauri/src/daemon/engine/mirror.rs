@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MirrorSource {
@@ -23,8 +22,6 @@ struct InnerMirrorState {
 pub struct MirrorManager {
     mirrors: Arc<std::sync::Mutex<InnerMirrorState>>,
     failover_enabled: Arc<AtomicBool>,
-    last_failover: Arc<std::sync::Mutex<Instant>>,
-    failover_cooldown: Duration,
 }
 
 impl MirrorManager {
@@ -43,12 +40,6 @@ impl MirrorManager {
                 active_mirror: Some(0),
             })),
             failover_enabled: Arc::new(AtomicBool::new(true)),
-            last_failover: Arc::new(std::sync::Mutex::new(
-                Instant::now()
-                    .checked_sub(Duration::from_secs(60))
-                    .unwrap_or(Instant::now()),
-            )),
-            failover_cooldown: Duration::from_secs(30),
         }
     }
 
@@ -107,22 +98,21 @@ impl MirrorManager {
         if !self.failover_enabled.load(Ordering::Relaxed) {
             return None;
         }
-        let mut last = match self.last_failover.lock() {
-            Ok(g) => g,
-            Err(_) => return None,
-        };
-        if last.elapsed() < self.failover_cooldown {
-            return None;
-        }
-
         // Single lock for both mirrors and active_mirror — no ABBA risk.
         let mut state = match self.mirrors.lock() {
             Ok(g) => g,
             Err(_) => return None,
         };
-        // M7: mark EVERY copy of the dead URL unhealthy — the old code only
-        // marked the first match, leaving a duplicate healthy copy that the
-        // failover could then select as the "new" mirror.
+        // Only a failure from the source currently serving the task may advance
+        // the active pointer. A late completion from an old source can still be
+        // marked unhealthy, but must never undo a newer failover decision.
+        let failed_active_source = state
+            .active_mirror
+            .and_then(|index| state.mirrors.get(index))
+            .is_some_and(|source| source.url == url);
+
+        // Mark EVERY copy of the dead URL unhealthy so failover cannot select a
+        // duplicate healthy copy from a legacy state.
         let mut any_marked = false;
         for m in state.mirrors.iter_mut() {
             if m.url == url {
@@ -130,7 +120,7 @@ impl MirrorManager {
                 any_marked = true;
             }
         }
-        if !any_marked {
+        if !any_marked || !failed_active_source {
             return None;
         }
         let dead_indices: Vec<usize> = state
@@ -149,7 +139,6 @@ impl MirrorManager {
             .map(|(i, _)| i)
         {
             state.active_mirror = Some(new_idx);
-            *last = Instant::now();
             return state
                 .mirrors
                 .get(new_idx)
@@ -269,18 +258,22 @@ mod tests {
     }
 
     #[test]
-    fn report_failure_respects_cooldown() {
+    fn report_failure_cascades_to_next_healthy_source_without_cooldown() {
         let mgr = MirrorManager::new("https://primary.example.com");
-        mgr.add_mirror(mirror("https://backup.example.com", 1));
+        mgr.add_mirror(mirror("https://backup-one.example.com", 1));
+        mgr.add_mirror(mirror("https://backup-two.example.com", 2));
 
-        let first = mgr.report_failure("https://primary.example.com", "error");
-        assert!(first.is_some());
-
-        let second = mgr.report_failure("https://backup.example.com", "error");
-        assert!(
-            second.is_none(),
-            "should return None within cooldown period"
+        assert_eq!(
+            mgr.report_failure("https://primary.example.com", "error")
+                .as_deref(),
+            Some("https://backup-one.example.com")
         );
+        assert_eq!(
+            mgr.report_failure("https://backup-one.example.com", "error")
+                .as_deref(),
+            Some("https://backup-two.example.com")
+        );
+        assert_eq!(mgr.active_url(), "https://backup-two.example.com");
     }
 
     #[test]
@@ -357,6 +350,21 @@ mod tests {
     }
 
     #[test]
+    fn late_failure_from_a_non_active_source_does_not_change_active_source() {
+        let mgr = MirrorManager::new("https://primary.example.com");
+        mgr.add_mirror(mirror("https://backup.example.com", 1));
+        assert_eq!(
+            mgr.report_failure("https://primary.example.com", "timeout")
+                .as_deref(),
+            Some("https://backup.example.com")
+        );
+        assert!(mgr
+            .report_failure("https://primary.example.com", "late failure")
+            .is_none());
+        assert_eq!(mgr.active_url(), "https://backup.example.com");
+    }
+
+    #[test]
     fn report_failure_for_unknown_url_does_nothing() {
         let mgr = MirrorManager::new("https://primary.example.com");
         let result = mgr.report_failure("https://unknown.example.com", "error");
@@ -425,8 +433,14 @@ mod tests {
         }
 
         let result = mgr.report_failure("https://backup.example.com", "error");
-        // Must skip both copies of backup; the lowest healthy priority left
-        // is the primary (priority 0).
-        assert_eq!(result.as_deref(), Some("https://primary.example.com"));
+        // A delayed report from a non-active source must not redirect the
+        // current transfer, but every duplicate must be marked unhealthy.
+        assert!(result.is_none());
+        assert_eq!(mgr.active_url(), "https://primary.example.com");
+        assert!(mgr
+            .mirrors()
+            .iter()
+            .filter(|source| source.url == "https://backup.example.com")
+            .all(|source| !source.healthy));
     }
 }

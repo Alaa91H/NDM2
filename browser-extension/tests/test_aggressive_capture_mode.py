@@ -11,7 +11,8 @@ def test_toolbar_popup_is_wired_for_video_capture() -> None:
     """Toolbar icon opens the video capture popup."""
     wxt = read('wxt.config.ts')
     manifest = read('src/manifest.json')
-    assert "default_popup: 'popup.html'" in wxt
+    assert 'action: {' in wxt
+    assert "default_title: '__MSG_extensionActionTitle__'" in wxt
     assert '"default_popup": "popup.html"' in manifest
     assert (ROOT / 'src' / 'entrypoints' / 'popup' / 'main.tsx').exists()
     assert (ROOT / 'src' / 'ui' / 'popup' / 'PopupApp.tsx').exists()
@@ -36,16 +37,15 @@ def test_aggressive_mode_is_default_with_absolute_takeover() -> None:
     assert 'no Authorization headers' in profile
 
 
-def test_aggressive_mode_options_enable_defaults_and_permission_bundle() -> None:
-    capture = read('src/ui/options/CaptureSettings.tsx')
-    permissions = read('src/ui/options/PermissionsSettings.tsx')
+def test_aggressive_mode_permission_bundle_is_exposed_by_the_runtime_contract() -> None:
+    profile = read('src/profiles/aggressive-capture-profile.ts')
+    messages = read('src/contracts/messages.schema.ts')
 
-    assert 'Aggressive Capture Mode' in capture
-    assert 'applyAggressiveCaptureDefaults(settings)' in capture
-    assert "minFileSizeMB: 0" in read('src/profiles/aggressive-capture-profile.ts')
-    assert 'Request aggressive all-sites permissions' in capture
-    assert 'Request aggressive all-sites permission bundle' in permissions
-    assert "type: 'REQUEST_PERMISSION'" in capture
+    assert 'Aggressive Capture Mode' in profile
+    assert 'applyAggressiveCaptureDefaults' in profile
+    assert "minFileSizeMB: 0" in profile
+    assert 'AGGRESSIVE_CAPTURE_PERMISSION_BUNDLE' in profile
+    assert "type: z.literal('REQUEST_PERMISSION')" in messages
 
 
 def test_aggressive_scans_use_larger_bounded_budgets() -> None:

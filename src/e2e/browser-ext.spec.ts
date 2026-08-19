@@ -48,7 +48,7 @@ test.describe('Browser Extension — status bar button', () => {
       await page.waitForTimeout(500);
       const dialog = page.locator('[role="dialog"]');
       if (await dialog.isVisible().catch(() => false)) {
-        const title = page.locator('#modal-title');
+        const title = page.locator('[role="dialog"] h3');
         if (await title.isVisible().catch(() => false)) {
           const text = await title.textContent();
           expect(text).toMatch(/browser|extension|متصفح|إضافة/i);

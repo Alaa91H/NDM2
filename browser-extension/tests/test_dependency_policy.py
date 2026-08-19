@@ -22,8 +22,8 @@ def test_eslint_js_range_tracks_published_channel() -> None:
     package_json = json.loads((ROOT / 'package.json').read_text(encoding='utf-8'))
     dev = package_json['devDependencies']
     assert dev['@eslint/js'] == '^10.0.1'
-    assert dev['eslint'] == '^10.6.0'
-    assert '^10.5.0' not in {dev['@eslint/js'], dev['eslint']}
+    assert dev['eslint'] == '^10.8.1'
+    assert '^10.6.0' not in {dev['@eslint/js'], dev['eslint']}
 
 
 def test_pnpm_v11_overrides_deprecated_uuid_transitive_dependency() -> None:

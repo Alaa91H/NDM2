@@ -14,7 +14,7 @@ test.describe('Task Properties — dialog structure', () => {
       await page.waitForTimeout(500);
       const dialog = page.locator('[role="dialog"]');
       if (await dialog.isVisible().catch(() => false)) {
-        const title = page.locator('#modal-title');
+        const title = page.locator('[role="dialog"] h3');
         if (await title.isVisible().catch(() => false)) {
           const text = await title.textContent();
           expect(text?.length).toBeGreaterThan(0);

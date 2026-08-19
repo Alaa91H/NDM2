@@ -22,6 +22,10 @@ pub fn register_routes(router: Router<SharedState>) -> Router<SharedState> {
             "/api/external-tools/{tool_id}/check-updates",
             post(handle_check_updates),
         )
+        .route(
+            "/api/external-tools/{tool_id}/install",
+            post(handle_install),
+        )
         .route("/api/external-tools/{tool_id}/update", post(handle_update))
         .route(
             "/api/external-tools/{tool_id}/set-path",
@@ -110,6 +114,32 @@ async fn handle_check_updates(
         "releaseNotes": update_info.release_notes,
         "publishedAt": update_info.published_at,
     })))
+}
+
+async fn handle_install(
+    State(state): State<SharedState>,
+    Path(tool_id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let id = parse_tool_id(&tool_id)?;
+    let manager = lock_or_err!(state.external_tools);
+    match manager.install(id) {
+        Ok(path) => {
+            let installation = manager.discover(id);
+            drop(manager);
+            Ok(Json(serde_json::json!({
+                "ok": true,
+                "path": path,
+                "status": installation.status.display_text(),
+            })))
+        }
+        Err(error) => {
+            drop(manager);
+            Ok(Json(serde_json::json!({
+                "ok": false,
+                "error": error,
+            })))
+        }
+    }
 }
 
 async fn handle_update(

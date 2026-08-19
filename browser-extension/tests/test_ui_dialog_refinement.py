@@ -14,34 +14,27 @@ def test_native_confirm_alert_are_not_used_in_ui():
         assert 'alert(' not in text, f'native alert found in {path}'
 
 
-def test_shared_confirm_dialog_is_used_for_destructive_actions():
+def test_shared_confirm_dialog_is_accessible_for_destructive_actions():
     dialog = read('src/ui/components/ConfirmDialog.tsx')
-    data = read('src/ui/options/DataSettings.tsx')
-    site_rules = read('src/ui/options/SiteRulesSettings.tsx')
-    tasks = read('src/ui/popup/TaskList.tsx')
     assert 'role="dialog"' in dialog
     assert 'aria-modal="true"' in dialog
-    assert 'Reset all local extension data?' in data
-    assert 'Delete site rule?' in site_rules
-    assert 'Cancel NOVA task?' in tasks
+    assert 'onConfirm' in dialog
+    assert 'onCancel' in dialog
 
 
-def test_candidate_and_task_details_are_expandable():
+def test_candidate_details_are_expandable():
     candidate_list = read('src/ui/popup/CandidateList.tsx')
-    task_list = read('src/ui/popup/TaskList.tsx')
     assert 'Details and evidence' in candidate_list
-    assert 'Task details' in task_list
     assert 'DetailGrid' in candidate_list
-    assert 'DetailGrid' in task_list
+    assert '<details' in candidate_list
 
 
-def test_popup_has_connection_panel_instead_of_selection_dashboard():
+def test_popup_has_compact_bridge_status_and_explicit_expansion():
     popup = read('src/ui/popup/PopupApp.tsx')
-    assert 'nova-connection-panel' in popup
-    assert 'nova-connection-state' in popup
-    assert 'nova-connection-actions' in popup
-    assert 'Select visible handoffable' not in popup
-    assert 'pending jobs' not in popup
+    assert 'statusTone(bridge?.status)' in popup
+    assert 'const [expanded, setExpanded]' in popup
+    assert 'GET_BRIDGE_STATE' in popup
+    assert 'OPEN_NOVA' in popup
 
 
 def test_refined_css_contains_dialog_progress_and_detail_styles():
@@ -50,8 +43,8 @@ def test_refined_css_contains_dialog_progress_and_detail_styles():
         '.nova-modal-backdrop',
         '.nova-dialog',
         '.nova-detail-grid',
-        '.nova-progress',
-        '.nova-import-preview',
+        '.nova-candidate-details',
+        '.nova-analyze-loading',
         '.nova-inline-warning',
     ]:
         assert marker in css

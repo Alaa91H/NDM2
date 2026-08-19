@@ -13,7 +13,7 @@ test.describe('Keyboard Shortcuts — global scope', () => {
   test('Ctrl+N opens new download dialog', async ({ page }) => {
     await page.keyboard.press('Control+n');
     await expect(page.locator('[role="dialog"]')).toBeVisible({ timeout: 3000 });
-    await expect(page.locator('#modal-title')).toContainText(/add|new|download/i);
+    await expect(page.locator('[role="dialog"] h3')).toContainText(/add|new|download/i);
     await page.keyboard.press('Escape');
   });
 

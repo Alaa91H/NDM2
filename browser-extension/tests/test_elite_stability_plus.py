@@ -31,7 +31,8 @@ def test_scan_user_activation_is_bound_to_extension_ui_sender_and_rate_limited()
     router = read('src/background/message-router.ts')
 
     assert 'isExtensionUiSender' in policy
-    assert "['popup', 'options', 'diagnostics']" in policy
+    assert "TRUSTED_EXTENSION_UI_SURFACE_NAMES = ['popup']" in policy
+    assert "'/popup.html'" in policy
     assert 'User-activated page scanning is only accepted from extension UI surfaces.' in policy
     assert 'MAX_SCAN_REQUESTS_PER_TAB_PER_MINUTE' in policy
     assert 'assertScanRateLimit' in policy

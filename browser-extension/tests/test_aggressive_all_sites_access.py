@@ -7,13 +7,14 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding='utf-8')
 
 
-def test_aggressive_toggle_requests_all_sites_before_enable() -> None:
-    capture = read('src/ui/options/CaptureSettings.tsx')
-    assert "type: 'REQUEST_PERMISSION'" in capture
-    assert 'AGGRESSIVE_CAPTURE_PERMISSION_BUNDLE.permissions' in capture
-    assert 'AGGRESSIVE_CAPTURE_PERMISSION_BUNDLE.origins' in capture
-    assert 'summary.hasAllSitesAccess' in capture
-    assert 'the mode remains off' in capture
+def test_aggressive_profile_requires_explicit_all_sites_grant() -> None:
+    profile = read('src/profiles/aggressive-capture-profile.ts')
+    messages = read('src/contracts/messages.schema.ts')
+    assert 'AGGRESSIVE_CAPTURE_PERMISSION_BUNDLE.permissions' in profile
+    assert 'AGGRESSIVE_CAPTURE_PERMISSION_BUNDLE.origins' in profile
+    assert 'hasAllSitesAccess' in profile
+    assert "type: z.literal('REQUEST_PERMISSION')" in messages
+    assert 'aggressiveMode: false' in profile
 
 
 def test_background_rejects_forced_aggressive_without_permissions() -> None:
@@ -32,11 +33,9 @@ def test_aggressive_profile_documents_all_sites_capture() -> None:
     assert 'Chrome-style read/change site access on all websites' in profile
 
 
-def test_options_and_diagnostics_make_all_sites_state_explicit() -> None:
-    capture = read('src/ui/options/CaptureSettings.tsx')
-    permissions = read('src/ui/options/PermissionsSettings.tsx')
+def test_diagnostics_make_all_sites_state_explicit() -> None:
+    profile = read('src/profiles/aggressive-capture-profile.ts')
     diagnostics = read('src/background/message-router.ts')
-    assert 'Aggressive Capture Mode enabled with all-sites access' in capture
-    assert 'Request aggressive all-sites permission bundle' in permissions
+    assert 'Aggressive Capture Mode' in profile
     assert 'requiresAllSitesAccess: true' in diagnostics
     assert 'allSitesAccessGranted' in diagnostics

@@ -59,10 +59,12 @@ def test_pair_token_storage_is_ttl_aware_and_redacted_from_diagnostics():
     assert "setToken(token, pair.ttlSeconds)" in bridge
     assert "tokenStatus" in bridge
 
-    diagnostics = read("src/ui/diagnostics/DiagnosticsPanel.tsx")
-    assert "Token:" in diagnostics
-    assert "storageFormat" in diagnostics
-    assert "pairToken" not in diagnostics
+    diagnostics = read("src/bridge/bridge-manager.ts")
+    redaction = read("src/security/redaction.ts")
+    assert "this.auth.tokenStatus()" in diagnostics
+    assert "tokenStatus" in diagnostics
+    assert "pairToken" in redaction
+    assert "SECRET_KEYS" in redaction
 
 
 def test_package_hygiene_is_part_of_release_and_highest_verification():

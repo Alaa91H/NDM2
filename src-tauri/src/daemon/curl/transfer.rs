@@ -2084,6 +2084,32 @@ fn run_libcurl_download(
         plan.link_mirrors.len(),
         plan.output_path.display()
     );
+    // Register every candidate before the first attempt. Link analysis can
+    // populate `link_mirrors` without visiting the explicit mirror-management
+    // route, so lazy creation inside the failure branch used to leave that
+    // first failure with no manager to switch through. This is deliberately
+    // internal: the engine selects and retries sources without adding UI noise.
+    if !plan.link_mirrors.is_empty() {
+        if let Ok(mut managers) = state.mirror_managers.lock() {
+            let manager = managers
+                .entry(id.to_owned())
+                .or_insert_with(|| crate::daemon::engine::mirror::MirrorManager::new(&plan.url));
+            for (index, mirror_url) in plan.link_mirrors.iter().enumerate() {
+                if mirror_url == &plan.url {
+                    continue;
+                }
+                manager.add_mirror(crate::daemon::engine::mirror::MirrorSource {
+                    url: mirror_url.clone(),
+                    priority: plan.mirror_priorities.get(index).copied().unwrap_or(1),
+                    region: None,
+                    bandwidth_estimate: None,
+                    last_checked: None,
+                    healthy: true,
+                });
+            }
+        }
+    }
+
     // C-4: when the user did not explicitly configure retry options for this
     // task, inherit the daemon-wide default retry policy instead of silently
     // disabling retries (per-task config defaults to attempts=1 = no retries).
@@ -2463,23 +2489,6 @@ fn run_libcurl_download(
                 }
                 if let Ok(managers) = state.mirror_managers.lock() {
                     if let Some(mgr) = managers.get(id) {
-                        if !plan.link_mirrors.is_empty() {
-                            for (i, mirror_url) in plan.link_mirrors.iter().enumerate() {
-                                if mirror_url != &plan.url {
-                                    let priority =
-                                        plan.mirror_priorities.get(i).copied().unwrap_or(1);
-                                    use crate::daemon::engine::mirror::MirrorSource;
-                                    mgr.add_mirror(MirrorSource {
-                                        url: mirror_url.clone(),
-                                        priority,
-                                        region: None,
-                                        bandwidth_estimate: None,
-                                        last_checked: None,
-                                        healthy: true,
-                                    });
-                                }
-                            }
-                        }
                         if let Some(new_url) = mgr.report_failure(&plan.url, &error) {
                             log::info!(
                                 "Mirror failover for task {}: {} -> {}",
@@ -3873,6 +3882,101 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn failed_primary_fails_over_to_link_mirror_and_preserves_content() {
+        use std::io::{Read, Write};
+        use std::net::{Shutdown, TcpListener};
+
+        let payload: Vec<u8> = (0..(1024 * 1024))
+            .map(|index| (index % 251) as u8)
+            .collect();
+        let backup_addr =
+            spawn_slow_range_server(std::sync::Arc::new(payload.clone()), 32 * 1024, 1);
+        let backup_url = format!("http://{backup_addr}/mirror.bin");
+
+        // The primary accepts the request but rejects the transfer. Preflight
+        // is explicitly marked as resolved below so this status exercises the
+        // libcurl retry loop, where link-mirror failover must happen.
+        let primary_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let primary_addr = primary_listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in primary_listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                std::thread::spawn(move || {
+                    let mut request = [0u8; 4096];
+                    let _ = stream.read(&mut request);
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                    let _ = stream.shutdown(Shutdown::Write);
+                });
+            }
+        });
+        let primary_url = format!("http://{primary_addr}/primary.bin");
+
+        let dir =
+            std::env::temp_dir().join(format!("nova_test_mirror_failover_{}", std::process::id()));
+        let out = dir.join("mirror.bin");
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = std::sync::Arc::new(crate::daemon::persist::tests::test_state(
+            &dir.to_string_lossy(),
+        ));
+        let id = "link-mirror-failover";
+        let body = download_body(&primary_url, "mirror.bin", payload.len() as u64, 1);
+        let direct_options = std::collections::HashMap::from([
+            (
+                "preflightResolved".to_owned(),
+                serde_json::Value::Bool(true),
+            ),
+            (
+                "preflightSupportsRange".to_owned(),
+                serde_json::Value::Bool(false),
+            ),
+            (
+                "linkMirrors".to_owned(),
+                serde_json::Value::Array(vec![serde_json::Value::String(backup_url.clone())]),
+            ),
+            (
+                "forceSingleConnection".to_owned(),
+                serde_json::Value::Bool(true),
+            ),
+            ("retryCount".to_owned(), serde_json::Value::from(3u64)),
+            ("retryAllErrors".to_owned(), serde_json::Value::Bool(true)),
+            ("retryDelaySec".to_owned(), serde_json::Value::from(0u64)),
+        ]);
+        let job = task_from_body(
+            &body,
+            id,
+            "mirror.bin".to_owned(),
+            &out,
+            direct_options,
+            Vec::new(),
+        );
+        state.curl_jobs.lock().unwrap().insert(id.to_owned(), job);
+        state.mark_dirty();
+
+        let transfer_state = state.clone();
+        std::thread::spawn(move || start_curl_process(&transfer_state, id));
+        let task = run_task_to_completion(&state, id, std::time::Duration::from_secs(45));
+
+        assert_eq!(task.status, "completed");
+        assert_eq!(std::fs::read(&out).unwrap(), payload);
+        let manager = state
+            .mirror_managers
+            .lock()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .expect("link mirrors must be registered before the first attempt");
+        assert_eq!(manager.active_url(), backup_url);
+        assert!(manager
+            .mirrors()
+            .iter()
+            .find(|source| source.url == primary_url)
+            .is_some_and(|source| !source.healthy));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

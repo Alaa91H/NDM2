@@ -34,19 +34,19 @@ def test_runtime_error_handling_is_centralized():
     assert 'runtimeErrorMessage' in shared
     assert 'function runtimeRequest' not in read('src/ui/popup/PopupApp.tsx')
     assert 'ok?: unknown' not in read('src/ui/popup/PopupApp.tsx')
-    assert read('src/ui/options/runtime-request.ts').strip() == "export { runtimeRequest } from '../runtime-request';"
+    assert "from '../runtime-request'" in read('src/ui/popup/PopupApp.tsx')
 
 
 def test_retryable_autoconnect_failures_are_scheduled_with_alarms():
     bridge = read('src/bridge/bridge-manager.ts')
     alarms = read('src/background/alarms.ts')
     lifecycle = read('src/background/lifecycle.ts')
-    main = read('src/background/main.ts')
     assert 'const retryAfterMs = normalized.retryable ? this.retry.next() : undefined;' in bridge
     assert "await this.setState({ status: 'reconnecting' });" in bridge
     assert 'scheduleReconnect(state.retryAfterMs)' in alarms
     assert 'scheduleReconnect(state.retryAfterMs)' in lifecycle
-    assert 'scheduleReconnect(state.retryAfterMs)' in main
+    assert 'reconnectAndMaybeReschedule' in alarms
+    assert 'RECONNECT_ALARM' in alarms
 
 
 def test_event_stream_failures_are_visible():

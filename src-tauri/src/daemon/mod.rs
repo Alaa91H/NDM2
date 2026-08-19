@@ -89,7 +89,25 @@ fn generate_api_token() -> String {
 /// once per process, so it stays stable across daemon restarts.
 pub fn shared_api_token() -> String {
     static API_TOKEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    API_TOKEN.get_or_init(generate_api_token).clone()
+    API_TOKEN
+        .get_or_init(|| {
+            // A deterministic token is permitted only for the explicit
+            // integration process. It lets browser-driven tests authenticate
+            // with a real daemon without exposing or weakening production
+            // tokens, which remain per-process random values.
+            if crate::is_integration_mode() {
+                if let Ok(token) = std::env::var("NOVA_INTEGRATION_API_TOKEN") {
+                    if token.len() >= 24 {
+                        return token;
+                    }
+                    log::warn!(
+                        "Ignoring NOVA_INTEGRATION_API_TOKEN shorter than the required 24 characters"
+                    );
+                }
+            }
+            generate_api_token()
+        })
+        .clone()
 }
 
 /// Path used for request/response log lines, with the SSE `token` query

@@ -1,6 +1,11 @@
 use std::sync::OnceLock;
 use std::time::Duration;
 
+/// Safety bounds for concurrent connections assigned to a single download.
+/// They are internal engine limits, not user-facing controls.
+pub const MIN_CONNECTIONS_PER_DOWNLOAD: u32 = 1;
+pub const MAX_CONNECTIONS_PER_DOWNLOAD: u32 = 32;
+
 /// Unified autonomous engine configuration. All values are either system-derived
 /// at startup or adapted at runtime by the Download Intelligence Engine. No value
 /// here is ever exposed to the user as a setting.
@@ -46,7 +51,8 @@ impl EngineConfig {
         let cpus = cpu_count();
         let total_ram = crate::daemon::engine::sysinfo::total_physical_memory_bytes();
 
-        let max_connections_per_download = (cpus * 2).clamp(2, 64);
+        let max_connections_per_download =
+            (cpus * 2).clamp(MIN_CONNECTIONS_PER_DOWNLOAD, MAX_CONNECTIONS_PER_DOWNLOAD);
         let max_total_connections = (cpus * 4).clamp(4, 128);
 
         let min_segment_bytes = 256 * 1024;
@@ -103,7 +109,10 @@ impl EngineConfig {
         requested: u32,
         url: &str,
     ) -> crate::daemon::direct::ConnectionLimits {
-        let requested = requested.clamp(1, self.max_connections_per_download) as usize;
+        let requested = requested.clamp(
+            MIN_CONNECTIONS_PER_DOWNLOAD,
+            self.max_connections_per_download,
+        ) as usize;
         let learned = crate::daemon::direct::learned_host_ceiling(url)
             .unwrap_or(self.max_connections_per_download as usize);
         let per_host = requested.min(learned).max(1);
@@ -126,8 +135,8 @@ mod tests {
     #[test]
     fn detect_produces_valid_config() {
         let cfg = EngineConfig::detect();
-        assert!(cfg.max_connections_per_download >= 2);
-        assert!(cfg.max_connections_per_download <= 64);
+        assert!(cfg.max_connections_per_download >= MIN_CONNECTIONS_PER_DOWNLOAD);
+        assert!(cfg.max_connections_per_download <= MAX_CONNECTIONS_PER_DOWNLOAD);
         assert!(cfg.max_total_connections >= 4);
         assert!(cfg.initial_segments >= 1);
         assert!(cfg.min_segment_bytes >= 256 * 1024);

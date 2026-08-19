@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use std::ptr;
 use std::time::Duration;
 
+use crate::daemon::engine::config::{MAX_CONNECTIONS_PER_DOWNLOAD, MIN_CONNECTIONS_PER_DOWNLOAD};
+
 enum CurlUrl {}
 
 type CurlUrlCode = c_int;
@@ -222,7 +224,8 @@ pub struct SegmentPlanner {
 impl SegmentPlanner {
     pub fn new(max_connections: u32) -> Self {
         Self {
-            max_connections: max_connections.max(1),
+            max_connections: max_connections
+                .clamp(MIN_CONNECTIONS_PER_DOWNLOAD, MAX_CONNECTIONS_PER_DOWNLOAD),
         }
     }
 
@@ -233,12 +236,10 @@ impl SegmentPlanner {
         if total_size == 0 {
             return Vec::new();
         }
-        const MAX_SEGMENTS: u32 = 256;
         let count = connections
-            .max(1)
+            .clamp(MIN_CONNECTIONS_PER_DOWNLOAD, MAX_CONNECTIONS_PER_DOWNLOAD)
             .min(self.max_connections)
-            .min(MAX_SEGMENTS)
-            .min(u32::try_from(total_size.max(1)).unwrap_or(MAX_SEGMENTS))
+            .min(u32::try_from(total_size.max(1)).unwrap_or(MAX_CONNECTIONS_PER_DOWNLOAD))
             as usize;
         let base = total_size / count as u64;
         let rem = total_size % count as u64;
@@ -610,6 +611,23 @@ mod tests {
         assert!(DirectUrl::parse("https://example.com/file.iso").is_ok());
         assert!(DirectUrl::parse("sftp://example.com/file.iso").is_ok());
         assert!(DirectUrl::parse("scp://example.com/file.iso").is_ok());
+    }
+
+    #[test]
+    fn segment_planner_caps_excessive_connection_requests_at_engine_limit() {
+        let total_size = u64::from(MAX_CONNECTIONS_PER_DOWNLOAD) * 1024;
+        let ranges = SegmentPlanner::new(u32::MAX).plan(u64::MAX, u32::MAX, Path::new("large.bin"));
+        assert_eq!(ranges.len(), MAX_CONNECTIONS_PER_DOWNLOAD as usize);
+        assert_eq!(ranges.first().map(|range| range.start), Some(0));
+        assert_eq!(ranges.last().map(|range| range.end), Some(u64::MAX - 1));
+
+        let small_ranges =
+            SegmentPlanner::new(u32::MAX).plan(total_size, u32::MAX, Path::new("small.bin"));
+        assert_eq!(small_ranges.len(), MAX_CONNECTIONS_PER_DOWNLOAD as usize);
+        assert_eq!(
+            small_ranges.iter().map(SegmentRange::len).sum::<u64>(),
+            total_size
+        );
     }
 
     #[test]

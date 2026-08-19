@@ -537,6 +537,8 @@ export const novaClient = {
       path?: string;
       capabilities: Array<{ id: string; name: string; available: boolean }>;
       healthOk: boolean;
+      installedByApp: boolean;
+      customPath: boolean;
       error?: string;
     }>;
   }> {
@@ -557,6 +559,10 @@ export const novaClient = {
     toolId: string,
   ): Promise<{ available: boolean; latestVersion?: string; downloadUrl?: string; releaseNotes?: string }> {
     return request(`/api/external-tools/${toolId}/check-updates`, { method: 'POST' }, 30000);
+  },
+
+  async installExternalTool(toolId: string): Promise<{ ok: boolean; path?: string; status?: string; error?: string }> {
+    return request(`/api/external-tools/${toolId}/install`, { method: 'POST' }, 120000);
   },
 
   async updateExternalTool(toolId: string): Promise<{ ok: boolean; path?: string; status?: string; error?: string }> {

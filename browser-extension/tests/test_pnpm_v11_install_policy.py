@@ -3,10 +3,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_spawn_sync_build_script_is_explicitly_reviewed_for_pnpm_v11_ci():
+def test_spawn_sync_build_script_is_explicitly_blocked_for_pnpm_v11_ci():
     workspace = (ROOT / '../pnpm-workspace.yaml').read_text()
     assert 'allowBuilds:' in workspace
-    assert '  spawn-sync: true' in workspace
+    assert '  spawn-sync: false' in workspace
 
 
 def test_pnpm_action_does_not_use_standalone_exe_layout_in_ci():

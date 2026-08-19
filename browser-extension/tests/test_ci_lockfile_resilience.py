@@ -44,7 +44,7 @@ def test_pnpm_v11_workspace_settings_are_explicit():
     assert 'allowBuilds:' in workspace
     assert '  esbuild: true' in workspace
     assert '  playwright: true' in workspace
-    assert '  spawn-sync: true' in workspace
+    assert '  spawn-sync: false' in workspace
     assert '  unrs-resolver: true' in workspace
 
 

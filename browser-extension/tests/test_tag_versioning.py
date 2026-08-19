@@ -2,19 +2,24 @@ import json
 import importlib.util
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[1]
 
-def test_release_version_is_not_hardcoded():
-    package = json.loads(Path('package.json').read_text())
-    manifest = json.loads(Path('src/manifest.json').read_text())
 
-    assert package['version'] == '0.0.0'
-    assert manifest['version'] == '0.0.0'
+def test_release_version_is_declared_and_manifest_compatible():
+    package = json.loads((ROOT / 'package.json').read_text())
+    manifest = json.loads((ROOT / 'src/manifest.json').read_text())
+    wxt_config = (ROOT / 'wxt.config.ts').read_text()
+
+    assert package['version'] != '0.0.0'
+    assert manifest['version'] != '0.0.0'
+    assert 'normalizeManifestVersion' in wxt_config
+    assert 'WXT_VERSION' in wxt_config
 
 
 def test_build_uses_git_tag_version_source():
-    build_py = Path('build.py').read_text()
-    workflow = Path('../docs/extension/ci-templates/legacy-extension-ci.yml').read_text()
-    wxt_config = Path('wxt.config.ts').read_text()
+    build_py = (ROOT / 'build.py').read_text()
+    workflow = (ROOT / '../docs/extension/ci-templates/legacy-extension-ci.yml').read_text()
+    wxt_config = (ROOT / 'wxt.config.ts').read_text()
 
     assert 'GITHUB_REF_NAME' in build_py
     assert 'WXT_VERSION' in build_py
@@ -26,7 +31,7 @@ def test_build_uses_git_tag_version_source():
 
 
 def test_prerelease_tags_are_normalized_for_browser_manifests():
-    spec = importlib.util.spec_from_file_location('nova_build', Path('build.py'))
+    spec = importlib.util.spec_from_file_location('nova_build', ROOT / 'build.py')
     assert spec is not None
     build = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
