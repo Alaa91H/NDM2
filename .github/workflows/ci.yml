@@ -71,7 +71,10 @@ jobs:
   lint:
     name: Lint & typecheck
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # A cold Ubuntu runner can spend more than 15 minutes resolving the large
+    # WebKit/GTK native dependency set before any project check begins.
+    # Preserve the CI gate by allowing enough time for that deterministic setup.
+    timeout-minutes: 30
     permissions:
       contents: read
 
