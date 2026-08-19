@@ -64,6 +64,13 @@ fn task_event_fingerprint(task: &Task) -> u64 {
     task.name.hash(&mut hasher);
     task.url.hash(&mut hasher);
     task.file_type.hash(&mut hasher);
+    task.date_added.hash(&mut hasher);
+    task.category.hash(&mut hasher);
+    task.queue_id.hash(&mut hasher);
+    task.description.hash(&mut hasher);
+    task.referer.hash(&mut hasher);
+    task.engine.hash(&mut hasher);
+    task.engine_id.hash(&mut hasher);
     task.downloaded_bytes.hash(&mut hasher);
     task.speed_bytes_per_sec.hash(&mut hasher);
     task.time_left_seconds.hash(&mut hasher);
@@ -1120,6 +1127,12 @@ mod tests {
         enriched.name = "real-file.zip".to_owned();
         enriched.url = "https://cdn.example.test/real-file.zip".to_owned();
         enriched.save_path = "/tmp/real-file.zip".to_owned();
+        enriched.category = "program".to_owned();
+        enriched.queue_id = "fast".to_owned();
+        enriched.description = "resolved download metadata".to_owned();
+        enriched.referer = Some("https://example.test/page".to_owned());
+        enriched.engine = "yt-dlp".to_owned();
+        enriched.engine_id = "resolved-engine-id".to_owned();
         enriched.size_bytes = 100;
         enriched.resumable = true;
         enriched.engine_status = Some("running-libcurl-multi".to_owned());
