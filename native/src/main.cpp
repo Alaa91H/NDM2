@@ -8,6 +8,7 @@
 #include <QAction>
 #include <QGuiApplication>
 #include <QIcon>
+#include <QHash>
 #include <QMenu>
 #include <QSettings>
 #include <QSystemTrayIcon>
@@ -74,7 +75,31 @@ int main(int argc, char *argv[]) {
         auto *trayTimer = new QTimer(&app);
         trayTimer->setInterval(1500);
         QObject::connect(trayTimer, &QTimer::timeout, &app, updateTray);
-        QObject::connect(controller.downloads(), &QAbstractItemModel::modelReset, &app, updateTray);
+        auto *priorStatuses = new QHash<QString, QString>();
+        QObject::connect(&app, &QCoreApplication::aboutToQuit, &app, [priorStatuses] { delete priorStatuses; });
+        auto *initialStatusSnapshot = new bool(false);
+        auto notifyTransitions = [&controller, &settings, tray, priorStatuses, initialStatusSnapshot] {
+            QHash<QString, QString> current;
+            for (int row = 0; row < controller.downloads()->rowCount(); ++row) {
+                const auto index = controller.downloads()->index(row, 0);
+                const auto id = controller.downloads()->data(index, DownloadModel::IdRole).toString();
+                const auto name = controller.downloads()->data(index, DownloadModel::NameRole).toString();
+                const auto status = controller.downloads()->data(index, DownloadModel::StatusRole).toString();
+                current.insert(id, status);
+                if (!*initialStatusSnapshot || !settings.notificationsEnabled() || !priorStatuses->contains(id) || priorStatuses->value(id) == status) continue;
+                QString title;
+                QSystemTrayIcon::MessageIcon icon = QSystemTrayIcon::Information;
+                if (status == "completed") title = QObject::tr("Download completed");
+                else if (status == "error") { title = QObject::tr("Download failed"); icon = QSystemTrayIcon::Critical; }
+                else if (status == "paused") title = QObject::tr("Download paused");
+                else if (status == "downloading" && priorStatuses->value(id) == "paused") title = QObject::tr("Download resumed");
+                if (!title.isEmpty()) tray->showMessage(title, name, icon, 5000);
+            }
+            *priorStatuses = current;
+            *initialStatusSnapshot = true;
+        };
+        QObject::connect(controller.downloads(), &QAbstractItemModel::modelReset, &app, [updateTray, notifyTransitions] { updateTray(); notifyTransitions(); });
+        QObject::connect(controller.downloads(), &QAbstractItemModel::dataChanged, &app, [updateTray, notifyTransitions](const QModelIndex &, const QModelIndex &, const QList<int> &) { updateTray(); notifyTransitions(); });
         QObject::connect(&controller, &TaskController::connectionChanged, &app, updateTray);
         QObject::connect(showAction, &QAction::triggered, mainWindow, [mainWindow] { if (mainWindow) { mainWindow->show(); mainWindow->raise(); mainWindow->requestActivate(); } });
         QObject::connect(pauseAllAction, &QAction::triggered, &controller, &TaskController::pauseAll);
