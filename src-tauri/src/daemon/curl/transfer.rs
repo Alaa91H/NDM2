@@ -2645,8 +2645,15 @@ pub fn mark_curl_task_failed(
             return;
         }
     }
-    // Always decrement active_downloads — both cancel and error release a slot.
-    state.priority_queue.stop_download(id);
+    // Both cancellation and failure release an active slot. A user pause is a
+    // temporary cancellation, however, so retain its queue entry: resume then
+    // restores the same priority and bandwidth allocation instead of becoming
+    // an untracked active transfer. Terminal failures still remove the entry.
+    if cancelled {
+        state.priority_queue.release_active_slot();
+    } else {
+        state.priority_queue.stop_download(id);
+    }
     // download_stats scoped here; guard released before curl_jobs below
     // (see build_snapshot in persist.rs for lock-ordering rationale).
     if !cancelled {
