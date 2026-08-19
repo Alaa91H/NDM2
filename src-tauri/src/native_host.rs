@@ -1,9 +1,11 @@
 use serde_json::{json, Value};
 use std::io::{self, Read, Write};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const DEFAULT_PORT: u16 = 3199;
+const DAEMON_WAKE_TIMEOUT: Duration = Duration::from_secs(4);
+const DAEMON_WAKE_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const PORT_SCAN_RANGE: u16 = 10;
 const MAX_NATIVE_REQUEST_BYTES: u32 = 16 * 1024 * 1024;
 const MAX_NATIVE_RESPONSE_BYTES: usize = 1024 * 1024;
@@ -42,7 +44,7 @@ pub fn run_native_messaging_host() {
         }
     };
 
-    let base_url = discover_daemon_port(&client);
+    let base_url = ensure_daemon_available(&client);
     let api_token = obtain_api_token(&client, &base_url);
     let state = Mutex::new(HostState {
         base_url,
@@ -55,6 +57,53 @@ pub fn run_native_messaging_host() {
             break;
         }
     }
+}
+
+/// Wake the desktop process only when no daemon is listening, then poll the
+/// normal port-file/loopback discovery path for the freshly started service.
+/// Native Messaging starts this same executable with an extension-origin
+/// argument, so spawning `current_exe` without arguments launches the normal
+/// desktop entry point rather than another native-host loop.
+fn ensure_daemon_available(client: &reqwest::blocking::Client) -> String {
+    let initial = discover_daemon_port(client);
+    if ping_daemon(client, &initial) {
+        return initial;
+    }
+
+    match launch_desktop_daemon() {
+        Ok(()) => log::info!("Native Messaging host launched NOVA while daemon was offline"),
+        Err(error) => {
+            log::warn!("Native Messaging host could not launch NOVA: {error}");
+            return initial;
+        }
+    }
+
+    let deadline = Instant::now() + DAEMON_WAKE_TIMEOUT;
+    while Instant::now() < deadline {
+        std::thread::sleep(DAEMON_WAKE_POLL_INTERVAL);
+        let discovered = discover_daemon_port(client);
+        if ping_daemon(client, &discovered) {
+            return discovered;
+        }
+    }
+    initial
+}
+
+fn launch_desktop_daemon() -> Result<(), String> {
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("cannot resolve NOVA executable: {error}"))?;
+    std::process::Command::new(executable)
+        // The native host is selected from argv, but removing conventional
+        // launcher variables keeps packaged/integration environments from
+        // accidentally inheriting a headless invocation mode.
+        .env_remove("NOVA_NATIVE_MESSAGING")
+        .env_remove("NOVA_INTEGRATION_MODE")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("failed to launch NOVA desktop process: {error}"))
 }
 
 /// Try to read the daemon port from the port file, then scan a range of
