@@ -27,19 +27,26 @@ export class PairingManager {
       zeroClick: true,
     });
 
+    // Native Messaging is registered by browser identity, unlike loopback
+    // HTTP's dynamically assigned Firefox origin. Prefer it so the daemon
+    // token never needs to be exposed to unrelated browser extensions.
     try {
-      return await this.tm.requestHttp('/v1/pair/auto', request, PairResponseSchema);
-    } catch (error) {
-      // Wrap transport failures with enough context to surface actionable
-      // guidance ("is the desktop app running?") instead of a bare network
-      // error. The bridge manager treats pairing failure as recoverable and
-      // retries on the next connect attempt.
-      const message = error instanceof Error ? error.message : 'Pairing failed.';
-      throw new Error(
-        `NOVA pairing failed: ${message}. Ensure the desktop app is running and ` +
-          'the native messaging host is installed.',
-        { cause: error },
-      );
+      return await this.tm.requestNative('auth.pair', request, PairResponseSchema);
+    } catch {
+      try {
+        // Chromium/Edge may use this compatibility fallback: the daemon only
+        // accepts NOVA's pinned extension origin for this endpoint. Firefox
+        // receives a profile-specific moz-extension origin and must use the
+        // registered native host above.
+        return await this.tm.requestHttp('/v1/pair/auto', request, PairResponseSchema);
+      } catch (httpError) {
+        const message = httpError instanceof Error ? httpError.message : 'Pairing failed.';
+        throw new Error(
+          `NOVA pairing failed: ${message}. Ensure the desktop app is running and ` +
+            'the native messaging host is installed.',
+          { cause: httpError },
+        );
+      }
     }
   }
 }

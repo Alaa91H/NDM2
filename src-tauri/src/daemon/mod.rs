@@ -14,6 +14,15 @@ pub mod types;
 pub mod utils;
 pub mod ytdlp;
 
+/// Stable Chromium extension origin derived from NOVA's pinned public key.
+/// Chrome and Edge enforce this origin as an extension-identity boundary.
+pub(crate) const NOVA_CHROMIUM_EXTENSION_ORIGIN: &str =
+    "chrome-extension://jplpcjabfbfnmdoofcjchikfcmfbdiej";
+/// Header only the native messaging host adds to the local auto-pair request.
+/// Browser callers cannot use it because daemon CORS does not allow this header.
+pub(crate) const NATIVE_HOST_PAIRING_HEADER: &str = "x-nova-native-host";
+pub(crate) const NATIVE_HOST_PAIRING_VALUE: &str = "1";
+
 use axum::routing::get;
 use axum::Router;
 use reqwest::Client as HttpClient;
@@ -34,6 +43,28 @@ use crate::lock_or_err;
 
 use crate::daemon::engine::extractor::{ExtractorRegistry, SharedExtractorRegistry};
 use crate::daemon::engine::priority_queue::{DownloadPriority, QueueEntry};
+
+fn is_allowed_cors_origin(origin: &axum::http::HeaderValue) -> bool {
+    let bytes = origin.as_bytes();
+    // Reject null origin — it allows arbitrary local HTML files to access the
+    // loopback daemon without a trustworthy browser origin.
+    if bytes == b"null" {
+        return false;
+    }
+    let allowed_loopback = bytes == b"http://127.0.0.1"
+        || bytes == b"http://localhost"
+        || bytes.starts_with(b"http://127.0.0.1:")
+        || bytes.starts_with(b"http://localhost:")
+        || bytes.starts_with(b"tauri://localhost")
+        || bytes.starts_with(b"https://tauri.localhost")
+        || bytes.starts_with(b"http://tauri.localhost");
+    // Chromium derives a stable origin from NOVA's public key. Firefox uses a
+    // profile-local UUID, so it remains allowed only for already-authenticated
+    // requests; its pairing flow is constrained to Native Messaging.
+    let allowed_extension = bytes == NOVA_CHROMIUM_EXTENSION_ORIGIN.as_bytes()
+        || bytes.starts_with(b"moz-extension://");
+    allowed_loopback || allowed_extension
+}
 
 /// External shutdown signal, set by the host process (Tauri) to trigger
 /// graceful daemon shutdown via the `graceful_shutdown` future.
@@ -513,39 +544,7 @@ pub fn start_daemon(resource_dir: String, data_dir: String, port: u16) {
                     CorsLayer::new()
                         .allow_origin(AllowOrigin::predicate(
                             |origin: &axum::http::HeaderValue,
-                             _parts: &axum::http::request::Parts| {
-                                let bytes = origin.as_bytes();
-                                // Reject null origin — it allows any local HTML
-                                // file to access the API (SSRF vector).
-                                if bytes == b"null" {
-                                    return false;
-                                }
-                                // Only allow exact localhost:port on the bound port.
-                                let allowed_loopback = bytes == b"http://127.0.0.1"
-                                    || bytes == b"http://localhost"
-                                    || bytes.starts_with(b"http://127.0.0.1:")
-                                    || bytes.starts_with(b"http://localhost:")
-                                    || bytes.starts_with(b"tauri://localhost")
-                                    || bytes.starts_with(b"https://tauri.localhost")
-                                    || bytes.starts_with(b"http://tauri.localhost");
-                                // Extension origins (chrome-extension://,
-                                // moz-extension://, safari-web-extension://) are
-                                // inherently local to the user's browser, so any
-                                // installed extension could reach the daemon.
-                                // Mitigations already in place:
-                                //  - The daemon only binds to 127.0.0.1, so no
-                                //    remote origin can access it at all.
-                                //  - /v1/pair/auto (the unauthenticated token
-                                //    bootstrap) independently verifies the peer
-                                //    is loopback (see handle_v1_pair_auto).
-                                // Residual risk: a malicious or compromised
-                                // extension on the same browser can still obtain
-                                // the token via /v1/pair/auto.
-                                let allowed_extensions = bytes.starts_with(b"chrome-extension://")
-                                    || bytes.starts_with(b"moz-extension://")
-                                    || bytes.starts_with(b"safari-web-extension://");
-                                allowed_loopback || allowed_extensions
-                            },
+                             _parts: &axum::http::request::Parts| is_allowed_cors_origin(origin),
                         ))
                         .allow_methods([
                             axum::http::Method::GET,
@@ -833,6 +832,22 @@ fn restore_persisted_tasks(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cors_allows_local_ui_and_pinned_chromium_extension_only() {
+        use axum::http::HeaderValue;
+
+        assert!(is_allowed_cors_origin(&HeaderValue::from_static(
+            "http://127.0.0.1:3199"
+        )));
+        assert!(is_allowed_cors_origin(&HeaderValue::from_static(
+            NOVA_CHROMIUM_EXTENSION_ORIGIN,
+        )));
+        assert!(!is_allowed_cors_origin(&HeaderValue::from_static(
+            "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        )));
+        assert!(!is_allowed_cors_origin(&HeaderValue::from_static("null")));
+    }
 
     #[test]
     fn signal_shutdown_delivers_once_and_clears_sender() {

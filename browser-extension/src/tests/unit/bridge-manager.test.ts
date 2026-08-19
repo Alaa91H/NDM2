@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const harness = vi.hoisted(() => {
   const store = new Map<string, unknown>();
   const extensionId = 'testextid';
+  let nativePairResponse: unknown = null;
   const browser = {
     runtime: {
       onMessage: { addListener: () => {} },
@@ -10,8 +11,11 @@ const harness = vi.hoisted(() => {
       onStartup: { addListener: () => {} },
       getURL: (path: string) => `chrome-extension://${extensionId}/${String(path).replace(/^\//, '')}`,
       getManifest: () => ({ name: 'NOVA Extension', version: '0.0.0', manifest_version: 3 }),
-      // Native host unavailable: every native invocation rejects.
-      sendNativeMessage: () => Promise.reject(new Error('native host missing')),
+      // Native host is unavailable by default; individual tests can supply a
+      // validated pair response to prove the secure native-first handshake.
+      sendNativeMessage: () => nativePairResponse
+        ? Promise.resolve(nativePairResponse)
+        : Promise.reject(new Error('native host missing')),
     },
     storage: {
       local: {
@@ -21,7 +25,13 @@ const harness = vi.hoisted(() => {
       },
     },
   };
-  return { browser, store };
+  return {
+    browser,
+    store,
+    setNativePairResponse: (response: unknown) => {
+      nativePairResponse = response;
+    },
+  };
 });
 
 vi.mock('webextension-polyfill', () => ({ default: harness.browser }));
@@ -99,6 +109,7 @@ describe('BridgeManager (daemon unreachable)', () => {
 describe('BridgeManager (loopback HTTP reachable)', () => {
   beforeEach(() => {
     harness.store.clear();
+    harness.setNativePairResponse(null);
   });
 
   afterEach(() => {
@@ -162,6 +173,48 @@ describe('BridgeManager (loopback HTTP reachable)', () => {
     expect(state.status).toBe('connected');
     expect(state.canSend).toBe(true);
     expect(state.transport).toBe('http');
+  });
+
+  it('prefers Native Messaging for pairing when the trusted host is available', async () => {
+    harness.setNativePairResponse({
+      id: 'native-pair',
+      ok: true,
+      result: {
+        ok: true,
+        pairToken: 'native-pair-token-1234567890',
+        autoApproved: true,
+        method: 'native-messaging-verified',
+        protocolVersion: 4,
+        minimumSupportedProtocolVersion: 4,
+        ttlSeconds: 3600,
+      },
+    });
+    const fetchMock = vi.fn((input: string | URL) => {
+      const url = String(input);
+      if (url.endsWith('/v1/ping')) {
+        return Promise.resolve(jsonResponse({
+          ok: true,
+          app: 'NOVA Download Manager',
+          appVersion: '0.1.0',
+          protocolVersion: 4,
+          minimumSupportedProtocolVersion: 4,
+          browserIntegrationEnabled: true,
+        }));
+      }
+      if (url.endsWith('/v1/extension-settings')) {
+        return Promise.resolve(jsonResponse({ ok: true, capabilities: { items: [] } }));
+      }
+      return Promise.resolve(jsonResponse({ ok: false, error: 'pairing should use Native Messaging' }, 500));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const bridge = new BridgeManager(fakeStateStore() as never);
+    const state = await bridge.autoConnect();
+
+    expect(state.status).toBe('connected');
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).not.toContainEqual(
+      expect.stringContaining('/v1/pair/auto'),
+    );
   });
 });
 

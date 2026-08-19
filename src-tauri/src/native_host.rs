@@ -229,6 +229,10 @@ fn obtain_api_token(client: &reqwest::blocking::Client, base_url: &str) -> Optio
     let response = client
         .post(&url)
         .header("Content-Type", "application/json")
+        .header(
+            crate::daemon::NATIVE_HOST_PAIRING_HEADER,
+            crate::daemon::NATIVE_HOST_PAIRING_VALUE,
+        )
         .json(&json!({}))
         .send()
         .ok()?;
@@ -295,6 +299,7 @@ fn handle_native_request(
     let needs_auth = !matches!(method, "engine.status" | "capabilities");
 
     let result = match method {
+        "auth.pair" => native_pairing_response(client, state),
         "engine.status" => http_json(client, state, "GET", "/v1/ping", None, false),
         "task.list" => http_json(client, state, "GET", "/v1/tasks", None, needs_auth),
         "task.pause" => task_command(client, state, "/v1/task/pause", params, needs_auth),
@@ -362,6 +367,39 @@ fn handle_native_request(
             "error": { "code": "NATIVE_PROXY_ERROR", "message": message, "retryable": true }
         }),
     }
+}
+
+fn native_pairing_response(
+    client: &reqwest::blocking::Client,
+    state: &Mutex<HostState>,
+) -> Result<Value, String> {
+    let (base_url, cached_token) = {
+        let guard = state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (guard.base_url.clone(), guard.api_token.clone())
+    };
+    let pair_token = match cached_token.or_else(|| obtain_api_token(client, &base_url)) {
+        Some(token) => token,
+        None => return Err("NOVA daemon did not issue a native-host pairing token".to_owned()),
+    };
+
+    {
+        let mut guard = state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.api_token = Some(pair_token.clone());
+    }
+
+    Ok(json!({
+        "ok": true,
+        "pairToken": pair_token,
+        "autoApproved": true,
+        "method": "native-messaging-verified",
+        "protocolVersion": 4,
+        "minimumSupportedProtocolVersion": 4,
+        "ttlSeconds": 60 * 60 * 24 * 30
+    }))
 }
 
 fn task_command(

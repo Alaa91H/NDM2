@@ -1,4 +1,5 @@
 use axum::extract::{connect_info::ConnectInfo, Path, State};
+use axum::http::{header::ORIGIN, HeaderMap};
 use axum::response::{
     sse::{Event, KeepAlive, Sse},
     Json,
@@ -51,9 +52,26 @@ pub async fn handle_v1_ping(State(state): State<SharedState>) -> Json<serde_json
     }))
 }
 
+fn trusted_auto_pair_caller(headers: &HeaderMap) -> bool {
+    let origin = headers.get(ORIGIN).and_then(|value| value.to_str().ok());
+    // A browser is required to attach its immutable extension Origin. The
+    // native host uses reqwest and has no Origin at all, so require that shape
+    // in addition to its marker header; an unrelated extension cannot turn
+    // itself into the native host merely by adding an X- header.
+    let native_host = origin.is_none()
+        && headers
+            .get(crate::daemon::NATIVE_HOST_PAIRING_HEADER)
+            .and_then(|value| value.to_str().ok())
+            == Some(crate::daemon::NATIVE_HOST_PAIRING_VALUE);
+    let chromium_extension = origin == Some(crate::daemon::NOVA_CHROMIUM_EXTENSION_ORIGIN);
+
+    native_host || chromium_extension
+}
+
 pub async fn handle_v1_pair_auto(
     State(state): State<SharedState>,
     ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
 ) -> Json<serde_json::Value> {
     if addr.ip() != std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
         && addr.ip() != std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)
@@ -63,16 +81,76 @@ pub async fn handle_v1_pair_auto(
             "error": "pair-auto is only available from loopback"
         }));
     }
+    if !trusted_auto_pair_caller(&headers) {
+        // `moz-extension://` origins are intentionally not accepted here: the
+        // UUID is profile-specific and cannot provide an allowlist boundary.
+        // Firefox receives its token through the registered native host, while
+        // Chromium/Edge use NOVA's pinned extension origin.
+        return Json(serde_json::json!({
+            "ok": false,
+            "error": "pair-auto requires the NOVA browser extension or native host"
+        }));
+    }
     Json(serde_json::json!({
         "ok": true,
         "pairToken": state.api_token,
         "autoApproved": true,
-        "method": "auto-localhost-runtime-verified",
+        "method": "origin-or-native-host-verified",
         "protocolVersion": 4,
         "minimumSupportedProtocolVersion": 4,
         "ttlSeconds": 60 * 60 * 24 * 30,
-        "warning": "Token should only be used by browser extensions on localhost. Do not expose this token to untrusted code."
+        "warning": "Token is scoped to the local NOVA browser integration. Do not expose it to untrusted code."
     }))
+}
+
+#[cfg(test)]
+mod auto_pair_tests {
+    use super::trusted_auto_pair_caller;
+    use axum::http::{header::ORIGIN, HeaderMap, HeaderValue};
+
+    #[test]
+    fn accepts_the_pinned_chromium_extension_origin() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            ORIGIN,
+            HeaderValue::from_static(crate::daemon::NOVA_CHROMIUM_EXTENSION_ORIGIN),
+        );
+        assert!(trusted_auto_pair_caller(&headers));
+    }
+
+    #[test]
+    fn accepts_the_native_host_marker() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            crate::daemon::NATIVE_HOST_PAIRING_HEADER,
+            HeaderValue::from_static(crate::daemon::NATIVE_HOST_PAIRING_VALUE),
+        );
+        assert!(trusted_auto_pair_caller(&headers));
+    }
+
+    #[test]
+    fn rejects_unrelated_extension_origins() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            ORIGIN,
+            HeaderValue::from_static("chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        );
+        assert!(!trusted_auto_pair_caller(&headers));
+    }
+
+    #[test]
+    fn rejects_native_marker_when_a_browser_origin_is_present() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            ORIGIN,
+            HeaderValue::from_static("chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        );
+        headers.insert(
+            crate::daemon::NATIVE_HOST_PAIRING_HEADER,
+            HeaderValue::from_static(crate::daemon::NATIVE_HOST_PAIRING_VALUE),
+        );
+        assert!(!trusted_auto_pair_caller(&headers));
+    }
 }
 
 pub async fn handle_v1_auth_check(State(state): State<SharedState>) -> Json<serde_json::Value> {

@@ -609,13 +609,17 @@ pub async fn run_scheduler_tick(state: &SharedState) {
             SchedulerAction::StartDownload { task_ids } => {
                 for tid in &task_ids {
                     log::info!("Scheduler: resuming task {tid}");
-                    let _ = crate::daemon::curl::resume_task(state, tid).await;
+                    if let Err(error) = crate::daemon::curl::resume_task(state, tid).await {
+                        log::warn!("Scheduler: failed to resume task {tid}: {error}");
+                    }
                 }
             }
             SchedulerAction::PauseDownload { task_ids } => {
                 for tid in &task_ids {
                     log::info!("Scheduler: pausing task {tid}");
-                    let _ = crate::daemon::curl::pause_task(state, tid).await;
+                    if let Err(error) = crate::daemon::curl::pause_task(state, tid).await {
+                        log::warn!("Scheduler: failed to pause task {tid}: {error}");
+                    }
                 }
             }
             SchedulerAction::SetBandwidthLimit { kbps } => {
