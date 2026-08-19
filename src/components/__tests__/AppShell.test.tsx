@@ -18,7 +18,7 @@ vi.mock('@tauri-apps/api/window', () => ({
 vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ readText: vi.fn().mockResolvedValue('') }));
 
 const noop = vi.fn();
-const shellState = vi.hoisted(() => ({ bridgeStatus: 'connected' as 'connected' | 'connecting' }));
+const shellState = vi.hoisted(() => ({ bridgeStatus: 'connected' }));
 const settings = { ...initialSettings, extra: { ...initialSettings.extra, language: 'en' } };
 
 vi.mock('../../store/selectors', () => ({

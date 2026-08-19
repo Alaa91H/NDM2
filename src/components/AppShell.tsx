@@ -487,7 +487,9 @@ const AppShellInner: React.FC = () => {
     void tauriClient.restartDaemon().finally(() => {
       // A reload re-runs the full health/pairing bootstrap in both Tauri and
       // browser development mode; restartDaemon is a safe no-op outside Tauri.
-      window.setTimeout(() => window.location.reload(), 750);
+      window.setTimeout(() => {
+        window.location.reload();
+      }, 750);
     });
   };
 
