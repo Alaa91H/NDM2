@@ -525,6 +525,13 @@ pub async fn redownload_task(state: &SharedState, id: &str) -> Result<Task, Stri
         let out = {
             let mut jobs = lock_or_err!(state.curl_jobs);
             if let Some(job) = jobs.get_mut(id) {
+                // A generation-bumped worker intentionally skips its stale
+                // completion cleanup. Capture its active slot now so this
+                // restart can release it before starting the new generation.
+                let was_active = matches!(
+                    job.task.status.as_str(),
+                    "downloading" | "pausing" | "stopping"
+                );
                 job.cancel_token.store(true, Ordering::Release);
                 job.run_generation.fetch_add(1, Ordering::Release);
                 let path = std::path::PathBuf::from(&job.task.save_path);
@@ -541,12 +548,12 @@ pub async fn redownload_task(state: &SharedState, id: &str) -> Result<Task, Stri
                     0,
                     0,
                 );
-                Some((job.task.clone(), path))
+                Some((job.task.clone(), path, was_active))
             } else {
                 None
             }
         };
-        if let Some((task, path)) = out {
+        if let Some((task, path, was_active)) = out {
             let mut removed = false;
             for attempt in 0..10 {
                 if std::fs::remove_file(&path).is_ok() {
@@ -559,6 +566,12 @@ pub async fn redownload_task(state: &SharedState, id: &str) -> Result<Task, Stri
                 log::warn!("Task {id}: remove_file failed on redownload after 10 retries");
             }
             remove_stale_parts_for(&path);
+            // The cancelled worker will see its old generation and deliberately
+            // skip cleanup, so release that old slot here. Keep its queue entry
+            // because the replacement generation uses the same priority.
+            if was_active {
+                state.priority_queue.release_active_slot();
+            }
             lock_or_err!(state.task_snapshot).insert(id.to_owned(), task.clone());
             state.mark_dirty();
             start_curl_process(state, id);

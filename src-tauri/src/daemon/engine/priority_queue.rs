@@ -138,16 +138,24 @@ impl PriorityBandwidthQueue {
         self.reallocate();
     }
 
-    pub fn stop_download(&self, task_id: &str) {
+    /// Releases one running-worker slot while retaining the task's queue entry.
+    /// This is used only when a new generation replaces an active worker: the
+    /// old worker becomes stale and cannot run its normal completion cleanup,
+    /// while the new generation must keep the same priority and allocation.
+    pub fn release_active_slot(&self) {
         // Use fetch_update for atomic decrement to prevent u32 underflow from
-        // concurrent stop_download calls (TOCTOU race).
+        // concurrent lifecycle notifications (TOCTOU race).
         let _ = self.active_downloads.fetch_update(
             AtomicOrder::AcqRel,
             AtomicOrder::Relaxed,
             |current| current.checked_sub(1),
         );
-        self.remove(task_id);
         self.reallocate();
+    }
+
+    pub fn stop_download(&self, task_id: &str) {
+        self.release_active_slot();
+        self.remove(task_id);
     }
 
     /// Update the known size of a queued or active download. Used when the
@@ -499,6 +507,20 @@ mod tests {
         q.stop_download("a");
         assert_eq!(q.active_count(), 0);
         assert!(q.entries().is_empty());
+    }
+
+    #[test]
+    fn release_active_slot_keeps_entry_for_restarted_generation() {
+        let q = PriorityBandwidthQueue::new(1000);
+        q.enqueue(make_entry("restart", DownloadPriority::High));
+        q.start_download();
+
+        q.release_active_slot();
+        assert_eq!(q.active_count(), 0);
+        let entries = q.entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].task_id, "restart");
+        assert_eq!(entries[0].priority, "High");
     }
 
     #[test]
