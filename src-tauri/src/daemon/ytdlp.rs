@@ -195,9 +195,18 @@ pub fn start_ytdlp_process(state: &SharedState, id: &str) {
                             let _task_ctx = crate::logging::push_context("task", &id2);
                             let _phase_ctx = crate::logging::push_context("phase", "ytdlp-stdout");
                             let reader = BufReader::new(r);
-                            for line in reader.lines().map_while(Result::ok) {
-                                if !line.is_empty() {
-                                    update_ytdlp_progress(&state2, &id2, &line);
+                            for line in reader.lines() {
+                                match line {
+                                    Ok(line) if !line.is_empty() => {
+                                        update_ytdlp_progress(&state2, &id2, &line);
+                                    }
+                                    Ok(_) => {}
+                                    Err(error) => {
+                                        log::warn!(
+                                            "yt-dlp stdout reader failed for task {id2}: {error}"
+                                        );
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -210,9 +219,18 @@ pub fn start_ytdlp_process(state: &SharedState, id: &str) {
                             let _task_ctx = crate::logging::push_context("task", &id2);
                             let _phase_ctx = crate::logging::push_context("phase", "ytdlp-stderr");
                             let reader = BufReader::new(r);
-                            for line in reader.lines().map_while(Result::ok) {
-                                if !line.is_empty() {
-                                    log::debug!("yt-dlp [{id2}]: {line}");
+                            for line in reader.lines() {
+                                match line {
+                                    Ok(line) if !line.is_empty() => {
+                                        log::debug!("yt-dlp [{id2}]: {line}");
+                                    }
+                                    Ok(_) => {}
+                                    Err(error) => {
+                                        log::warn!(
+                                            "yt-dlp stderr reader failed for task {id2}: {error}"
+                                        );
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -223,15 +241,27 @@ pub fn start_ytdlp_process(state: &SharedState, id: &str) {
                     let _task_ctx = crate::logging::push_context("task", &id2);
                     let _phase_ctx = crate::logging::push_context("phase", "ytdlp");
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        // Join reader threads first to ensure pipes are drained
+                        // The readers drain both pipes concurrently while the
+                        // child runs. Wait for process termination first; after
+                        // it closes the descriptors, joins cannot block behind a
+                        // still-running producer.
+                        let status = match child.wait() {
+                            Ok(status) => Some(status),
+                            Err(error) => {
+                                log::error!("Could not wait for yt-dlp task {id2}: {error}");
+                                None
+                            }
+                        };
                         if let Some(h) = stdout_handle {
-                            let _ = h.join();
+                            if h.join().is_err() {
+                                log::error!("yt-dlp stdout reader panicked for task {id2}");
+                            }
                         }
                         if let Some(h) = stderr_handle {
-                            let _ = h.join();
+                            if h.join().is_err() {
+                                log::error!("yt-dlp stderr reader panicked for task {id2}");
+                            }
                         }
-
-                        let status = child.wait().ok();
                         let mut notif = String::new();
                         {
                             let mut jobs = lock_or_err!(state2.media_jobs);

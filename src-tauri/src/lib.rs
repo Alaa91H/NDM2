@@ -114,25 +114,28 @@ fn find_available_daemon_port(preferred_port: u16) -> u16 {
         }
     }
 
-    log::warn!(
-        "No free daemon port found near {preferred_port}; continuing scan across full ephemeral range"
-    );
-    // Scan the full ephemeral range (49152-65535) as last resort.
-    let mut port = 49152u16;
-    let mut failures = 0u16;
-    while port > 0 {
-        if TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).is_ok() {
-            log::info!("Found free daemon port at {port}");
-            return port;
+    // Asking the OS for port 0 is both faster and more reliable than a second
+    // bounded scan of the ephemeral range. The previous loop advertised a
+    // full-range scan but stopped after the same small failure limit.
+    match TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)) {
+        Ok(listener) => match listener.local_addr() {
+            Ok(addr) if addr.port() != 0 => {
+                log::warn!(
+                    "No free daemon port found near {preferred_port}; using OS-assigned loopback port {}",
+                    addr.port()
+                );
+                addr.port()
+            }
+            _ => preferred_port,
+        },
+        Err(error) => {
+            log::warn!(
+                "Could not allocate an OS-assigned loopback port after {preferred_port} was unavailable: {error}"
+            );
+            // Absolute last resort — let the bind fail naturally.
+            preferred_port
         }
-        failures += 1;
-        if failures >= DAEMON_PORT_SCAN_LIMIT {
-            break;
-        }
-        port = port.wrapping_add(1);
     }
-    // Absolute last resort — let the bind fail naturally.
-    preferred_port
 }
 
 fn daemon_url_for_port(port: u16) -> String {
@@ -679,16 +682,7 @@ pub fn run_integration_mode() {
         .filter(|&p| p >= 1024)
         .unwrap_or(3199u16);
 
-    let port = {
-        let mut p = preferred_port;
-        for _ in 0..30u16 {
-            if TcpListener::bind(("127.0.0.1", p)).is_ok() {
-                break;
-            }
-            p = p.saturating_add(1);
-        }
-        p
-    };
+    let port = find_available_daemon_port(preferred_port);
 
     let resource_dir = std::env::current_exe()
         .ok()
@@ -840,4 +834,21 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod port_selection_tests {
+    use super::*;
+
+    #[test]
+    fn occupied_preferred_port_selects_a_different_loopback_port() {
+        let occupied =
+            TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).expect("bind test port");
+        let preferred = occupied.local_addr().expect("read test port").port();
+
+        let selected = find_available_daemon_port(preferred);
+
+        assert_ne!(selected, preferred);
+        assert!(selected >= 1024);
+    }
 }
