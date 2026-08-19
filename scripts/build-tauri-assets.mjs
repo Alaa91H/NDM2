@@ -1,6 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname, extname } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -52,20 +53,30 @@ function splitCsvEnv(name) {
     .filter(Boolean);
 }
 
+function chromiumExtensionIdFromPublicKey(publicKey) {
+  const digest = createHash('sha256').update(Buffer.from(publicKey, 'base64')).digest().subarray(0, 16);
+  return [...digest].map((byte) => String.fromCharCode(97 + (byte >> 4), 97 + (byte & 0x0f))).join('');
+}
+
 function generateNativeMessagingManifest() {
   const extensionManifestPath = join(ROOT, 'browser-extension', 'src', 'manifest.json');
   const firefoxIds = new Set(splitCsvEnv('NOVA_FIREFOX_EXTENSION_IDS'));
+  const chromiumIds = new Set(splitCsvEnv('NOVA_CHROMIUM_EXTENSION_IDS'));
   if (existsSync(extensionManifestPath)) {
     try {
       const extensionManifest = JSON.parse(readFileSync(extensionManifestPath, 'utf8'));
       const geckoId = extensionManifest?.browser_specific_settings?.gecko?.id;
       if (typeof geckoId === 'string' && geckoId.trim()) firefoxIds.add(geckoId.trim());
+      const chromiumKey = extensionManifest?.key;
+      if (typeof chromiumKey === 'string' && chromiumKey.trim()) {
+        chromiumIds.add(chromiumExtensionIdFromPublicKey(chromiumKey));
+      }
     } catch (error) {
       throw new Error(`Could not read extension manifest for native messaging metadata: ${error.message}`, { cause: error });
     }
   }
 
-  const chromiumOrigins = splitCsvEnv('NOVA_CHROMIUM_EXTENSION_IDS')
+  const chromiumOrigins = [...chromiumIds]
     .map((id) =>
       id
         .replace(/^chrome-extension:\/\//, '')

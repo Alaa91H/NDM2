@@ -4,7 +4,7 @@
   "path": "__NOVA_NATIVE_HOST_PATH__",
   "type": "stdio",
   "allowed_origins": [
-    "chrome-extension://__CHROMIUM_EXTENSION_ID__/"
+    "chrome-extension://jplpcjabfbfnmdoofcjchikfcmfbdiej/"
   ],
   "allowed_extensions": [
     "nova-browser-extension@novabrowserextension.app"

@@ -68,3 +68,24 @@ def test_source_archive_is_deterministic_and_clean() -> None:
     assert "'.pytest_cache'" in source_archive
     assert "'__pycache__'" in source_archive
     assert "'.pyc'" in source_archive
+
+
+def chromium_extension_id(public_key: str) -> str:
+    digest = __import__('hashlib').sha256(__import__('base64').b64decode(public_key)).digest()[:16]
+    return ''.join(chr(ord('a') + (byte >> 4)) + chr(ord('a') + (byte & 0x0F)) for byte in digest)
+
+
+def test_native_messaging_manifest_uses_the_extension_public_key_identity() -> None:
+    import json
+
+    manifest = json.loads(read('src/manifest.json'))
+    native_manifest = json.loads(read('native-messaging/com.nova.downloadmanager.json'))
+    chromium_id = chromium_extension_id(manifest['key'])
+    expected_origin = f'chrome-extension://{chromium_id}/'
+
+    assert chromium_id == 'jplpcjabfbfnmdoofcjchikfcmfbdiej'
+    assert expected_origin in native_manifest['allowed_origins']
+
+    assets_builder = read('../scripts/build-tauri-assets.mjs')
+    assert 'chromiumExtensionIdFromPublicKey' in assets_builder
+    assert 'chromiumIds.add(chromiumExtensionIdFromPublicKey(chromiumKey))' in assets_builder

@@ -2,8 +2,12 @@
 import { defineConfig } from 'wxt';
 
 type PackageJson = { version?: string };
+type SourceManifest = { key?: string };
 
 const packageJson = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as PackageJson;
+const sourceManifest = JSON.parse(readFileSync(new URL('./src/manifest.json', import.meta.url), 'utf8')) as SourceManifest;
+const chromiumPublicKey = sourceManifest.key?.trim();
+if (!chromiumPublicKey) throw new Error('src/manifest.json must define the stable Chromium extension public key.');
 const DEFAULT_DEV_VERSION = '0.0.0';
 
 function lastNumericBuildPart(build: string | undefined): string | undefined {
@@ -87,6 +91,12 @@ export default defineConfig({
       short_name: '__MSG_extensionShortName__',
       description: '__MSG_extensionDescription__',
       version,
+      // WXT generates the production manifest from this configuration rather
+      // than copying src/manifest.json. Keep the public key in non-store
+      // Chromium artifacts so its ID remains registered by Native Messaging.
+      // Store builds use the store-assigned identity supplied to the desktop
+      // release pipeline through NOVA_CHROMIUM_EXTENSION_IDS instead.
+      key: !isFirefox && !store ? chromiumPublicKey : undefined,
       default_locale: 'en',
       minimum_chrome_version: isFirefox ? undefined : '116',
       permissions: store ? corePermissions : [...corePermissions, ...integrationPermissions],

@@ -17,6 +17,7 @@ type Manifest = {
   browser_specific_settings?: unknown;
   default_locale?: string;
   action?: { default_popup?: string; default_title?: string };
+  key?: string;
 };
 
 const requiredLocaleMessages = [
@@ -76,6 +77,10 @@ async function validateTarget(target: BrowserTarget, path: string): Promise<void
 
   if (target === 'firefox') {
     assert(Boolean(manifest.browser_specific_settings), 'firefox: missing browser_specific_settings.');
+  } else {
+    const sourceManifest = await readJson<Manifest>('src/manifest.json');
+    assert(typeof sourceManifest.key === 'string' && sourceManifest.key.length > 0, 'source: missing stable Chromium public key.');
+    assert(manifest.key === sourceManifest.key, `${target}: missing or mismatched stable Chromium public key.`);
   }
 
   console.log(`${target}: manifest validation passed (${manifest.version}).`);
