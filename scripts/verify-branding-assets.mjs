@@ -194,6 +194,7 @@ const allowedPrefixes = [
   'branding/source/',
   'public/',
   'screenshots/',
+  'docs/evidence/',
   'src/assets/',
   'src-tauri/icons/',
   'src-tauri/windows/',
