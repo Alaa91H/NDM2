@@ -42,7 +42,13 @@ pub(super) fn hidden_output_timed(
     timeout: Duration,
 ) -> std::io::Result<Output> {
     let mut cmd = hidden_command(command);
-    cmd.args(args);
+    // `Child::wait_with_output()` returns captured buffers only when the pipes
+    // are explicitly configured before `spawn`. Without these two pipes,
+    // long-running callers such as the yt-dlp probe receive an empty stdout
+    // despite a successful child process.
+    cmd.args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
     let mut child = cmd.spawn()?;
     let deadline = std::time::Instant::now() + timeout;
     loop {
