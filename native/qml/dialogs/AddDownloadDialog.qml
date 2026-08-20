@@ -3,17 +3,15 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import "../components"
 
-Dialog {
+FluentDialog {
     id: dialog
 
-    modal: true
-    anchors.centerIn: Overlay.overlay
-    width: Math.min(720, parent ? parent.width - 48 : 720)
-    padding: 0
-    closePolicy: Popup.CloseOnEscape
+    width: Math.min(720, parent ? parent.width - design.dialogInset : 720)
+    height: Math.min(design.dialogMaxHeight, parent ? parent.height - design.dialogInset : design.dialogMaxHeight, advancedToggle.checked ? 700 : 560)
     property bool destinationEdited: false
 
     Theme { id: design; dark: settingsService.dark }
+    theme: design
 
     function filenameFromUrl(value) {
         var clean = value.trim().split("?")[0].split("#")[0]
@@ -37,8 +35,6 @@ Dialog {
         urlField.forceActiveFocus()
     }
 
-    background: Rectangle { color: design.backdrop; radius: design.radiusXl; border.color: design.borderStrong; border.width: 1 }
-
     header: Rectangle {
         height: 76
         color: "transparent"
@@ -58,9 +54,18 @@ Dialog {
         }
     }
 
-    contentItem: ColumnLayout {
-        width: dialog.width - design.spaceXl * 2
-        spacing: design.spaceMd
+    contentItem: ScrollView {
+        id: formScroll
+        clip: true
+        contentWidth: availableWidth
+        contentHeight: formContent.implicitHeight
+        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+
+        ColumnLayout {
+            id: formContent
+            width: formScroll.availableWidth - design.spaceXl * 2
+            anchors.horizontalCenter: parent.horizontalCenter
+            spacing: design.spaceMd
 
         InfoCard {
             Layout.fillWidth: true
@@ -174,7 +179,8 @@ Dialog {
             }
         }
 
-        Label { Layout.fillWidth: true; text: qsTr("Queue only creates a paused-ready task. Start now hands the task to NOVA Core immediately. Both use the authenticated loopback API."); wrapMode: Text.Wrap; color: design.textMuted; font.pixelSize: design.fontCaption }
+            Label { Layout.fillWidth: true; text: qsTr("Queue only creates a paused-ready task. Start now hands the task to NOVA Core immediately. Both use the authenticated loopback API."); wrapMode: Text.Wrap; color: design.textMuted; font.pixelSize: design.fontCaption }
+        }
     }
 
     footer: Rectangle {

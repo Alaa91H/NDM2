@@ -140,20 +140,12 @@ WorkspaceWindow {
                     Label { text: qsTr("Core inspection"); color: root.theme ? root.theme.textPrimary : root.textColor; font.pixelSize: root.theme ? root.theme.fontBodyLarge : 14; font.weight: Font.DemiBold }
                     Item { Layout.fillWidth: true }
                 }
-                TabBar {
+                FluentTabBar {
                     id: detailsTabs
                     Layout.fillWidth: true
-                    Layout.preferredHeight: root.theme ? root.theme.controlHeight : 32
-                    background: Rectangle { radius: root.theme ? root.theme.radiusSm : 6; color: root.theme ? root.theme.controlFill : "#363636"; border.color: root.theme ? root.theme.border : "#454545" }
-                    Repeater {
-                        model: [qsTr("Task trace"), qsTr("Capabilities")]
-                        delegate: TabButton {
-                            required property string modelData
-                            text: modelData
-                            contentItem: Text { text: parent.text; color: parent.checked ? "#FFFFFF" : (root.theme ? root.theme.textSecondary : root.muted); font.pixelSize: root.theme ? root.theme.fontCaption : 11; font.weight: parent.checked ? Font.DemiBold : Font.Normal; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                            background: Rectangle { anchors.margins: 3; radius: root.theme ? root.theme.radiusXs : 4; color: parent.checked ? (root.theme ? root.theme.selection : "#1B5C7D") : parent.hovered ? (root.theme ? root.theme.surfaceHover : "#3A3A3A") : "transparent"; border.width: parent.checked ? 1 : 0; border.color: root.theme ? root.theme.focus : "#60CDFF" }
-                        }
-                    }
+                    theme: root.theme
+                    accessibleName: qsTr("Core inspection sections")
+                    labels: [qsTr("Task trace"), qsTr("Capabilities")]
                 }
                 StackLayout {
                     Layout.fillWidth: true

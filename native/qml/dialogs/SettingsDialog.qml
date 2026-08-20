@@ -3,18 +3,13 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import "../components"
 
-Dialog {
+FluentDialog {
     id: dialog
 
-    modal: true
-    anchors.centerIn: Overlay.overlay
     width: Math.min(design.dialogMaxWidth, parent ? parent.width - design.dialogInset : design.dialogMaxWidth)
     height: Math.min(design.dialogMaxHeight, parent ? parent.height - design.dialogInset : design.dialogMaxHeight)
-    padding: 0
-    closePolicy: Popup.CloseOnEscape
-
     Theme { id: design; dark: settingsService.dark }
-    background: Rectangle { color: design.backdrop; radius: design.radiusXl; border.color: design.borderStrong; border.width: 1 }
+    theme: design
 
     header: Rectangle {
         height: 84
@@ -50,7 +45,7 @@ Dialog {
                 Layout.fillWidth: true
                 theme: design
                 Label { text: qsTr("Appearance"); color: design.textPrimary; font.weight: Font.DemiBold; font.pixelSize: design.fontBodyLarge }
-                Label { text: qsTr("Choose the visual language and information density used across NDM2."); color: design.textSecondary; font.pixelSize: design.fontCaption; wrapMode: Text.Wrap }
+                Label { Layout.fillWidth: true; text: qsTr("Choose the visual language and information density used across NDM2."); color: design.textSecondary; font.pixelSize: design.fontCaption; wrapMode: Text.Wrap }
                 GridLayout {
                     Layout.fillWidth: true
                     columns: 2
@@ -67,7 +62,7 @@ Dialog {
                 Layout.fillWidth: true
                 theme: design
                 Label { text: qsTr("Language and reading direction"); color: design.textPrimary; font.weight: Font.DemiBold; font.pixelSize: design.fontBodyLarge }
-                Label { text: qsTr("Language changes apply to the native interface and reading direction immediately."); color: design.textSecondary; font.pixelSize: design.fontCaption; wrapMode: Text.Wrap }
+                Label { Layout.fillWidth: true; text: qsTr("Language changes apply to the native interface and reading direction immediately."); color: design.textSecondary; font.pixelSize: design.fontCaption; wrapMode: Text.Wrap }
                 ThemedComboBox { theme: design; dark: design.dark; Layout.fillWidth: true; model: ["en", "ar", "de", "he", "fa"]; currentIndex: Math.max(0, model.indexOf(settingsService.language)); Accessible.name: qsTr("Interface language"); onActivated: settingsService.setLanguage(currentText) }
                 RowLayout { Layout.fillWidth: true; Rectangle { Layout.preferredWidth: 8; Layout.preferredHeight: 8; radius: 4; color: design.success } Label { Layout.fillWidth: true; text: settingsService.rightToLeft ? qsTr("Right-to-left layout is active") : qsTr("Left-to-right layout is active"); color: design.textMuted; font.pixelSize: design.fontCaption } }
             }
@@ -76,7 +71,7 @@ Dialog {
                 Layout.fillWidth: true
                 theme: design
                 Label { text: qsTr("Download locations"); color: design.textPrimary; font.weight: Font.DemiBold; font.pixelSize: design.fontBodyLarge }
-                Label { text: qsTr("New downloads follow the NOVA category path convention under this default folder."); color: design.textSecondary; font.pixelSize: design.fontCaption; wrapMode: Text.Wrap }
+                Label { Layout.fillWidth: true; text: qsTr("New downloads follow the NOVA category path convention under this default folder."); color: design.textSecondary; font.pixelSize: design.fontCaption; wrapMode: Text.Wrap }
                 RowLayout {
                     Layout.fillWidth: true
                     ThemedTextField { id: defaultDownloadFolder; Layout.fillWidth: true; text: settingsService.defaultDownloadFolder; theme: design; dark: design.dark; leadingGlyph: "▣"; Accessible.name: qsTr("Default NOVA download folder") }
@@ -89,7 +84,7 @@ Dialog {
                 Layout.fillWidth: true
                 theme: design
                 Label { text: qsTr("NOVA Core profile"); color: design.textPrimary; font.weight: Font.DemiBold; font.pixelSize: design.fontBodyLarge }
-                Label { text: qsTr("Select the active Core profile and apply its confirmed global bandwidth limit."); color: design.textSecondary; font.pixelSize: design.fontCaption; wrapMode: Text.Wrap }
+                Label { Layout.fillWidth: true; text: qsTr("Select the active Core profile and apply its confirmed global bandwidth limit."); color: design.textSecondary; font.pixelSize: design.fontCaption; wrapMode: Text.Wrap }
                 ThemedComboBox { id: profileSelector; theme: design; dark: design.dark; Layout.fillWidth: true; model: taskController.profiles; textRole: "name"; valueRole: "id"; currentIndex: Math.max(0, indexOfValue(taskController.activeProfile)); Accessible.name: qsTr("Core profile"); onActivated: taskController.setActiveProfile(currentValue) }
                 RowLayout { Layout.fillWidth: true; ThemedSpinBox { id: globalLimit; from: 0; to: 1000000; value: taskController.bandwidth.globalLimitKbps || taskController.bandwidth.global_limit_kbps || 0; Layout.fillWidth: true; theme: design; dark: design.dark; Accessible.name: qsTr("Global bandwidth limit in KB per second") } ActionButton { text: qsTr("Apply KB/s"); tone: "secondary"; dark: design.dark; theme: design; onClicked: taskController.setBandwidthLimit(globalLimit.value) } }
             }
@@ -98,7 +93,7 @@ Dialog {
                 Layout.fillWidth: true
                 theme: design
                 Label { text: qsTr("Retry behavior"); color: design.textPrimary; font.weight: Font.DemiBold; font.pixelSize: design.fontBodyLarge }
-                Label { text: qsTr("Choose one of the retry policies exposed by the connected NOVA Core."); color: design.textSecondary; font.pixelSize: design.fontCaption; wrapMode: Text.Wrap }
+                Label { Layout.fillWidth: true; text: qsTr("Choose one of the retry policies exposed by the connected NOVA Core."); color: design.textSecondary; font.pixelSize: design.fontCaption; wrapMode: Text.Wrap }
                 RowLayout { Layout.fillWidth: true; ThemedComboBox { id: retryPreset; theme: design; dark: design.dark; Layout.fillWidth: true; model: ["default", "aggressive", "conservative", "none"]; Accessible.name: qsTr("Retry policy preset") } ActionButton { text: qsTr("Apply"); tone: "secondary"; dark: design.dark; theme: design; onClicked: taskController.setRetryPolicyPreset(retryPreset.currentText) } }
                 Label { text: qsTr("Reported retries: %1").arg(taskController.retryPolicy.maxRetries || taskController.retryPolicy.max_retries || "—"); color: design.textMuted; font.pixelSize: design.fontCaption }
             }
@@ -108,7 +103,7 @@ Dialog {
                 theme: design
                 Label { text: qsTr("Notifications"); color: design.textPrimary; font.weight: Font.DemiBold; font.pixelSize: design.fontBodyLarge }
                 ThemedCheckBox { theme: design; dark: design.dark; text: qsTr("Notify for NOVA Core state changes"); checked: settingsService.notificationsEnabled; Accessible.name: text; onToggled: settingsService.setNotificationsEnabled(checked) }
-                Label { text: qsTr("Completion, failure, pause, and resume events are de-duplicated by the native desktop client."); color: design.textSecondary; font.pixelSize: design.fontCaption; wrapMode: Text.Wrap }
+                Label { Layout.fillWidth: true; text: qsTr("Completion, failure, pause, and resume events are de-duplicated by the native desktop client."); color: design.textSecondary; font.pixelSize: design.fontCaption; wrapMode: Text.Wrap }
             }
 
             InfoCard {

@@ -84,28 +84,19 @@ Drawer {
                         value: drawer.task.progress || 0
                         Accessible.name: qsTr("Download progress")
                         background: Rectangle { implicitHeight: 6; radius: 3; color: design.controlFill }
-                        contentItem: Item { Rectangle { width: parent.visualPosition * parent.width; height: parent.height; radius: 3; color: design.statusColor(drawer.task.status); Behavior on width { NumberAnimation { duration: 140 } } } }
+                        contentItem: Item { Rectangle { width: parent.visualPosition * parent.width; height: parent.height; radius: 3; color: design.statusColor(drawer.task.status); Behavior on width { NumberAnimation { duration: design.durationNormal } } } }
                     }
                     Label { Layout.fillWidth: true; text: drawer.bytes(drawer.task.downloadedBytes) + " / " + drawer.bytes(drawer.task.sizeBytes) + "  ·  " + qsTr("ETA %1").arg(drawer.time(drawer.task.eta)); color: design.textSecondary; font.pixelSize: design.fontCaption; elide: Text.ElideRight }
                 }
             }
         }
 
-        TabBar {
+        FluentTabBar {
             id: tabBar
             Layout.fillWidth: true
-            Layout.preferredHeight: design.controlHeight
-            Accessible.name: qsTr("Download detail sections")
-            background: Rectangle { radius: design.radiusSm; color: design.controlFill; border.color: design.border }
-            Repeater {
-                model: [qsTr("Overview"), qsTr("Speed"), qsTr("File"), qsTr("Mirrors"), qsTr("Logs")]
-                delegate: TabButton {
-                    required property string modelData
-                    text: modelData
-                    contentItem: Text { text: parent.text; color: parent.checked ? design.textPrimary : design.textSecondary; font.pixelSize: design.fontCaption; font.weight: parent.checked ? Font.DemiBold : Font.Normal; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                    background: Rectangle { anchors.margins: 3; radius: design.radiusXs; color: parent.checked ? design.selection : parent.hovered ? design.surfaceHover : "transparent"; border.width: parent.checked ? 1 : 0; border.color: design.focus }
-                }
-            }
+            theme: design
+            accessibleName: qsTr("Download detail sections")
+            labels: [qsTr("Overview"), qsTr("Speed"), qsTr("File"), qsTr("Mirrors"), qsTr("Logs")]
         }
 
         StackLayout {
