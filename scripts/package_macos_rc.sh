@@ -54,6 +54,21 @@ EOF
 
 # Match the primary CI deliverables: an installable app bundle and Finder-ready DMG.
 cp -a "$app_bundle" "$release_app"
-hdiutil create -volname "NOVA Download Manager" -srcfolder "$staging_root" -ov -format UDZO "$dmg_archive" >/dev/null
+# macOS can retain a transient lock while macdeployqt finishes touching the app
+# bundle. Retrying hdiutil makes the packaging step deterministic on Intel and
+# Apple Silicon hosted runners without changing the DMG contents.
+dmg_created=false
+for attempt in 1 2 3 4; do
+    rm -f "$dmg_archive"
+    if hdiutil create -volname "NOVA Download Manager" -srcfolder "$staging_root" -ov -format UDZO "$dmg_archive" >/dev/null; then
+        dmg_created=true
+        break
+    fi
+    sleep "$attempt"
+done
+if [[ "$dmg_created" != true ]]; then
+    echo "Could not create the macOS DMG after retrying transient filesystem locks." >&2
+    exit 1
+fi
 
 printf 'app=%s\ndmg=%s\n' "$release_app" "$dmg_archive"
