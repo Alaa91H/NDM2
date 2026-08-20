@@ -29,6 +29,7 @@ private slots:
     void filtersByNameUrlCategoryAndState();
     void sortsBySpeedAndMaintainsIncrementalDelta();
     void settingsPersistAndNormalizeSafeValues();
+    void settingsBuildsLegacyCompatibleDownloadPaths();
 };
 
 void DownloadModelTest::initTestCase() {
@@ -101,6 +102,19 @@ void DownloadModelTest::settingsPersistAndNormalizeSafeValues() {
     QCOMPARE(normalized.density(), QStringLiteral("comfortable"));
     QCOMPARE(normalized.language(), QStringLiteral("en"));
     QVERIFY(!normalized.rightToLeft());
+}
+
+void DownloadModelTest::settingsBuildsLegacyCompatibleDownloadPaths() {
+    SettingsService settings;
+    const auto defaultRoot = QDir(QStandardPaths::writableLocation(QStandardPaths::DownloadLocation)).filePath(QStringLiteral("NOVA"));
+    QCOMPARE(settings.defaultDownloadFolder(), defaultRoot);
+    QCOMPARE(settings.suggestedDownloadPath(QStringLiteral("video"), QStringLiteral("movie.mp4")), QDir(defaultRoot).filePath(QStringLiteral("Video/movie.mp4")));
+    QCOMPARE(settings.suggestedDownloadPath(QStringLiteral("compressed"), QStringLiteral("archive.zip")), QDir(defaultRoot).filePath(QStringLiteral("Archives/archive.zip")));
+
+    settings.setDefaultDownloadFolder(QStringLiteral("/tmp/ndm2-downloads"));
+    settings.setCategoryDownloadFolder(QStringLiteral("audio"), QStringLiteral("/tmp/ndm2-audio"));
+    QCOMPARE(settings.suggestedDownloadPath(QStringLiteral("audio"), QStringLiteral("podcast.mp3")), QStringLiteral("/tmp/ndm2-audio/podcast.mp3"));
+    QCOMPARE(settings.composeDownloadPath(QStringLiteral("/tmp/ndm2-downloads"), QStringLiteral("../unsafe.bin")), QStringLiteral("/tmp/ndm2-downloads/unsafe.bin"));
 }
 
 QTEST_MAIN(DownloadModelTest)

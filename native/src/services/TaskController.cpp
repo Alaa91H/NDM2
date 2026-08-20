@@ -54,7 +54,9 @@ void TaskController::refresh() { m_adapter->refresh(); }
 void TaskController::refreshAll() { m_adapter->refreshAll(); }
 void TaskController::add(const QString &url, const QString &name, const QString &destination, const QString &category, int connections, int bandwidthKbps, bool startImmediately) {
     const auto cleanUrl = url.trimmed(); if (cleanUrl.isEmpty()) { emit notice(tr("A download URL is required."), true); return; }
-    QVariantMap payload{{"url", cleanUrl}, {"name", name.trimmed()}, {"savePath", destination.trimmed()}, {"category", category}, {"startImmediately", startImmediately}};
+    const auto normalizedCategory = category.trimmed().isEmpty() ? QStringLiteral("other") : category.trimmed().toLower();
+    QVariantMap payload{{"url", cleanUrl}, {"name", name.trimmed()}, {"fileType", normalizedCategory}, {"category", normalizedCategory}, {"queueId", QStringLiteral("main")}, {"resumable", true}, {"startImmediately", startImmediately}};
+    if (!destination.trimmed().isEmpty()) payload.insert("savePath", destination.trimmed());
     if (connections > 0) payload.insert("connections", connections);
     if (bandwidthKbps > 0) payload.insert("directOptions", QVariantMap{{"speedLimitKbs", bandwidthKbps}});
     m_adapter->createDownload(payload);

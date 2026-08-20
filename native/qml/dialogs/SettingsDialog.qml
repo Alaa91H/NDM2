@@ -15,7 +15,7 @@ Dialog {
     header: Rectangle { height: 72; color: "transparent"
         RowLayout { anchors.fill: parent; anchors.leftMargin: design.spaceXl; anchors.rightMargin: design.spaceLg
             ColumnLayout { Layout.fillWidth: true; spacing: 2; Label { text: qsTr("Settings"); color: design.textPrimary; font.pixelSize: design.fontSection + 3; font.weight: Font.DemiBold } Label { text: qsTr("Appearance, locale and controls with an observable local or Core effect."); color: design.textSecondary; font.pixelSize: design.fontCaption } }
-            ToolButton { text: "×"; font.pixelSize: 22; Accessible.name: qsTr("Close settings"); onClicked: dialog.close() }
+            IconButton { glyph: "×"; accessibleLabel: qsTr("Close settings"); dark: design.dark; theme: design; onClicked: dialog.close() }
         }
     }
     contentItem: ScrollView {
@@ -46,7 +46,7 @@ Dialog {
             Label { text: qsTr("Core profile and bandwidth"); color: design.textPrimary; font.weight: Font.DemiBold; font.pixelSize: design.fontBodyLarge }
             ThemedComboBox { id: profileSelector; theme: design; dark: design.dark; Layout.fillWidth: true; model: taskController.profiles; textRole: "name"; valueRole: "id"; currentIndex: Math.max(0, indexOfValue(taskController.activeProfile)); Accessible.name: qsTr("Core profile"); onActivated: taskController.setActiveProfile(currentValue) }
             RowLayout { Layout.fillWidth: true
-                SpinBox { id: globalLimit; from: 0; to: 1000000; value: taskController.bandwidth.globalLimitKbps || taskController.bandwidth.global_limit_kbps || 0; editable: true; Layout.fillWidth: true; Accessible.name: qsTr("Global bandwidth limit in KB per second") }
+                ThemedSpinBox { id: globalLimit; from: 0; to: 1000000; value: taskController.bandwidth.globalLimitKbps || taskController.bandwidth.global_limit_kbps || 0; Layout.fillWidth: true; theme: design; dark: design.dark; Accessible.name: qsTr("Global bandwidth limit in KB per second") }
                 ActionButton { text: qsTr("Apply KB/s"); tone: "secondary"; dark: design.dark; theme: design; onClicked: taskController.setBandwidthLimit(globalLimit.value) }
             }
         }
@@ -56,6 +56,20 @@ Dialog {
             RowLayout { Layout.fillWidth: true
                 ActionButton { text: qsTr("Apply preset"); tone: "secondary"; dark: design.dark; theme: design; onClicked: taskController.setRetryPolicyPreset(retryPreset.currentText) }
                 Label { Layout.fillWidth: true; text: qsTr("Retries: ") + (taskController.retryPolicy.maxRetries || taskController.retryPolicy.max_retries || "—"); color: design.textMuted; font.pixelSize: design.fontCaption; horizontalAlignment: Text.AlignRight }
+            }
+        }
+        ColumnLayout { Layout.fillWidth: true; spacing: design.spaceXs
+            Label { text: qsTr("Download locations"); color: design.textPrimary; font.weight: Font.DemiBold; font.pixelSize: design.fontBodyLarge }
+            Label { text: qsTr("Default NOVA folder"); color: design.textSecondary; font.pixelSize: design.fontCaption }
+            RowLayout {
+                Layout.fillWidth: true
+                ThemedTextField { id: defaultDownloadFolder; Layout.fillWidth: true; text: settingsService.defaultDownloadFolder; theme: design; dark: design.dark; leadingGlyph: "▣"; Accessible.name: qsTr("Default NOVA download folder") }
+                ActionButton { text: qsTr("Browse"); tone: "secondary"; dark: design.dark; theme: design; onClicked: { var folder = desktopService.chooseFolder(); if (folder.length > 0) { defaultDownloadFolder.text = folder; settingsService.setDefaultDownloadFolder(folder) } } }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                ActionButton { text: qsTr("Apply folder"); tone: "quiet"; dark: design.dark; theme: design; onClicked: settingsService.setDefaultDownloadFolder(defaultDownloadFolder.text) }
+                Label { Layout.fillWidth: true; text: qsTr("New downloads are routed to category folders under this location."); color: design.textMuted; font.pixelSize: design.fontMeta; wrapMode: Text.Wrap }
             }
         }
         ColumnLayout { Layout.fillWidth: true; spacing: design.spaceXs
