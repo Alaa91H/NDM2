@@ -1,12 +1,14 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "../components"
 
 Item {
     id: root
     property color surface: "#142239"
     property color textColor: "#EAF1FF"
     property color muted: "#8D9AB0"
+    property var theme: null
     property string activePane: "rules"
     property string ruleValidation: ""
     property string schedulerValidation: ""
@@ -34,13 +36,7 @@ Item {
     ColumnLayout {
         anchors.fill: parent
         spacing: 14
-        RowLayout { Layout.fillWidth: true
-            ColumnLayout { Layout.fillWidth: true; spacing: 2
-                Label { text: qsTr("Automation & sources"); color: root.textColor; font.pixelSize: 20; font.weight: Font.DemiBold }
-                Label { text: qsTr("Every payload is sent to NOVA Core. Raw editors use the exact tagged enum schema exposed by Core."); color: root.muted; font.pixelSize: 11 }
-            }
-            Button { text: qsTr("Refresh"); onClicked: taskController.refreshAll() }
-        }
+        SectionHeader { title: qsTr("Automation & sources"); subtitle: qsTr("Every payload is sent to NOVA Core. Raw editors use the exact tagged enum schema exposed by Core."); actionText: qsTr("Refresh"); theme: root.theme; onActionRequested: taskController.refreshAll() }
         TabBar { id: tabs; Layout.fillWidth: true; currentIndex: root.activePane === "rules" ? 0 : root.activePane === "scheduler" ? 1 : 2
             TabButton { text: qsTr("Rules") }
             TabButton { text: qsTr("Scheduler") }
@@ -64,7 +60,7 @@ Item {
                         ColumnLayout { anchors.fill: parent; anchors.margins: 14; spacing: 7
                             Label { text: qsTr("Core schema editor"); color: root.textColor; font.weight: Font.DemiBold; font.pixelSize: 12 }
                             TextArea { id: ruleJson; Layout.fillWidth: true; Layout.fillHeight: true; selectByMouse: true; wrapMode: Text.WrapAnywhere; font.family: "monospace"; font.pixelSize: 10; text: '{\n  "id": "rule-example",\n  "name": "Host category",\n  "enabled": true,\n  "priority": 100,\n  "conditions": [{"type":"HostnameContains","text":"example.org"}],\n  "action": {"type":"SetCategory","category":"Documents"}\n}' }
-                            RowLayout { Layout.fillWidth: true; Label { Layout.fillWidth: true; text: root.ruleValidation; color: "#FF8794"; font.pixelSize: 10; elide: Text.ElideRight } Button { text: qsTr("Add Core rule"); onClicked: { var value = root.safeJson(ruleJson.text); if (!value || !value.id || !value.action || !value.conditions) root.ruleValidation = qsTr("Enter a complete Core DownloadRule JSON object."); else { root.ruleValidation = ""; taskController.addRule(value) } } } }
+                            RowLayout { Layout.fillWidth: true; Label { Layout.fillWidth: true; text: root.ruleValidation; color: root.theme ? root.theme.danger : "#FF8794"; font.pixelSize: 10; elide: Text.ElideRight } Button { text: qsTr("Add Core rule"); onClicked: { var value = root.safeJson(ruleJson.text); if (!value || !value.id || !value.action || !value.conditions) root.ruleValidation = qsTr("Enter a complete Core DownloadRule JSON object."); else { root.ruleValidation = ""; taskController.addRule(value) } } } }
                         }
                     }
                 }
@@ -73,7 +69,7 @@ Item {
                     delegate: Rectangle { required property var modelData; width: rulesList.width; height: 74; radius: 9; color: Qt.rgba(1,1,1,.025); border.color: Qt.rgba(1,1,1,.06)
                         RowLayout { anchors.fill: parent; anchors.margins: 12; spacing: 10
                             ColumnLayout { Layout.fillWidth: true; spacing: 3; Label { Layout.fillWidth: true; text: modelData.name || modelData.id; color: root.textColor; font.pixelSize: 13; font.weight: Font.Medium; elide: Text.ElideRight } Label { Layout.fillWidth: true; text: JSON.stringify(modelData); color: root.muted; font.pixelSize: 9; elide: Text.ElideRight } }
-                            Label { text: modelData.enabled ? qsTr("Enabled") : qsTr("Disabled"); color: modelData.enabled ? "#6ED2A7" : "#FFBE69"; font.pixelSize: 11 }
+                            Label { text: modelData.enabled ? qsTr("Enabled") : qsTr("Disabled"); color: modelData.enabled ? (root.theme ? root.theme.success : "#6ED2A7") : (root.theme ? root.theme.warning : "#FFBE69"); font.pixelSize: 11 }
                             Button { text: qsTr("Copy payload"); onClicked: ruleJson.text = JSON.stringify(modelData, null, 2) }
                             Button { text: qsTr("Delete"); onClicked: taskController.deleteRule(modelData.id) }
                         }
@@ -97,7 +93,7 @@ Item {
                             ComboBox { id: schedulerPriority; Layout.fillWidth: true; model: ["critical", "high", "normal", "low", "background"] }
                             TextField { id: schedulerMessage; Layout.fillWidth: true; placeholderText: qsTr("Notification message") }
                             CheckBox { id: powerCommands; Layout.columnSpan: 2; text: qsTr("Permit Core power commands"); onToggled: taskController.setSchedulerPowerCommands(checked) }
-                            Label { Layout.columnSpan: 2; Layout.fillWidth: true; text: root.schedulerValidation; color: "#FF8794"; font.pixelSize: 10; elide: Text.ElideRight }
+                            Label { Layout.columnSpan: 2; Layout.fillWidth: true; text: root.schedulerValidation; color: root.theme ? root.theme.danger : "#FF8794"; font.pixelSize: 10; elide: Text.ElideRight }
                             Button { Layout.columnSpan: 4; text: qsTr("Add guided schedule"); onClicked: root.addGuidedScheduler() }
                         }
                     }
@@ -105,7 +101,7 @@ Item {
                         ColumnLayout { anchors.fill: parent; anchors.margins: 14; spacing: 7
                             Label { text: qsTr("Core scheduler schema editor"); color: root.textColor; font.weight: Font.DemiBold; font.pixelSize: 12 }
                             TextArea { id: schedulerJson; Layout.fillWidth: true; Layout.fillHeight: true; selectByMouse: true; wrapMode: Text.WrapAnywhere; font.family: "monospace"; font.pixelSize: 10; text: '{\n  "id": "schedule-example",\n  "name": "Night limit",\n  "enabled": true,\n  "trigger": {"type":"TimeWindow","start_hour":22,"start_minute":0,"end_hour":6,"end_minute":0},\n  "action": {"type":"SetBandwidthLimit","kbps":256}\n}' }
-                            RowLayout { Layout.fillWidth: true; Label { Layout.fillWidth: true; text: root.schedulerValidation; color: "#FF8794"; font.pixelSize: 10; elide: Text.ElideRight } Button { text: qsTr("Add"); onClicked: { var value = root.safeJson(schedulerJson.text); if (!value || !value.id || !value.trigger || !value.action) root.schedulerValidation = qsTr("Enter a complete Core SchedulerRule JSON object."); else { root.schedulerValidation = ""; taskController.addSchedulerRule(value) } } } Button { text: qsTr("Update"); onClicked: { var value = root.safeJson(schedulerJson.text); if (!value || !value.id || !value.trigger || !value.action) root.schedulerValidation = qsTr("Enter a complete Core SchedulerRule JSON object."); else { root.schedulerValidation = ""; taskController.updateSchedulerRule(value) } } } }
+                            RowLayout { Layout.fillWidth: true; Label { Layout.fillWidth: true; text: root.schedulerValidation; color: root.theme ? root.theme.danger : "#FF8794"; font.pixelSize: 10; elide: Text.ElideRight } Button { text: qsTr("Add"); onClicked: { var value = root.safeJson(schedulerJson.text); if (!value || !value.id || !value.trigger || !value.action) root.schedulerValidation = qsTr("Enter a complete Core SchedulerRule JSON object."); else { root.schedulerValidation = ""; taskController.addSchedulerRule(value) } } } Button { text: qsTr("Update"); onClicked: { var value = root.safeJson(schedulerJson.text); if (!value || !value.id || !value.trigger || !value.action) root.schedulerValidation = qsTr("Enter a complete Core SchedulerRule JSON object."); else { root.schedulerValidation = ""; taskController.updateSchedulerRule(value) } } } }
                         }
                     }
                 }
@@ -134,7 +130,7 @@ Item {
                 }
                 ListView { id: mirrorList; Layout.fillWidth: true; Layout.fillHeight: true; clip: true; model: taskController.mirrors
                     delegate: Rectangle { required property var modelData; width: mirrorList.width; height: 82; radius: 9; color: Qt.rgba(1,1,1,.025); border.color: Qt.rgba(1,1,1,.06)
-                        ColumnLayout { anchors.fill: parent; anchors.margins: 12; spacing: 4; Label { Layout.fillWidth: true; text: modelData.task_id || qsTr("Task"); color: root.textColor; font.pixelSize: 12; font.weight: Font.Medium; elide: Text.ElideMiddle } Label { Layout.fillWidth: true; text: qsTr("Active: ") + (modelData.active_url || "—"); color: root.muted; font.pixelSize: 10; elide: Text.ElideMiddle } Label { Layout.fillWidth: true; text: qsTr("Mirrors: ") + (modelData.mirrors || []).map(function(x) { return x.url }).join(" · "); color: "#8CB4EE"; font.pixelSize: 10; elide: Text.ElideMiddle } }
+                        ColumnLayout { anchors.fill: parent; anchors.margins: 12; spacing: 4; Label { Layout.fillWidth: true; text: modelData.task_id || qsTr("Task"); color: root.textColor; font.pixelSize: 12; font.weight: Font.Medium; elide: Text.ElideMiddle } Label { Layout.fillWidth: true; text: qsTr("Active: ") + (modelData.active_url || "—"); color: root.muted; font.pixelSize: 10; elide: Text.ElideMiddle } Label { Layout.fillWidth: true; text: qsTr("Mirrors: ") + (modelData.mirrors || []).map(function(x) { return x.url }).join(" · "); color: root.theme ? root.theme.information : "#8CB4EE"; font.pixelSize: 10; elide: Text.ElideMiddle } }
                     }
                     ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                 }

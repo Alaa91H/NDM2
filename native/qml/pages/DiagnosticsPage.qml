@@ -1,12 +1,14 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import "../components"
 
 Item {
     id: root
     property color surface: "#142239"
     property color textColor: "#EAF1FF"
     property color muted: "#8D9AB0"
+    property var theme: null
     property string searchText: ""
     property string viewLevel: "all"
     function safeText(value) {
@@ -23,9 +25,9 @@ Item {
         anchors.fill: parent
         spacing: 14
         RowLayout { Layout.fillWidth: true
-            ColumnLayout { Layout.fillWidth: true; spacing: 3; Label { text: qsTr("Core diagnostics"); color: root.textColor; font.pixelSize: 20; font.weight: Font.DemiBold } Label { text: qsTr("Live NOVA health, declared capabilities, safe logs and the selected Core task trace."); color: root.muted; font.pixelSize: 11 } }
-            ComboBox { id: levelSelector; model: ["trace", "debug", "info", "warn", "error"]; currentIndex: Math.max(0, model.indexOf(taskController.logLevel)); onActivated: taskController.setLogLevel(currentText) }
-            Button { text: qsTr("Refresh"); onClicked: taskController.refreshAll() }
+            SectionHeader { Layout.fillWidth: true; title: qsTr("Core diagnostics"); subtitle: qsTr("Live NOVA health, declared capabilities, safe logs and the selected Core task trace."); theme: root.theme }
+            ComboBox { id: levelSelector; model: ["trace", "debug", "info", "warn", "error"]; currentIndex: Math.max(0, model.indexOf(taskController.logLevel)); Accessible.name: qsTr("Core log level"); onActivated: taskController.setLogLevel(currentText) }
+            ActionButton { text: qsTr("Refresh"); tone: "secondary"; dark: settingsService.dark; theme: root.theme; onClicked: taskController.refreshAll() }
         }
         GridLayout { Layout.fillWidth: true; columns: 4; columnSpacing: 12; rowSpacing: 12
             Repeater { model: [[qsTr("Core"), taskController.health.status || (taskController.connected ? qsTr("Online") : qsTr("Offline"))], [qsTr("Version"), taskController.health.version || taskController.capabilities.version || "—"], [qsTr("Active"), taskController.statistics.activeDownloads || 0], [qsTr("Queue"), taskController.queueEntries.length], [qsTr("Bandwidth"), (taskController.bandwidth.globalLimitKbps || taskController.bandwidth.global_limit_kbps || 0) + " KB/s"], [qsTr("Profile"), taskController.activeProfile || "—"], [qsTr("Completed"), taskController.statistics.totalCompleted || 0], [qsTr("Failed"), taskController.statistics.totalFailed || 0]]
@@ -35,9 +37,9 @@ Item {
         SplitView { Layout.fillWidth: true; Layout.fillHeight: true; orientation: Qt.Horizontal
             Rectangle { SplitView.preferredWidth: parent.width * .52; color: root.surface; radius: 12; border.color: "#233653"
                 ColumnLayout { anchors.fill: parent; anchors.margins: 10; spacing: 8
-                    RowLayout { Layout.fillWidth: true; TextField { Layout.fillWidth: true; placeholderText: qsTr("Filter safe log text") ; onTextChanged: root.searchText = text } ComboBox { model: ["all", "trace", "debug", "info", "warn", "error"]; onActivated: root.viewLevel = currentText } Button { text: qsTr("Reload"); onClicked: taskController.refreshLogsFiltered(500, root.viewLevel) } }
+                    RowLayout { Layout.fillWidth: true; TextField { Layout.fillWidth: true; placeholderText: qsTr("Filter safe log text") ; onTextChanged: root.searchText = text } ComboBox { model: ["all", "trace", "debug", "info", "warn", "error"]; onActivated: root.viewLevel = currentText } ActionButton { text: qsTr("Reload"); tone: "quiet"; dark: settingsService.dark; theme: root.theme; onClicked: taskController.refreshLogsFiltered(500, root.viewLevel) } }
                     ListView { id: logList; Layout.fillWidth: true; Layout.fillHeight: true; clip: true; model: taskController.logs
-                        delegate: Label { required property var modelData; visible: root.logMatches(modelData); width: logList.width; padding: 8; text: root.safeText((modelData.timestamp || "") + "  " + (modelData.level || "INFO") + "  " + (modelData.message || "")); color: String(modelData.level || "").toUpperCase() === "ERROR" ? "#FF8794" : String(modelData.level || "").toUpperCase() === "WARN" ? "#FFBE69" : "#B4C2D7"; wrapMode: Text.Wrap; font.family: "monospace"; font.pixelSize: 10 }
+                        delegate: Label { required property var modelData; visible: root.logMatches(modelData); width: logList.width; padding: 8; text: root.safeText((modelData.timestamp || "") + "  " + (modelData.level || "INFO") + "  " + (modelData.message || "")); color: String(modelData.level || "").toUpperCase() === "ERROR" ? (root.theme ? root.theme.danger : "#FF8794") : String(modelData.level || "").toUpperCase() === "WARN" ? (root.theme ? root.theme.warning : "#FFBE69") : (root.theme ? root.theme.textSecondary : "#B4C2D7"); wrapMode: Text.Wrap; font.family: "monospace"; font.pixelSize: 10 }
                         ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
                     }
                 }

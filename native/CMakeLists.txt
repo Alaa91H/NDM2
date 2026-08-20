@@ -21,6 +21,10 @@ qt_add_qml_module(NDM2
     VERSION 1.0
     QML_FILES
         qml/Main.qml
+        qml/components/Theme.qml
+        qml/components/ActionButton.qml
+        qml/components/SectionHeader.qml
+        qml/components/StatusBadge.qml
         qml/components/NavItem.qml
         qml/components/DownloadRow.qml
         qml/components/EmptyState.qml

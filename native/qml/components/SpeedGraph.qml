@@ -4,13 +4,14 @@ Item {
     id: root
     property var samples: []
     property color lineColor: "#4DA3FF"
+    property color gridColor: "#243653"
     implicitHeight: 140
     Canvas {
         id: canvas; anchors.fill: parent
         onPaint: {
             var ctx = getContext("2d"), w = width, h = height
             ctx.reset(); ctx.clearRect(0, 0, w, h)
-            ctx.strokeStyle = "#243653"; ctx.lineWidth = 1
+            ctx.strokeStyle = root.gridColor; ctx.lineWidth = 1
             for (var y = 1; y < 4; ++y) { ctx.beginPath(); ctx.moveTo(0, h * y / 4); ctx.lineTo(w, h * y / 4); ctx.stroke() }
             if (!root.samples || root.samples.length < 2) return
             var maxValue = 1
