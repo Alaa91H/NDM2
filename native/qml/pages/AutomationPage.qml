@@ -3,13 +3,19 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import "../components"
 
-Item {
+WorkspaceWindow {
     id: root
+
+    pageTitle: qsTr("Automation")
+    pageSubtitle: qsTr("Create and manage verified NOVA Core rules, schedules, and mirror failover plans.")
+    glyph: "⌘"
+    statusText: qsTr("%1 rules · %2 schedules").arg(root.collectionCount(taskController.rules)).arg(root.collectionCount(taskController.schedulerRules))
+    actionText: qsTr("Refresh")
+    onActionRequested: taskController.refreshAll()
 
     property color surface: "#142239"
     property color textColor: "#EAF1FF"
     property color muted: "#8D9AB0"
-    property var theme: null
     property string activePane: "rules"
     property string ruleValidation: ""
     property string schedulerValidation: ""
@@ -55,15 +61,6 @@ Item {
     ColumnLayout {
         anchors.fill: parent
         spacing: theme ? theme.spaceMd : 12
-
-        SectionHeader {
-            Layout.fillWidth: true
-            title: qsTr("Build automation")
-            subtitle: qsTr("Create verified NOVA Core rules, schedules, and mirror failover plans from one workspace.")
-            actionText: qsTr("Refresh")
-            theme: root.theme
-            onActionRequested: taskController.refreshAll()
-        }
 
         InfoCard {
             Layout.fillWidth: true

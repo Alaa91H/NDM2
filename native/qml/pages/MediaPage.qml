@@ -3,13 +3,19 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import "../components"
 
-Item {
+WorkspaceWindow {
     id: root
+
+    pageTitle: qsTr("Media discovery")
+    pageSubtitle: qsTr("Inspect NOVA-reported formats and create a native media download.")
+    glyph: "▶"
+    statusText: taskController.mediaProbeError.length > 0 ? qsTr("Probe needs attention") : Object.keys(taskController.mediaProbe).length > 0 ? qsTr("Formats ready") : qsTr("Awaiting a URL")
+    actionText: qsTr("Refresh engines")
+    onActionRequested: taskController.refreshAll()
 
     property color surface: "#292929"
     property color textColor: "#FFFFFF"
     property color muted: "#A6A6A6"
-    property var theme: null
     property int selectedFormatIndex: -1
 
     function pretty(value) { return value === undefined || value === null || value === "" ? "—" : String(value) }
@@ -18,14 +24,6 @@ Item {
     ColumnLayout {
         anchors.fill: parent
         spacing: theme ? theme.spaceLg : 16
-
-        SectionHeader {
-            title: qsTr("Media discovery")
-            subtitle: qsTr("Inspect real formats reported by NOVA, then create a native media task.")
-            actionText: qsTr("Refresh engines")
-            theme: root.theme
-            onActionRequested: taskController.refreshAll()
-        }
 
         InfoCard {
             Layout.fillWidth: true

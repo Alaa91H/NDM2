@@ -31,6 +31,7 @@ qt_add_qml_module(NDM2
         qml/Main.qml
         qml/components/Theme.qml
         qml/components/InfoCard.qml
+        qml/components/WorkspaceWindow.qml
         qml/components/IconButton.qml
         qml/components/ThemedCheckBox.qml
         qml/components/ThemedComboBox.qml

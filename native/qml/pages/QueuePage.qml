@@ -3,13 +3,19 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import "../components"
 
-Item {
+WorkspaceWindow {
     id: root
+
+    pageTitle: qsTr("Queue")
+    pageSubtitle: qsTr("Live ordering, bandwidth and priority state reported by NOVA Core.")
+    glyph: "≡"
+    statusText: qsTr("%1 entries").arg(taskController.queueEntries.length)
+    actionText: qsTr("Refresh")
+    onActionRequested: taskController.refreshAll()
 
     property color surface: "#292929"
     property color textColor: "#FFFFFF"
     property color muted: "#A6A6A6"
-    property var theme: null
     signal addRequested()
 
     function numberValue(source, key, fallback) { return source && source[key] !== undefined ? source[key] : fallback }
@@ -18,8 +24,6 @@ Item {
     ColumnLayout {
         anchors.fill: parent
         spacing: theme ? theme.spaceLg : 16
-
-        SectionHeader { title: qsTr("Core queue"); subtitle: qsTr("Ordering, limits and scheduling remain controlled by NOVA Core."); actionText: qsTr("Refresh"); theme: root.theme; onActionRequested: taskController.refreshAll() }
 
         GridLayout {
             Layout.fillWidth: true

@@ -3,13 +3,19 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import "../components"
 
-Item {
+WorkspaceWindow {
     id: root
+
+    pageTitle: qsTr("Browser integration")
+    pageSubtitle: qsTr("Secure extension and native-messaging bridge status from NOVA Core.")
+    glyph: "◈"
+    statusText: root.bridgeOnline() ? qsTr("Bridge connected") : qsTr("Checking bridge")
+    actionText: qsTr("Refresh status")
+    onActionRequested: taskController.refreshAll()
 
     property color surface: "#292929"
     property color textColor: "#FFFFFF"
     property color muted: "#A6A6A6"
-    property var theme: null
 
     function bridgeOnline() {
         var value = taskController.browserHealth.status || taskController.browserHealth.ok || ""
@@ -19,8 +25,6 @@ Item {
     ColumnLayout {
         anchors.fill: parent
         spacing: theme ? theme.spaceLg : 16
-
-        SectionHeader { title: qsTr("Browser integration"); subtitle: qsTr("The preserved NOVA extension and native-messaging bridge remain the only browser handoff path."); actionText: qsTr("Refresh status"); theme: root.theme; onActionRequested: taskController.refreshAll() }
 
         InfoCard {
             Layout.fillWidth: true

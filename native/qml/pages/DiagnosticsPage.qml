@@ -3,13 +3,19 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import "../components"
 
-Item {
+WorkspaceWindow {
     id: root
+
+    pageTitle: qsTr("Diagnostics")
+    pageSubtitle: qsTr("Live Core health, safe logs, capabilities, and selected-task inspection.")
+    glyph: "⌁"
+    statusText: taskController.connected ? qsTr("Core online") : qsTr("Core unavailable")
+    actionText: qsTr("Refresh")
+    onActionRequested: taskController.refreshAll()
 
     property color surface: "#142239"
     property color textColor: "#EAF1FF"
     property color muted: "#8D9AB0"
-    property var theme: null
     property string searchText: ""
     property string viewLevel: "all"
 
@@ -37,14 +43,8 @@ Item {
 
         RowLayout {
             Layout.fillWidth: true
-            SectionHeader {
-                Layout.fillWidth: true
-                title: qsTr("Core diagnostics")
-                subtitle: qsTr("Live health, safe logs, declared capabilities and selected task trace from NOVA Core.")
-                theme: root.theme
-            }
+            Label { Layout.fillWidth: true; text: qsTr("Core log level"); color: root.theme ? root.theme.textSecondary : root.muted; font.pixelSize: root.theme ? root.theme.fontCaption : 12 }
             ThemedComboBox { id: levelSelector; Layout.preferredWidth: 148; model: ["trace", "debug", "info", "warn", "error"]; currentIndex: Math.max(0, model.indexOf(taskController.logLevel)); theme: root.theme; dark: settingsService.dark; Accessible.name: qsTr("Core log level"); onActivated: taskController.setLogLevel(currentText) }
-            ActionButton { text: qsTr("Refresh"); tone: "secondary"; dark: settingsService.dark; theme: root.theme; onClicked: taskController.refreshAll() }
         }
 
         GridLayout {
