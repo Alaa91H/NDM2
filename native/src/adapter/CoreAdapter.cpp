@@ -14,8 +14,8 @@ QVariantMap map(const QJsonObject &object) { return object.toVariantMap(); }
 QVariantList list(const QJsonArray &array) { return array.toVariantList(); }
 }
 
-CoreAdapter::CoreAdapter(QString endpoint, QString token, QObject *parent)
-    : QObject(parent), m_endpoint(QUrl::fromUserInput(endpoint)), m_token(std::move(token)), m_downloads(this) {
+CoreAdapter::CoreAdapter(QString endpoint, QString token, bool allowLocalPairing, QObject *parent)
+    : QObject(parent), m_endpoint(QUrl::fromUserInput(endpoint)), m_token(std::move(token)), m_allowLocalPairing(allowLocalPairing), m_downloads(this) {
     if (!safeLoopbackEndpoint(m_endpoint)) {
         m_endpoint = QUrl();
         setError(tr("The configured daemon endpoint is not a permitted loopback address."));
@@ -90,6 +90,10 @@ void CoreAdapter::refresh() {
         const auto body = reply->readAll(); const auto error = reply->error(); reply->deleteLater();
         if (error != QNetworkReply::NoError || status < 200 || status >= 300) {
             setConnected(false);
+            if ((status == 401 || status == 403) && m_allowLocalPairing && !m_pairingAttempted) {
+                pairWithExistingLocalCore();
+                return;
+            }
             if (!m_hasLocalStartupError) setError(tr("Unable to refresh downloads: %1").arg(status > 0 ? QString::number(status) : tr("daemon unavailable")));
             return;
         }
@@ -152,6 +156,38 @@ void CoreAdapter::consumeEventStream() {
 }
 
 void CoreAdapter::scheduleEventReconnect() { if (!m_eventReconnectTimer.isActive()) m_eventReconnectTimer.start(1200); }
+
+void CoreAdapter::pairWithExistingLocalCore() {
+    if (!m_allowLocalPairing || m_pairingInProgress || m_pairingAttempted || !m_endpoint.isValid()) return;
+    m_pairingInProgress = true;
+    m_pairingAttempted = true;
+
+    QNetworkRequest request(endpointFor("/v1/pair/auto"));
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    request.setRawHeader("Accept", "application/json");
+    request.setRawHeader("x-nova-native-host", "1");
+    auto *reply = m_network.post(request, QByteArrayLiteral("{}"));
+    connect(reply, &QNetworkReply::finished, this, [this, reply] {
+        const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        const auto data = reply->readAll();
+        const auto error = reply->error();
+        reply->deleteLater();
+        m_pairingInProgress = false;
+
+        const auto document = QJsonDocument::fromJson(data);
+        const auto token = document.isObject() ? document.object().value("pairToken").toString() : QString();
+        if (error != QNetworkReply::NoError || status < 200 || status >= 300 || token.length() < 24) {
+            setConnected(false);
+            setError(tr("NDM2 could not authenticate with the existing local NOVA Core."));
+            return;
+        }
+
+        m_token = token;
+        setError({});
+        refreshAll();
+        startEventStream();
+    });
+}
 
 void CoreAdapter::send(const QString &action, const QString &path, const QByteArray &verb, const QJsonObject &body, const QString &id) {
     if (!m_endpoint.isValid()) { emit operationFailed(action, m_lastError); return; }

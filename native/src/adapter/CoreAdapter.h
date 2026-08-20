@@ -34,7 +34,7 @@ class CoreAdapter final : public QObject {
     Q_PROPERTY(QVariantMap retryPolicy READ retryPolicy NOTIFY retryPolicyChanged)
 
 public:
-    explicit CoreAdapter(QString endpoint, QString token, QObject *parent = nullptr);
+    explicit CoreAdapter(QString endpoint, QString token, bool allowLocalPairing = false, QObject *parent = nullptr);
     bool connected() const { return m_connected; }
     QString endpoint() const { return m_endpoint.toString(); }
     QString lastError() const { return m_lastError; }
@@ -138,12 +138,16 @@ private:
     void startEventStream();
     void consumeEventStream();
     void scheduleEventReconnect();
+    void pairWithExistingLocalCore();
     DownloadRecord parseDownload(const QJsonObject &item) const;
     static bool safeLoopbackEndpoint(const QUrl &endpoint);
 
     QNetworkAccessManager m_network;
     QUrl m_endpoint;
     QString m_token;
+    bool m_allowLocalPairing = false;
+    bool m_pairingInProgress = false;
+    bool m_pairingAttempted = false;
     bool m_connected = false;
     QString m_lastError;
     bool m_hasLocalStartupError = false;

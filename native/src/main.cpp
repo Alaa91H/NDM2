@@ -60,7 +60,7 @@ int main(int argc, char *argv[]) {
         || qEnvironmentVariableIsSet("NOVA_DAEMON_URL")
         || qEnvironmentVariableIsSet("NOVA_DAEMON_TOKEN");
     BundledCoreLauncher bundledCore(parser.value(endpointOption), parser.value(tokenOption), externalConnectionRequested);
-    CoreAdapter adapter(bundledCore.endpoint(), bundledCore.token());
+    CoreAdapter adapter(bundledCore.endpoint(), bundledCore.token(), !externalConnectionRequested);
     TaskController controller(&adapter); SettingsService settings; DesktopService desktop;
 
     QTimer coreStartupRetry;
