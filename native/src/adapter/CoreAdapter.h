@@ -31,6 +31,7 @@ class CoreAdapter final : public QObject {
     Q_PROPERTY(QVariantMap mediaProbe READ mediaProbe NOTIFY mediaProbeChanged)
     Q_PROPERTY(QString mediaProbeError READ mediaProbeError NOTIFY mediaProbeChanged)
     Q_PROPERTY(QVariantMap ffmpegStatus READ ffmpegStatus NOTIFY ffmpegStatusChanged)
+    Q_PROPERTY(QVariantMap retryPolicy READ retryPolicy NOTIFY retryPolicyChanged)
 
 public:
     explicit CoreAdapter(QString endpoint, QString token, QObject *parent = nullptr);
@@ -57,6 +58,7 @@ public:
     QVariantMap mediaProbe() const { return m_mediaProbe; }
     QString mediaProbeError() const { return m_mediaProbeError; }
     QVariantMap ffmpegStatus() const { return m_ffmpegStatus; }
+    QVariantMap retryPolicy() const { return m_retryPolicy; }
 
     Q_INVOKABLE void refresh();
     Q_INVOKABLE void refreshAll();
@@ -98,6 +100,8 @@ public:
     Q_INVOKABLE void refreshBrowserHealth();
     Q_INVOKABLE void probeMedia(const QString &url);
     Q_INVOKABLE void refreshFfmpegStatus();
+    Q_INVOKABLE void refreshRetryPolicy();
+    Q_INVOKABLE void setRetryPolicyPreset(const QString &preset);
 
 signals:
     void connectionChanged();
@@ -118,6 +122,7 @@ signals:
     void browserHealthChanged();
     void mediaProbeChanged();
     void ffmpegStatusChanged();
+    void retryPolicyChanged();
     void operationSucceeded(QString action, QString id);
     void operationFailed(QString action, QString message);
 
@@ -160,6 +165,7 @@ private:
     QVariantMap m_mediaProbe;
     QString m_mediaProbeError;
     QVariantMap m_ffmpegStatus;
+    QVariantMap m_retryPolicy;
     QTimer m_refreshTimer;
     QTimer m_eventReconnectTimer;
     QPointer<QNetworkReply> m_eventReply;

@@ -89,7 +89,7 @@ void CoreAdapter::refresh() {
     });
 }
 
-void CoreAdapter::refreshAll() { refresh(); refreshQueue(); refreshBandwidth(); refreshProfiles(); refreshStatistics(); refreshLogs(100); refreshManagement(); refreshHealth(); refreshLogLevel(); refreshBrowserHealth(); refreshFfmpegStatus(); }
+void CoreAdapter::refreshAll() { refresh(); refreshQueue(); refreshBandwidth(); refreshProfiles(); refreshStatistics(); refreshLogs(100); refreshManagement(); refreshHealth(); refreshLogLevel(); refreshBrowserHealth(); refreshFfmpegStatus(); refreshRetryPolicy(); }
 
 void CoreAdapter::loadDownloads(const QByteArray &data) {
     const auto document = QJsonDocument::fromJson(data);
@@ -352,4 +352,20 @@ void CoreAdapter::refreshFfmpegStatus() {
         const auto doc = QJsonDocument::fromJson(data); if (!doc.isObject()) return;
         const auto values = map(doc.object()); if (m_ffmpegStatus != values) { m_ffmpegStatus = values; emit ffmpegStatusChanged(); }
     });
+}
+
+void CoreAdapter::refreshRetryPolicy() {
+    if (!m_endpoint.isValid()) return;
+    auto *reply = m_network.get(requestFor("/api/engine/retry-policy"));
+    connect(reply, &QNetworkReply::finished, this, [this, reply] {
+        const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt(); const auto data = reply->readAll(); const auto error = reply->error(); reply->deleteLater();
+        if (error != QNetworkReply::NoError || status < 200 || status >= 300) return;
+        const auto doc = QJsonDocument::fromJson(data); if (!doc.isObject()) return;
+        const auto values = map(doc.object().value("policy").toObject()); if (m_retryPolicy != values) { m_retryPolicy = values; emit retryPolicyChanged(); }
+    });
+}
+void CoreAdapter::setRetryPolicyPreset(const QString &preset) {
+    const auto normalized = preset.trimmed().toLower();
+    if (normalized != "default" && normalized != "aggressive" && normalized != "conservative" && normalized != "none") { emit operationFailed("retry-policy", tr("Unsupported retry policy preset.")); return; }
+    send("retry-policy", "/api/engine/retry-policy", "POST", {{"preset", normalized}});
 }

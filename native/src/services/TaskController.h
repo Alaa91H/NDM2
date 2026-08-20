@@ -32,6 +32,8 @@ class TaskController final : public QObject {
     Q_PROPERTY(QVariantMap mediaProbe READ mediaProbe NOTIFY mediaProbeChanged)
     Q_PROPERTY(QString mediaProbeError READ mediaProbeError NOTIFY mediaProbeChanged)
     Q_PROPERTY(QVariantMap ffmpegStatus READ ffmpegStatus NOTIFY ffmpegStatusChanged)
+    Q_PROPERTY(QVariantMap capabilities READ capabilities NOTIFY capabilitiesChanged)
+    Q_PROPERTY(QVariantMap retryPolicy READ retryPolicy NOTIFY retryPolicyChanged)
 
 public:
     explicit TaskController(CoreAdapter *adapter, QObject *parent = nullptr);
@@ -43,7 +45,7 @@ public:
     QVariantList queueEntries() const; QVariantMap queueSummary() const; QVariantMap bandwidth() const;
     QVariantList profiles() const; QString activeProfile() const; QVariantMap statistics() const; QVariantList logs() const;
     QVariantList rules() const; QVariantList schedulerRules() const; QVariantList schedulerActiveIds() const; QVariantList mirrors() const;
-    QVariantMap taskTrace() const; QVariantMap health() const; QString logLevel() const; QVariantMap browserHealth() const; QVariantMap mediaProbe() const; QString mediaProbeError() const; QVariantMap ffmpegStatus() const;
+    QVariantMap taskTrace() const; QVariantMap health() const; QString logLevel() const; QVariantMap browserHealth() const; QVariantMap mediaProbe() const; QString mediaProbeError() const; QVariantMap ffmpegStatus() const; QVariantMap capabilities() const; QVariantMap retryPolicy() const;
 
     Q_INVOKABLE void add(const QString &url, const QString &name, const QString &destination, const QString &category, int connections, int bandwidthKbps, bool startImmediately);
     Q_INVOKABLE void updateSelected(const QString &name, const QString &url);
@@ -52,7 +54,7 @@ public:
     Q_INVOKABLE void addRule(const QVariantMap &rule); Q_INVOKABLE void deleteRule(const QString &id);
     Q_INVOKABLE void addSchedulerRule(const QVariantMap &rule); Q_INVOKABLE void updateSchedulerRule(const QVariantMap &rule); Q_INVOKABLE void deleteSchedulerRule(const QString &id); Q_INVOKABLE void setSchedulerPowerCommands(bool enabled);
     Q_INVOKABLE void addSelectedMirror(const QString &url, int priority = 0); Q_INVOKABLE void setSelectedMirrorFailover(bool enabled); Q_INVOKABLE void triggerSelectedMirrorFailover();
-    Q_INVOKABLE void setLogLevel(const QString &level); Q_INVOKABLE void probeMedia(const QString &url);
+    Q_INVOKABLE void setLogLevel(const QString &level); Q_INVOKABLE void setRetryPolicyPreset(const QString &preset); Q_INVOKABLE void probeMedia(const QString &url); Q_INVOKABLE void createMediaDownload(const QString &url, const QString &name, const QString &destination, const QString &formatId, bool audioOnly = false); Q_INVOKABLE void refreshLogsFiltered(int limit, const QString &level);
     Q_INVOKABLE void setLibraryFilters(const QString &search, const QString &status, const QString &category, const QString &queue);
     Q_INVOKABLE void setLibrarySort(const QString &field, bool descending = false);
     Q_INVOKABLE bool isSelected(const QString &id) const;
@@ -64,7 +66,7 @@ public:
 signals:
     void connectionChanged(); void lastErrorChanged(); void selectedChanged(); void speedSamplesChanged();
     void queueChanged(); void bandwidthChanged(); void profilesChanged(); void statisticsChanged(); void logsChanged();
-    void rulesChanged(); void schedulerChanged(); void mirrorsChanged(); void taskTraceChanged(); void healthChanged(); void logLevelChanged(); void browserHealthChanged(); void mediaProbeChanged(); void ffmpegStatusChanged(); void selectionChanged();
+    void rulesChanged(); void schedulerChanged(); void mirrorsChanged(); void taskTraceChanged(); void healthChanged(); void logLevelChanged(); void browserHealthChanged(); void mediaProbeChanged(); void ffmpegStatusChanged(); void capabilitiesChanged(); void retryPolicyChanged(); void selectionChanged();
     void notice(QString message, bool error);
 
 private:

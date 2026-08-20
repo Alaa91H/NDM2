@@ -66,6 +66,7 @@ Item {
                 visible: count > 0
                 delegate: Rectangle {
                     required property var modelData
+                    required property int index
                     width: queueList.width
                     height: 66
                     radius: 9

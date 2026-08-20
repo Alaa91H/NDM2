@@ -18,6 +18,8 @@ TaskController::TaskController(CoreAdapter *adapter, QObject *parent) : QObject(
     connect(m_adapter, &CoreAdapter::browserHealthChanged, this, &TaskController::browserHealthChanged);
     connect(m_adapter, &CoreAdapter::mediaProbeChanged, this, &TaskController::mediaProbeChanged);
     connect(m_adapter, &CoreAdapter::ffmpegStatusChanged, this, &TaskController::ffmpegStatusChanged);
+    connect(m_adapter, &CoreAdapter::capabilitiesChanged, this, &TaskController::capabilitiesChanged);
+    connect(m_adapter, &CoreAdapter::retryPolicyChanged, this, &TaskController::retryPolicyChanged);
     connect(m_adapter, &CoreAdapter::operationSucceeded, this, [this](const QString &action, const QString &) { emit notice(tr("Core operation completed: %1").arg(action), false); });
     connect(m_adapter, &CoreAdapter::operationFailed, this, [this](const QString &, const QString &message) { emit notice(message, true); });
     connect(m_adapter->downloads(), &QAbstractItemModel::modelReset, this, [this] { sampleSelectedSpeed(); emit selectedChanged(); });
@@ -44,6 +46,8 @@ QVariantMap TaskController::browserHealth() const { return m_adapter->browserHea
 QVariantMap TaskController::mediaProbe() const { return m_adapter->mediaProbe(); }
 QString TaskController::mediaProbeError() const { return m_adapter->mediaProbeError(); }
 QVariantMap TaskController::ffmpegStatus() const { return m_adapter->ffmpegStatus(); }
+QVariantMap TaskController::capabilities() const { return m_adapter->capabilities(); }
+QVariantMap TaskController::retryPolicy() const { return m_adapter->retryPolicy(); }
 void TaskController::setSelectedId(const QString &id) { if (m_selectedId == id) return; m_selectedId = id; if (!id.isEmpty() && !m_selectedIds.contains(id)) m_selectedIds = {id}; m_adapter->fetchTaskTrace(id); sampleSelectedSpeed(); emit selectionChanged(); emit selectedChanged(); }
 void TaskController::sampleSelectedSpeed() { const auto task = selectedDownload(); if (task.isEmpty()) { if (!m_speedSamples.isEmpty()) { m_speedSamples.clear(); emit speedSamplesChanged(); } return; } m_speedSamples.append(task.value("speed").toDouble()); while (m_speedSamples.size() > 48) m_speedSamples.removeFirst(); emit speedSamplesChanged(); }
 void TaskController::refresh() { m_adapter->refresh(); }
@@ -99,3 +103,19 @@ void TaskController::bulkDelete(bool files) { for (const auto &id : m_selectedId
 void TaskController::bulkSetPriority(int priority) { for (const auto &id : m_selectedIds) m_adapter->setQueuePriority(id, priority); }
 
 void TaskController::probeMedia(const QString &url) { m_adapter->probeMedia(url); }
+
+void TaskController::createMediaDownload(const QString &url, const QString &name, const QString &destination, const QString &formatId, bool audioOnly) {
+    const auto cleanUrl = url.trimmed();
+    if (cleanUrl.isEmpty() || formatId.trimmed().isEmpty()) { emit notice(tr("Probe a media URL and select a Core-reported format first."), true); return; }
+    QVariantMap media{{"mode", audioOnly ? "audio" : "video"}, {"formatSelector", formatId.trimmed()}, {"ffmpegEnabled", !audioOnly}, {"playlist", false}};
+    QVariantMap payload{{"url", cleanUrl}, {"name", name.trimmed().isEmpty() ? QStringLiteral("media-download") : name.trimmed()}, {"fileType", audioOnly ? "audio" : "video"}, {"category", audioOnly ? "audio" : "video"}, {"connections", 1}, {"resumable", true}, {"startImmediately", true}, {"mediaOptions", media}};
+    if (!destination.trimmed().isEmpty()) payload.insert("savePath", destination.trimmed());
+    m_adapter->createDownload(payload);
+}
+void TaskController::refreshLogsFiltered(int limit, const QString &level) {
+    Q_UNUSED(level);
+    // Core currently exposes the full structured log collection through this adapter; filtering is performed by the QML view without altering the daemon contract.
+    m_adapter->refreshLogs(limit);
+}
+
+void TaskController::setRetryPolicyPreset(const QString &preset) { m_adapter->setRetryPolicyPreset(preset); }
