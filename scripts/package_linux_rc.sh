@@ -33,7 +33,7 @@ for plugin in platforms/libqxcb.so platforms/libqoffscreen.so imageformats/libqi
     fi
 done
 
-for module in QtQml QtQuick QtQuick.2 QtQuick/Controls QtQuick/Controls/Basic QtQuick/Layouts QtQuick/Window; do
+for module in QtQml QtQuick QtQuick.2 QtQuick/Controls QtQuick/Controls/Basic QtQuick/Layouts QtQuick/Templates QtQuick/Window; do
     if [[ -d "$qt_qml_dir/$module" ]]; then
         cp -a "$qt_qml_dir/$module" "$release_root/qml/$(dirname "$module")/"
     fi
