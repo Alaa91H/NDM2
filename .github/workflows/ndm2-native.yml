@@ -1,4 +1,4 @@
-name: NDM2 Native Package
+name: NDM2 Native Packages
 
 on:
   push:
@@ -12,11 +12,51 @@ concurrency:
   group: ndm2-native-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  NDM2_PACKAGE_VERSION: 3.0.0
+  QT_VERSION: '6.8.*'
+
 jobs:
-  package-linux:
-    name: Package NDM2 native Linux client
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
+  package-native:
+    name: Package NDM2 + NOVA Core (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runner: ubuntu-24.04
+            family: linux
+            architecture: amd64
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+            family: linux
+            architecture: arm64
+          - platform: windows-x64
+            runner: windows-latest
+            family: windows
+            architecture: x64
+            qt_host: windows
+            qt_arch: win64_msvc2022_64
+            msvc_arch: x64
+          - platform: windows-arm64
+            runner: windows-11-arm
+            family: windows
+            architecture: arm64
+            qt_host: windows_arm64
+            qt_arch: win64_msvc2022_arm64
+            msvc_arch: arm64
+          - platform: macos-x64
+            runner: macos-15-intel
+            family: macos
+            architecture: x64
+            qt_host: mac
+          - platform: macos-arm64
+            runner: macos-15
+            family: macos
+            architecture: arm64
+            qt_host: mac
 
     steps:
       - name: Checkout
@@ -25,158 +65,173 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Install Qt and packaging dependencies
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ndm2-native-${{ matrix.platform }}
+
+      - name: Install Linux dependencies
+        if: matrix.family == 'linux'
+        shell: bash
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends \
-            cmake \
-            ninja-build \
-            qt6-base-dev \
-            qt6-base-dev-tools \
-            qt6-declarative-dev \
-            qt6-declarative-dev-tools \
-            qt6-qpa-plugins \
-            qml6-module-qtqml \
-            qml6-module-qtqml-workerscript \
-            qml6-module-qtquick \
-            qml6-module-qtquick-controls \
-            qml6-module-qtquick-layouts \
-            qml6-module-qtquick-templates \
-            qml6-module-qtquick-window \
-            qt6-tools-dev-tools
+            build-essential cmake ninja-build pkg-config \
+            qt6-base-dev qt6-base-dev-tools qt6-declarative-dev qt6-declarative-dev-tools \
+            qt6-qpa-plugins qml6-module-qtqml qml6-module-qtqml-workerscript \
+            qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-layouts \
+            qml6-module-qtquick-templates qml6-module-qtquick-window qt6-tools-dev-tools \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
+            libssl-dev libcurl4-openssl-dev libbrotli-dev libzstd-dev libnghttp2-dev \
+            libssh2-1-dev libssh-dev libldap2-dev libkrb5-dev libsystemd-dev libidn2-dev \
+            librtmp-dev libpsl-dev ffmpeg patchelf unzip rpm
 
-      - name: Configure NDM2 Release build
-        run: cmake -S . -B build-native-release -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: Install Qt for Windows
+        if: matrix.family == 'windows'
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: ${{ matrix.qt_host }}
+          target: desktop
+          arch: ${{ matrix.qt_arch }}
+          cache: true
 
-      - name: Build NDM2
-        run: cmake --build build-native-release --parallel 2
+      - name: Install Windows build tools
+        if: matrix.family == 'windows'
+        shell: pwsh
+        run: choco install ninja nsis cmake pkgconfiglite ffmpeg -y --no-progress
 
-      - name: Test NDM2 model layer
-        run: ctest --test-dir build-native-release --output-on-failure
+      - name: Configure MSVC environment
+        if: matrix.family == 'windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.msvc_arch }}
 
-      - name: Package NDM2 with Qt runtime
+      - name: Install Windows static libcurl dependencies
+        if: matrix.family == 'windows'
+        shell: pwsh
         run: |
-          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" \
-            scripts/package_linux_rc.sh build-native-release 3.0.0
+          $ErrorActionPreference = 'Stop'
+          $triplet = if ('${{ matrix.architecture }}' -eq 'arm64') { 'arm64-windows-static' } else { 'x64-windows-static' }
+          $vcpkgRoot = Join-Path $env:RUNNER_TEMP 'vcpkg'
+          git clone --depth 1 https://github.com/microsoft/vcpkg $vcpkgRoot
+          & "$vcpkgRoot\bootstrap-vcpkg.bat" -disableMetrics
+          & "$vcpkgRoot\vcpkg.exe" install "zlib:$triplet" "brotli:$triplet" "zstd:$triplet" "nghttp2:$triplet" "libssh2:$triplet" "curl:$triplet"
+          "VCPKG_INSTALLATION_ROOT=$vcpkgRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8NoBOM
+          "CMAKE_TOOLCHAIN_FILE=$vcpkgRoot/scripts/buildsystems/vcpkg.cmake" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8NoBOM
+          "VCPKG_TARGET_TRIPLET=$triplet" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8NoBOM
+          "NOVA_LIBCURL_FEATURE_PROFILE=maximum-stable" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8NoBOM
 
-      - name: Verify extracted native package
+      - name: Install Qt for macOS
+        if: matrix.family == 'macos'
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: ${{ matrix.qt_host }}
+          target: desktop
+          cache: true
+
+      - name: Install macOS dependencies
+        if: matrix.family == 'macos'
+        shell: bash
+        run: |
+          brew untap aws/tap 2>/dev/null || true
+          brew install cmake ninja pkg-config curl openssl@3 brotli zstd nghttp2 libssh2 ffmpeg
+
+      - name: Build NOVA Core and native client
+        if: matrix.family != 'windows'
         shell: bash
         run: |
           set -euo pipefail
-          archive="$(find release -maxdepth 1 -type f -name 'NDM2-3.0.0-linux-*.tar.gz' -print -quit)"
-          test -n "$archive"
-          test -s "$archive"
+          cargo build --manifest-path src-tauri/Cargo.toml --release --bin nova
+          test -x src-tauri/target/release/nova
+          cmake -S . -B build-native-release -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DNDM2_CORE_BINARY="$PWD/src-tauri/target/release/nova"
+          cmake --build build-native-release --parallel 2
+          ctest --test-dir build-native-release --output-on-failure
 
-          verify_root="$RUNNER_TEMP/ndm2-native-verify"
-          runtime_dir="$RUNNER_TEMP/ndm2-runtime"
-          rm -rf "$verify_root" "$runtime_dir"
-          mkdir -p "$verify_root" "$runtime_dir"
-          chmod 700 "$runtime_dir"
-          tar -xzf "$archive" -C "$verify_root"
-
-          bundle="$(find "$verify_root" -mindepth 1 -maxdepth 1 -type d -name 'NDM2-*' -print -quit)"
-          test -x "$bundle/bin/NDM2"
-          test -x "$bundle/ndm2"
-          test -f "$bundle/plugins/platforms/libqxcb.so"
-          test -d "$bundle/qml/QtQuick"
-          test -f "$bundle/lib/libQt6Quick.so.6"
-          test -f "$bundle/lib/libQt6Qml.so.6"
-
-          # Ubuntu's Qt packages may omit the optional offscreen plugin. The
-          # shipped desktop bundle instead requires and verifies the XCB plugin.
-          # When offscreen is available, additionally run a headless startup
-          # smoke test against the extracted release artifact.
-          if [ -f "$bundle/plugins/platforms/libqoffscreen.so" ]; then
-            set +e
-            XDG_RUNTIME_DIR="$runtime_dir" QT_QPA_PLATFORM=offscreen \
-              timeout 4s "$bundle/ndm2" --daemon-endpoint http://127.0.0.1:3199 \
-              > "$RUNNER_TEMP/ndm2-native-smoke.log" 2>&1
-            status=$?
-            set -e
-            cat "$RUNNER_TEMP/ndm2-native-smoke.log"
-            test "$status" -eq 124
-            ! grep -qiE 'module .* is not installed|could not find the Qt platform plugin|failed to load|QML.*error' \
-              "$RUNNER_TEMP/ndm2-native-smoke.log"
-          fi
-
-      - name: Generate package checksum
-        run: sha256sum release/NDM2-3.0.0-linux-*.tar.gz > release/NDM2-3.0.0-linux-SHA256SUMS.txt
-
-      - name: Upload NDM2 native package
-        uses: actions/upload-artifact@v7
-        with:
-          name: NDM2-native-linux-amd64-${{ github.sha }}
-          path: |
-            release/NDM2-3.0.0-linux-*.tar.gz
-            release/NDM2-3.0.0-linux-SHA256SUMS.txt
-          if-no-files-found: error
-          retention-days: 30
-
-  package-windows:
-    name: Package NDM2 native Windows installer
-    runs-on: windows-latest
-    timeout-minutes: 30
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Install Qt
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.8.*'
-          host: windows
-          target: desktop
-          arch: win64_msvc2022_64
-          cache: true
-
-      - name: Install native build tools
-        shell: pwsh
-        run: choco install ninja nsis -y --no-progress
-
-      - name: Configure MSVC x64 environment
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-
-      - name: Configure NDM2 Release build
-        shell: pwsh
-        run: cmake -S . -B build-native-release -G Ninja -DCMAKE_BUILD_TYPE=Release
-
-      - name: Build NDM2
-        shell: pwsh
-        run: cmake --build build-native-release --parallel 2
-
-      - name: Test NDM2 model layer
-        shell: pwsh
-        run: ctest --test-dir build-native-release --output-on-failure
-
-      - name: Build NDM2 installer
+      - name: Build NOVA Core and native client
+        if: matrix.family == 'windows'
         shell: pwsh
         run: |
-          cpack --config build-native-release/CPackConfig.cmake -G NSIS -B package-native
-          $installer = Get-ChildItem package-native -File -Filter '*.exe' | Select-Object -First 1
-          if (-not $installer) {
-            throw 'CPack did not produce an NDM2 NSIS installer.'
+          $ErrorActionPreference = 'Stop'
+          cargo build --manifest-path src-tauri/Cargo.toml --release --bin nova
+          if (-not (Test-Path 'src-tauri\target\release\nova.exe')) {
+            throw 'NOVA Core was not produced for this Windows architecture.'
           }
-          New-Item -ItemType Directory -Force release | Out-Null
-          Copy-Item $installer.FullName 'release/NDM2-3.0.0-windows-x64-setup.exe' -Force
+          cmake -S . -B build-native-release -G Ninja -DCMAKE_BUILD_TYPE=Release "-DNDM2_CORE_BINARY=$PWD\src-tauri\target\release\nova.exe"
+          cmake --build build-native-release --parallel 2
+          ctest --test-dir build-native-release --output-on-failure
 
-      - name: Generate installer checksum
+      - name: Package Linux portable bundle
+        if: matrix.family == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" \
+            scripts/package_linux_rc.sh build-native-release "$NDM2_PACKAGE_VERSION" \
+              "$PWD/src-tauri/target/release/nova" "${{ matrix.architecture }}"
+          archive="release/NDM2-$NDM2_PACKAGE_VERSION-linux-${{ matrix.architecture }}.tar.gz"
+          test -s "$archive"
+          verify_root="$RUNNER_TEMP/ndm2-package-verify"
+          rm -rf "$verify_root"
+          mkdir -p "$verify_root"
+          tar -xzf "$archive" -C "$verify_root"
+          bundle="$verify_root/NDM2-$NDM2_PACKAGE_VERSION-linux-${{ matrix.architecture }}"
+          test -x "$bundle/bin/NDM2"
+          test -x "$bundle/bin/nova-core"
+          test -x "$bundle/start-nova-core.sh"
+          sha256sum "$archive" > "release/NDM2-$NDM2_PACKAGE_VERSION-linux-${{ matrix.architecture }}-SHA256SUMS.txt"
+
+      - name: Package Windows installer or portable bundle
+        if: matrix.family == 'windows'
         shell: pwsh
         run: |
-          $hash = (Get-FileHash 'release/NDM2-3.0.0-windows-x64-setup.exe' -Algorithm SHA256).Hash.ToLower()
-          "$hash  NDM2-3.0.0-windows-x64-setup.exe" | Out-File 'release/NDM2-3.0.0-windows-x64-SHA256SUMS.txt' -Encoding ascii
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force release | Out-Null
+          cmake --install build-native-release --prefix package-native-stage
+          if (-not (Test-Path 'package-native-stage\bin\NDM2.exe') -or -not (Test-Path 'package-native-stage\bin\nova-core.exe')) {
+            throw 'The staged Windows package is missing NDM2 or NOVA Core.'
+          }
+          if ('${{ matrix.architecture }}' -eq 'x64') {
+            cpack --config build-native-release\CPackConfig.cmake -G NSIS -B package-native
+            $installer = Get-ChildItem package-native -File -Filter '*.exe' | Select-Object -First 1
+            if (-not $installer) { throw 'CPack did not produce the NDM2 NSIS installer.' }
+            Copy-Item $installer.FullName "release\NDM2-$env:NDM2_PACKAGE_VERSION-windows-x64-setup.exe" -Force
+          } else {
+            $bundle = "package-native-stage\NDM2-$env:NDM2_PACKAGE_VERSION-windows-arm64"
+            New-Item -ItemType Directory -Force $bundle | Out-Null
+            Copy-Item 'package-native-stage\*' $bundle -Recurse -Force
+            Compress-Archive -Path $bundle -DestinationPath "release\NDM2-$env:NDM2_PACKAGE_VERSION-windows-arm64.zip" -Force
+          }
+          $artifact = Get-ChildItem release -File | Select-Object -First 1
+          $hash = (Get-FileHash $artifact.FullName -Algorithm SHA256).Hash.ToLower()
+          "$hash  $($artifact.Name)" | Out-File "release\NDM2-$env:NDM2_PACKAGE_VERSION-windows-${{ matrix.architecture }}-SHA256SUMS.txt" -Encoding ascii
 
-      - name: Upload NDM2 native installer
+      - name: Package macOS app bundle
+        if: matrix.family == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x scripts/package_macos_rc.sh
+          scripts/package_macos_rc.sh build-native-release "$NDM2_PACKAGE_VERSION" "${{ matrix.architecture }}" "$PWD/src-tauri/target/release/nova"
+          test -s "release/NDM2-$NDM2_PACKAGE_VERSION-macos-${{ matrix.architecture }}.zip"
+          test -s "release/NDM2-$NDM2_PACKAGE_VERSION-macos-${{ matrix.architecture }}.dmg"
+          test -x "package-native-stage/NDM2.app/Contents/MacOS/NDM2"
+          test -x "package-native-stage/NDM2.app/Contents/MacOS/nova-core"
+          shasum -a 256 "release/NDM2-$NDM2_PACKAGE_VERSION-macos-${{ matrix.architecture }}.zip" \
+            "release/NDM2-$NDM2_PACKAGE_VERSION-macos-${{ matrix.architecture }}.dmg" \
+            > "release/NDM2-$NDM2_PACKAGE_VERSION-macos-${{ matrix.architecture }}-SHA256SUMS.txt"
+
+      - name: Upload NDM2 package and checksum
         uses: actions/upload-artifact@v7
         with:
-          name: NDM2-native-windows-x64-${{ github.sha }}
-          path: |
-            release/NDM2-3.0.0-windows-x64-setup.exe
-            release/NDM2-3.0.0-windows-x64-SHA256SUMS.txt
+          name: NDM2-native-${{ matrix.platform }}-${{ github.sha }}
+          path: release/*
           if-no-files-found: error
           retention-days: 30
+          compression-level: 0

@@ -4,7 +4,8 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 build_dir="${1:-$root/build-release}"
 version="${2:-3.0.0}"
-architecture="$(dpkg --print-architecture)"
+core_binary="${3:-}"
+architecture="${4:-$(dpkg --print-architecture)}"
 source_binary="$build_dir/native/NDM2"
 release_root="$root/release/NDM2-$version-linux-$architecture"
 archive="$root/release/NDM2-$version-linux-$architecture.tar.gz"
@@ -13,10 +14,15 @@ if [[ ! -x "$source_binary" ]]; then
     echo "Release binary not found: $source_binary" >&2
     exit 1
 fi
+if [[ -z "$core_binary" || ! -x "$core_binary" ]]; then
+    echo "A built NOVA Core binary is required: $core_binary" >&2
+    exit 1
+fi
 
 rm -rf "$release_root" "$archive"
 mkdir -p "$release_root/bin" "$release_root/lib" "$release_root/plugins" "$release_root/qml" "$release_root/share/applications" "$release_root/share/icons/hicolor/512x512/apps"
 install -m 0755 "$source_binary" "$release_root/bin/NDM2"
+install -m 0755 "$core_binary" "$release_root/bin/nova-core"
 install -m 0644 "$root/branding/source/app-icon.png" "$release_root/share/icons/hicolor/512x512/apps/ndm2.png"
 
 # Bundle only Qt runtime libraries. The supported Linux baseline continues to provide libc,
@@ -66,6 +72,14 @@ exec "$root/bin/NDM2" "$@"
 LAUNCHER
 chmod 0755 "$release_root/ndm2"
 
+cat > "$release_root/start-nova-core.sh" <<'CORELAUNCHER'
+#!/usr/bin/env sh
+set -eu
+root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+exec "$root/bin/nova-core" --integration "$@"
+CORELAUNCHER
+chmod 0755 "$release_root/start-nova-core.sh"
+
 cat > "$release_root/share/applications/ndm2.desktop" <<'DESKTOP'
 [Desktop Entry]
 Type=Application
@@ -106,19 +120,22 @@ chmod 0755 "$release_root/install-desktop-shortcut.sh"
 cat > "$release_root/README.txt" <<EOF
 NDM2 $version Linux Release Candidate
 
-This bundle contains the native NDM2 client plus the Qt runtime libraries, XCB platform
-plugin, image plugins and Qt Quick QML modules required by this client. Start it with:
+This bundle contains the native NDM2 client, the platform-matched NOVA Core, Qt runtime
+libraries, XCB platform plugin, image plugins and Qt Quick QML modules required by this client.
+Start the authenticated loopback Core explicitly, then launch the client with the same token:
 
-  ./ndm2 --daemon-endpoint http://127.0.0.1:3199
+  export NOVA_INTEGRATION_API_TOKEN="<at-least-24-character-secret>"
+  ./start-nova-core.sh
+  NOVA_DAEMON_TOKEN="\${NOVA_INTEGRATION_API_TOKEN}" ./ndm2 --daemon-endpoint http://127.0.0.1:3199
 
 To create a desktop shortcut that uses the bundled NOVA icon, run:
 
   ./install-desktop-shortcut.sh
 
-The NOVA daemon remains a separately managed, authenticated loopback service. Supply its
-Bearer credential through NOVA_DAEMON_TOKEN or --daemon-token; do not place credentials in
-this bundle. The host still needs a supported Linux graphics stack and the system libraries
-required by Qt's XCB platform integration.
+The NOVA Core binds only to loopback and requires its per-launch bearer credential. Supply
+it through NOVA_INTEGRATION_API_TOKEN for the bundled Core and NOVA_DAEMON_TOKEN (or
+--daemon-token) for NDM2; do not place credentials in this bundle. The host still needs a
+supported Linux graphics stack and the system libraries required by Qt's XCB platform integration.
 EOF
 
 find "$release_root" -type f -print0 | xargs -0r touch -h -d "@${SOURCE_DATE_EPOCH:-0}"

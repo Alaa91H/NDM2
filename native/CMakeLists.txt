@@ -71,10 +71,33 @@ if(APPLE)
 endif()
 
 include(GNUInstallDirs)
+set(NDM2_CORE_BINARY "" CACHE FILEPATH "Prebuilt NOVA Core binary to include alongside the native client")
+
 install(TARGETS NDM2
     BUNDLE DESTINATION .
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+
+# The native Qt client always speaks only to an authenticated loopback NOVA
+# Core. Packaging can add a platform-matched Core binary, but it never embeds
+# a token or changes how the client authenticates.
+if(NDM2_CORE_BINARY)
+    if(NOT EXISTS "${NDM2_CORE_BINARY}")
+        message(FATAL_ERROR "NDM2_CORE_BINARY does not exist: ${NDM2_CORE_BINARY}")
+    endif()
+
+    if(APPLE)
+        install(PROGRAMS "${NDM2_CORE_BINARY}"
+            DESTINATION "NDM2.app/Contents/MacOS"
+            RENAME "nova-core"
+        )
+    else()
+        install(PROGRAMS "${NDM2_CORE_BINARY}"
+            DESTINATION ${CMAKE_INSTALL_BINDIR}
+            RENAME "nova-core${CMAKE_EXECUTABLE_SUFFIX}"
+        )
+    endif()
+endif()
 
 # Produce the platform-appropriate Qt runtime and QML deployment at install time.
 # On Windows and macOS this delegates to Qt's deployment tools; on Linux it still
