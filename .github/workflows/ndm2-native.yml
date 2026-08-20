@@ -35,6 +35,7 @@ jobs:
             qt6-base-dev-tools \
             qt6-declarative-dev \
             qt6-declarative-dev-tools \
+            qt6-qpa-plugins \
             qt6-tools-dev-tools
 
       - name: Configure NDM2 Release build
@@ -120,6 +121,11 @@ jobs:
       - name: Install native build tools
         shell: pwsh
         run: choco install ninja nsis -y --no-progress
+
+      - name: Configure MSVC x64 environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
 
       - name: Configure NDM2 Release build
         shell: pwsh
