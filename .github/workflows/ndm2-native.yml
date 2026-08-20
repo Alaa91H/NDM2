@@ -15,7 +15,7 @@ concurrency:
 env:
   NDM2_PACKAGE_VERSION: 3.0.0
   QT_VERSION: '6.8.*'
-  NODE_VERSION: '22'
+  NODE_VERSION: '24'
 
 jobs:
   package-native:
