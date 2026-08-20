@@ -1,0 +1,40 @@
+{
+  "phase": "3.5",
+  "generated_at": "2026-08-20",
+  "principles": {
+    "core_is_source_of_truth": true,
+    "legacy_react_tauri_preserved": true,
+    "new_network_listener_created": false,
+    "core_changes": ["src-tauri/src/daemon/routes/common.rs: capture stdout/stderr for timed child processes"]
+  },
+  "features": [
+    {"feature":"browser_handoff","core_support":true,"api":"Native Messaging -> /v1/add","ndm2":true,"e2e":"passed_chromium_linux","status":"complete"},
+    {"feature":"media_probe","core_support":true,"api":"/api/ytdlp/probe","ndm2":true,"e2e":"passed_archive_org","status":"complete"},
+    {"feature":"media_download","core_support":true,"api":"/api/downloads mediaOptions","ndm2":true,"e2e":"passed_46935223_bytes","status":"complete"},
+    {"feature":"ffmpeg_capability","core_support":true,"api":"/api/ytdlp/ffmpeg","ndm2":true,"e2e":"passed","status":"complete"},
+    {"feature":"queue_priority","core_support":true,"api":"/api/engine/queue","ndm2":true,"e2e":"passed_phase_3","status":"complete"},
+    {"feature":"queue_reorder","core_support":false,"api":null,"ndm2":false,"e2e":"not_applicable","status":"intentionally_unimplemented"},
+    {"feature":"download_rules","core_support":true,"api":"/api/engine/rules","ndm2":true,"e2e":"create_match_delete_passed","status":"complete_to_api"},
+    {"feature":"rule_update_enable","core_support":false,"api":null,"ndm2":false,"e2e":"not_applicable","status":"intentionally_unimplemented"},
+    {"feature":"scheduler","core_support":true,"api":"/api/engine/scheduler and /update","ndm2":true,"e2e":"create_update_list_delete_passed","status":"complete_to_schema"},
+    {"feature":"retry_policy","core_support":true,"api":"/api/engine/retry-policy","ndm2":true,"e2e":"conservative_default_passed","status":"complete"},
+    {"feature":"diagnostics_task_trace","core_support":true,"api":"existing Core diagnostics routes","ndm2":true,"e2e":"startup_checked","status":"complete_to_api"},
+    {"feature":"notifications","core_support":true,"api":"Core state transitions + Qt tray","ndm2":true,"e2e":"headless_only","status":"manual_desktop_validation_required"},
+    {"feature":"system_tray","core_support":true,"api":"Qt QSystemTrayIcon actions","ndm2":true,"e2e":"headless_only","status":"manual_desktop_validation_required"},
+    {"feature":"rtl_ltr","core_support":true,"api":"Qt layoutDirection","ndm2":true,"e2e":"startup_only","status":"manual_visual_validation_required"},
+    {"feature":"high_dpi","core_support":true,"api":"Qt scale handling","ndm2":true,"e2e":"100_125_150_200_startup_passed","status":"manual_visual_validation_required"}
+  ],
+  "platforms": {
+    "linux": {"build":"passed","runtime":"headless_passed","manual":"partial"},
+    "windows": {"build":"not_available","runtime":"not_available","manual":"not_available"},
+    "macos": {"build":"not_available","runtime":"not_available","manual":"not_available"}
+  },
+  "known_gaps": [
+    "Pending-task persistence test did not pass in isolated daemon environment.",
+    "Core has no audited queue-reorder API.",
+    "Core has no audited rule update or enable-disable API.",
+    "Desktop notification and tray interaction need a real desktop session.",
+    "Windows and macOS were not available for build or runtime validation.",
+    "Large historical-entry performance testing was not fabricated."
+  ]
+}
