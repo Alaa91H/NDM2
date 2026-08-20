@@ -8,8 +8,8 @@ Dialog {
 
     modal: true
     anchors.centerIn: Overlay.overlay
-    width: Math.min(860, parent ? parent.width - 48 : 860)
-    height: Math.min(760, parent ? parent.height - 48 : 760)
+    width: Math.min(design.dialogMaxWidth, parent ? parent.width - design.dialogInset : design.dialogMaxWidth)
+    height: Math.min(design.dialogMaxHeight, parent ? parent.height - design.dialogInset : design.dialogMaxHeight)
     padding: 0
     closePolicy: Popup.CloseOnEscape
 

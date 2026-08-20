@@ -27,14 +27,14 @@ Rectangle {
     Accessible.role: Accessible.Pane
     Accessible.name: pageTitle
 
-    Behavior on border.color { ColorAnimation { duration: 100 } }
+    Behavior on border.color { ColorAnimation { duration: theme ? theme.durationFast : 100 } }
 
     Rectangle {
         id: header
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
-        implicitHeight: theme ? 74 : 72
+        implicitHeight: theme ? theme.workspaceHeaderHeight : 72
         color: theme ? theme.surfaceRaised : "#323232"
         border.width: 1
         border.color: theme ? theme.border : "#454545"

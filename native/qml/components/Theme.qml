@@ -48,8 +48,32 @@ QtObject {
     readonly property int radiusMd: 8
     readonly property int radiusLg: 12
     readonly property int radiusXl: 16
+    // Shared desktop geometry. Keep chrome, command surfaces, list density and
+    // hit targets token-driven so screens adapt without diverging visually.
     readonly property int controlHeight: 32
     readonly property int touchHeight: 40
+    readonly property int compactTouchHeight: 36
+    readonly property int navigationWidth: 244
+    readonly property int navigationRailWidth: 64
+    readonly property int appHeaderHeight: 80
+    readonly property int workspaceHeaderHeight: 74
+    readonly property int statusBarHeight: 32
+    readonly property int commandStripHeight: 40
+    readonly property int rowHeightCompact: 70
+    readonly property int rowHeightComfortable: 86
+    readonly property int metricCardHeight: 86
+    readonly property int dialogInset: 48
+    readonly property int dialogMaxWidth: 860
+    readonly property int dialogMaxHeight: 760
+
+    readonly property int iconXs: 12
+    readonly property int iconSm: 16
+    readonly property int iconMd: 20
+    readonly property int iconLg: 24
+
+    readonly property int durationFast: 100
+    readonly property int durationNormal: 160
+    readonly property int durationSlow: 220
 
     readonly property int fontMeta: 11
     readonly property int fontCaption: 12
@@ -57,8 +81,18 @@ QtObject {
     readonly property int fontBodyLarge: 15
     readonly property int fontSection: 17
     readonly property int fontPage: 24
+    readonly property int fontDisplay: 32
     readonly property int fontMetric: 20
-    readonly property string fontMono: "Consolas, Cascadia Mono, monospace"
+    readonly property string fontUi: "Segoe UI Variable, Segoe UI, Noto Sans, sans-serif"
+    readonly property string fontMono: "Cascadia Mono, Consolas, monospace"
+
+    function pageGutter(availableWidth) {
+        return availableWidth < 980 ? spaceLg : spaceXl
+    }
+
+    function navigationIsCompact(availableWidth) {
+        return availableWidth < 980
+    }
 
     function statusColor(status) {
         switch (String(status || "").toLowerCase()) {

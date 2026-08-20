@@ -40,6 +40,7 @@ qt_add_qml_module(NDM2
         qml/components/ThemedTextArea.qml
         qml/components/ThemedTextField.qml
         qml/components/ActionButton.qml
+        qml/components/FluentMenu.qml
         qml/components/SectionHeader.qml
         qml/components/StatusBadge.qml
         qml/components/NavItem.qml

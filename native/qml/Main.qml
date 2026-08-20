@@ -23,10 +23,12 @@ ApplicationWindow {
     property bool detailsOpen: false
     property string toastText: ""
     property bool toastError: false
+    property bool navigationCompact: design.navigationIsCompact(width)
     LayoutMirroring.enabled: settingsService.rightToLeft
     LayoutMirroring.childrenInherit: true
 
     Theme { id: design; dark: window.dark }
+    font.family: design.fontUi
     palette: Palette {
         window: design.background
         windowText: design.textPrimary
@@ -74,39 +76,42 @@ ApplicationWindow {
         spacing: 0
         Rectangle {
             Layout.fillHeight: true
-            Layout.preferredWidth: window.width < 1110 ? 220 : 244
+            Layout.preferredWidth: window.navigationCompact ? design.navigationRailWidth : design.navigationWidth
             color: design.sidebar
             border.color: design.border
             border.width: 1
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: design.spaceMd
+                anchors.margins: window.navigationCompact ? design.spaceXs : design.spaceMd
                 spacing: design.spaceXs
                 RowLayout {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 52
+                    Layout.preferredHeight: window.navigationCompact ? design.touchHeight : 52
                     Rectangle { width: 36; height: 36; radius: design.radiusSm; color: design.accent; clip: true; Image { anchors.fill: parent; anchors.margins: 3; source: "qrc:/branding/app-icon.png"; fillMode: Image.PreserveAspectFit; smooth: true; mipmap: true } }
-                    ColumnLayout { spacing: 0; Label { text: qsTr("NOVA Download Manager"); color: design.textPrimary; font.pixelSize: design.fontBodyLarge; font.weight: Font.DemiBold } Label { text: qsTr("Native desktop client"); color: design.textSecondary; font.pixelSize: design.fontMeta } }
+                    ColumnLayout { visible: !window.navigationCompact; spacing: 0; Label { text: qsTr("NOVA Download Manager"); color: design.textPrimary; font.pixelSize: design.fontBodyLarge; font.weight: Font.DemiBold } Label { text: qsTr("Native desktop client"); color: design.textSecondary; font.pixelSize: design.fontMeta } }
                 }
-                Label { text: qsTr("LIBRARY"); color: design.textMuted; font.pixelSize: design.fontMeta; font.weight: Font.DemiBold; Layout.topMargin: design.spaceLg; Layout.leftMargin: design.spaceSm }
-                NavItem { label: qsTr("All downloads"); glyph: "▦"; selected: window.section === "library" && window.statusFilter === ""; count: taskController.downloads.count; theme: design; Layout.fillWidth: true; onClicked: window.setSection("library", "") }
-                NavItem { label: qsTr("Active"); glyph: "↓"; selected: window.section === "library" && window.statusFilter === "downloading"; count: taskController.downloads.countForStatus("downloading"); theme: design; Layout.fillWidth: true; onClicked: window.setSection("library", "downloading") }
-                NavItem { label: qsTr("Completed"); glyph: "✓"; selected: window.section === "library" && window.statusFilter === "completed"; count: taskController.downloads.countForStatus("completed"); theme: design; Layout.fillWidth: true; onClicked: window.setSection("library", "completed") }
-                NavItem { label: qsTr("Needs attention"); glyph: "!"; selected: window.section === "library" && window.statusFilter === "error"; count: taskController.downloads.countForStatus("error"); theme: design; Layout.fillWidth: true; onClicked: window.setSection("library", "error") }
-                Label { text: qsTr("WORKFLOWS"); color: design.textMuted; font.pixelSize: design.fontMeta; font.weight: Font.DemiBold; Layout.topMargin: design.spaceMd; Layout.leftMargin: design.spaceSm }
-                NavItem { label: qsTr("Queue"); glyph: "≡"; selected: window.section === "queue"; count: taskController.queueEntries.length; theme: design; Layout.fillWidth: true; onClicked: { window.section = "queue"; taskController.refreshAll() } }
-                NavItem { label: qsTr("Automation"); glyph: "⌘"; selected: window.section === "automation"; theme: design; Layout.fillWidth: true; onClicked: { window.section = "automation"; taskController.refreshAll() } }
-                NavItem { label: qsTr("Media"); glyph: "▶"; selected: window.section === "media"; theme: design; Layout.fillWidth: true; onClicked: { window.section = "media"; taskController.refreshAll() } }
-                NavItem { label: qsTr("Browser"); glyph: "◈"; selected: window.section === "browser"; theme: design; Layout.fillWidth: true; onClicked: { window.section = "browser"; taskController.refreshAll() } }
-                NavItem { label: qsTr("Diagnostics"); glyph: "⌁"; selected: window.section === "diagnostics"; theme: design; Layout.fillWidth: true; onClicked: { window.section = "diagnostics"; taskController.refreshAll() } }
+                Label { visible: !window.navigationCompact; text: qsTr("LIBRARY"); color: design.textMuted; font.pixelSize: design.fontMeta; font.weight: Font.DemiBold; Layout.topMargin: design.spaceLg; Layout.leftMargin: design.spaceSm }
+                NavItem { label: qsTr("All downloads"); glyph: "▦"; selected: window.section === "library" && window.statusFilter === ""; count: taskController.downloads.count; theme: design; compact: window.navigationCompact; Layout.fillWidth: true; onClicked: window.setSection("library", "") }
+                NavItem { label: qsTr("Active"); glyph: "↓"; selected: window.section === "library" && window.statusFilter === "downloading"; count: taskController.downloads.countForStatus("downloading"); theme: design; compact: window.navigationCompact; Layout.fillWidth: true; onClicked: window.setSection("library", "downloading") }
+                NavItem { label: qsTr("Completed"); glyph: "✓"; selected: window.section === "library" && window.statusFilter === "completed"; count: taskController.downloads.countForStatus("completed"); theme: design; compact: window.navigationCompact; Layout.fillWidth: true; onClicked: window.setSection("library", "completed") }
+                NavItem { label: qsTr("Needs attention"); glyph: "!"; selected: window.section === "library" && window.statusFilter === "error"; count: taskController.downloads.countForStatus("error"); theme: design; compact: window.navigationCompact; Layout.fillWidth: true; onClicked: window.setSection("library", "error") }
+                Label { visible: !window.navigationCompact; text: qsTr("WORKFLOWS"); color: design.textMuted; font.pixelSize: design.fontMeta; font.weight: Font.DemiBold; Layout.topMargin: design.spaceMd; Layout.leftMargin: design.spaceSm }
+                NavItem { label: qsTr("Queue"); glyph: "≡"; selected: window.section === "queue"; count: taskController.queueEntries.length; theme: design; compact: window.navigationCompact; Layout.fillWidth: true; onClicked: { window.section = "queue"; taskController.refreshAll() } }
+                NavItem { label: qsTr("Automation"); glyph: "⌘"; selected: window.section === "automation"; theme: design; compact: window.navigationCompact; Layout.fillWidth: true; onClicked: { window.section = "automation"; taskController.refreshAll() } }
+                NavItem { label: qsTr("Media"); glyph: "▶"; selected: window.section === "media"; theme: design; compact: window.navigationCompact; Layout.fillWidth: true; onClicked: { window.section = "media"; taskController.refreshAll() } }
+                NavItem { label: qsTr("Browser"); glyph: "◈"; selected: window.section === "browser"; theme: design; compact: window.navigationCompact; Layout.fillWidth: true; onClicked: { window.section = "browser"; taskController.refreshAll() } }
+                NavItem { label: qsTr("Diagnostics"); glyph: "⌁"; selected: window.section === "diagnostics"; theme: design; compact: window.navigationCompact; Layout.fillWidth: true; onClicked: { window.section = "diagnostics"; taskController.refreshAll() } }
                 Item { Layout.fillHeight: true }
-                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 54; radius: design.radiusSm; color: design.surfaceSubtle; border.color: taskController.connected ? design.border : design.danger; border.width: 1
+                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: window.navigationCompact ? design.touchHeight : 54; radius: design.radiusSm; color: design.surfaceSubtle; border.color: taskController.connected ? design.border : design.danger; border.width: 1
+                    ToolTip.visible: coreStatusMouse.containsMouse && window.navigationCompact
+                    ToolTip.text: taskController.connected ? qsTr("NOVA Core connected") : qsTr("NOVA Core unavailable")
+                    MouseArea { id: coreStatusMouse; anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.NoButton }
                     RowLayout { anchors.fill: parent; anchors.margins: design.spaceSm; spacing: design.spaceSm
                         Rectangle { Layout.preferredWidth: 8; Layout.preferredHeight: 8; radius: 4; color: taskController.connected ? design.success : design.danger }
-                        ColumnLayout { Layout.fillWidth: true; spacing: 1; Label { Layout.fillWidth: true; text: taskController.connected ? qsTr("NOVA Core connected") : qsTr("NOVA Core unavailable"); color: design.textPrimary; font.pixelSize: design.fontCaption; font.weight: Font.DemiBold; elide: Text.ElideRight } Label { Layout.fillWidth: true; text: taskController.connected ? qsTr("Authenticated loopback") : taskController.lastError; color: design.textMuted; font.pixelSize: design.fontMeta; elide: Text.ElideRight } }
+                        ColumnLayout { visible: !window.navigationCompact; Layout.fillWidth: true; spacing: 1; Label { Layout.fillWidth: true; text: taskController.connected ? qsTr("NOVA Core connected") : qsTr("NOVA Core unavailable"); color: design.textPrimary; font.pixelSize: design.fontCaption; font.weight: Font.DemiBold; elide: Text.ElideRight } Label { Layout.fillWidth: true; text: taskController.connected ? qsTr("Authenticated loopback") : taskController.lastError; color: design.textMuted; font.pixelSize: design.fontMeta; elide: Text.ElideRight } }
                     }
                 }
-                ActionButton { Layout.fillWidth: true; text: "⚙  " + qsTr("Settings"); tone: "quiet"; dark: window.dark; theme: design; onClicked: settingsDialog.open() }
+                ActionButton { Layout.fillWidth: true; text: window.navigationCompact ? "⚙" : "⚙  " + qsTr("Settings"); tone: "quiet"; dark: window.dark; theme: design; Accessible.name: qsTr("Settings"); onClicked: settingsDialog.open() }
             }
         }
         Rectangle {
@@ -118,14 +123,14 @@ ApplicationWindow {
                 spacing: 0
                 Rectangle {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 80
+                    Layout.preferredHeight: design.appHeaderHeight
                     color: design.backdrop
                     border.color: design.border
                     border.width: 1
                     RowLayout {
                         anchors.fill: parent
-                        anchors.leftMargin: design.spaceXl
-                        anchors.rightMargin: design.spaceXl
+                        anchors.leftMargin: design.pageGutter(window.width)
+                        anchors.rightMargin: design.pageGutter(window.width)
                         spacing: design.spaceMd
                         ColumnLayout { Layout.fillWidth: true; spacing: 1; Label { text: window.pageTitle(); color: design.textPrimary; font.pixelSize: design.fontPage; font.weight: Font.DemiBold } Label { text: window.section === "library" ? qsTr("%1 visible of %2 tasks from NOVA Core").arg(list.count).arg(taskController.downloads.count) : qsTr("Live state from the authenticated NOVA Core"); color: design.textSecondary; font.pixelSize: design.fontCaption } }
                         ThemedTextField { id: search; visible: window.section === "library"; Layout.preferredWidth: Math.min(320, Math.max(200, window.width * .24)); placeholderText: qsTr("Search name, URL or category  ·  Ctrl+F"); leadingGlyph: "⌕"; assistiveText: qsTr("Filter downloads by name, URL, or category"); Accessible.name: qsTr("Search downloads"); theme: design; dark: window.dark; onTextChanged: window.applyLibraryFilters() }
@@ -140,8 +145,8 @@ ApplicationWindow {
                     color: design.backdrop
                     ColumnLayout {
                         anchors.fill: parent
-                        anchors.leftMargin: design.spaceXl
-                        anchors.rightMargin: design.spaceXl
+                        anchors.leftMargin: design.pageGutter(window.width)
+                        anchors.rightMargin: design.pageGutter(window.width)
                         spacing: design.spaceXs
                         RowLayout { Layout.fillWidth: true; spacing: design.spaceSm
                             ThemedComboBox { id: categoryBox; theme: design; dark: window.dark; Layout.preferredWidth: 172; model: ["", "other", "document", "program", "compressed", "video", "audio"]; displayText: currentText.length === 0 ? qsTr("All categories") : currentText; onActivated: { window.categoryFilter = currentText; window.applyLibraryFilters() } }
@@ -167,8 +172,8 @@ ApplicationWindow {
                 StackLayout {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    Layout.leftMargin: design.spaceXl
-                    Layout.rightMargin: design.spaceXl
+                    Layout.leftMargin: design.pageGutter(window.width)
+                    Layout.rightMargin: design.pageGutter(window.width)
                     Layout.bottomMargin: design.spaceLg
                     currentIndex: window.section === "queue" ? 1 : window.section === "automation" ? 2 : window.section === "media" ? 3 : window.section === "browser" ? 4 : window.section === "diagnostics" ? 5 : 0
                     Item {
@@ -195,7 +200,7 @@ ApplicationWindow {
                     IntegrationPage { surface: design.surface; textColor: design.textPrimary; muted: design.textSecondary; theme: design }
                     DiagnosticsPage { surface: design.surface; textColor: design.textPrimary; muted: design.textSecondary; theme: design }
                 }
-                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 32; color: design.backdrop; border.color: design.border; border.width: 1
+                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: design.statusBarHeight; color: design.backdrop; border.color: design.border; border.width: 1
                     RowLayout { anchors.fill: parent; anchors.leftMargin: design.spaceXl; anchors.rightMargin: design.spaceXl
                         StatusBadge { status: taskController.connected ? "connected" : "offline"; labelOverride: taskController.connected ? qsTr("Core online") : qsTr("Offline"); dark: window.dark; theme: design }
                         Label { text: taskController.selectedIds.length > 0 ? qsTr("%1 tasks selected").arg(taskController.selectedIds.length) : qsTr("Ready"); color: design.textSecondary; font.pixelSize: design.fontMeta }

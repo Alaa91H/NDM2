@@ -30,8 +30,15 @@ Item {
     signal cancelRequested()
     signal deleteRequested()
 
-    height: compact ? 70 : 86
+    height: compact ? (theme ? theme.rowHeightCompact : 70) : (theme ? theme.rowHeightComfortable : 86)
     width: ListView.view ? ListView.view.width : 1000
+    focus: ListView.isCurrentItem
+    Accessible.role: Accessible.ListItem
+    Accessible.name: name + ", " + status + ", " + Math.round(progress * 100) + qsTr(" percent")
+    Accessible.description: errorMessage.length > 0 ? errorMessage : qsTr("Press Enter to open details. Use the context-menu key for available actions.")
+    Keys.onReturnPressed: root.detailsRequested()
+    Keys.onEnterPressed: root.detailsRequested()
+    Keys.onMenuPressed: contextMenu.popup()
 
     function bytes(value) { if (value <= 0) return "—"; var u = ["B", "KB", "MB", "GB", "TB"], i = 0; while (value >= 1024 && i < u.length - 1) { value /= 1024; i++ } return value.toFixed(i === 0 ? 0 : 1) + " " + u[i] }
     function duration(seconds) { if (seconds <= 0 || !isFinite(seconds)) return "—"; var h = Math.floor(seconds / 3600), m = Math.floor((seconds % 3600) / 60), s = Math.floor(seconds % 60); return h > 0 ? h + "h " + m + "m" : m > 0 ? m + "m " + s + "s" : s + "s" }
@@ -57,7 +64,8 @@ Item {
             acceptedButtons: Qt.LeftButton | Qt.RightButton
             cursorShape: Qt.PointingHandCursor
             onClicked: function(mouse) {
-                if (mouse.button === Qt.RightButton) { root.activated(false); contextMenu.popup(rowMouse, mouse.x, mouse.y); return }
+                if (mouse.button === Qt.RightButton) { root.activated(false); if (ListView.view) ListView.view.currentIndex = index; contextMenu.popup(rowMouse, mouse.x, mouse.y); return }
+                if (ListView.view) ListView.view.currentIndex = index
                 root.activated((mouse.modifiers & Qt.ControlModifier) || (mouse.modifiers & Qt.ShiftModifier))
             }
             onDoubleClicked: root.detailsRequested()
@@ -87,7 +95,7 @@ Item {
                     from: 0; to: 1; value: Math.max(0, Math.min(1, root.progress))
                     Accessible.name: qsTr("Progress %1 percent").arg(Math.round(root.progress * 100))
                     background: Rectangle { implicitHeight: 5; radius: 3; color: theme ? theme.controlFill : "#363636" }
-                    contentItem: Item { Rectangle { width: parent.visualPosition * parent.width; height: parent.height; radius: 3; color: theme ? theme.statusColor(root.status) : "#6CCB9A"; Behavior on width { NumberAnimation { duration: 140 } } } }
+                    contentItem: Item { Rectangle { width: parent.visualPosition * parent.width; height: parent.height; radius: 3; color: theme ? theme.statusColor(root.status) : "#6CCB9A"; Behavior on width { NumberAnimation { duration: theme ? theme.durationNormal : 140 } } } }
                 }
                 RowLayout { Layout.fillWidth: true; Label { text: Math.round(root.progress * 100) + "%"; color: theme ? theme.textSecondary : "#D0D0D0"; font.pixelSize: theme ? theme.fontMeta : 11 } Item { Layout.fillWidth: true } Label { text: root.connections > 0 ? qsTr("%1 connections").arg(root.connections) : ""; color: theme ? theme.textMuted : "#A6A6A6"; font.pixelSize: theme ? theme.fontMeta : 11 } }
             }
@@ -98,24 +106,17 @@ Item {
         }
     }
 
-    Menu {
+    FluentMenu {
         id: contextMenu
-        padding: theme ? theme.spaceXs : 4
-        width: 196
-        background: Rectangle { radius: theme ? theme.radiusMd : 8; color: theme ? theme.surfaceRaised : "#323232"; border.color: theme ? theme.borderStrong : "#626262"; border.width: 1 }
-        delegate: MenuItem {
-            id: menuDelegate
-            implicitHeight: theme ? theme.controlHeight : 32
-            contentItem: Text { text: menuDelegate.text; color: menuDelegate.enabled ? (theme ? theme.textPrimary : "#FFFFFF") : (theme ? theme.textMuted : "#A6A6A6"); verticalAlignment: Text.AlignVCenter; leftPadding: theme ? theme.spaceSm : 8; font.pixelSize: theme ? theme.fontBody : 13 }
-            background: Rectangle { radius: theme ? theme.radiusXs : 4; color: menuDelegate.highlighted ? (theme ? theme.surfaceHover : "#3A3A3A") : "transparent" }
-        }
+        theme: root.theme
+        dark: root.dark
         MenuItem { text: qsTr("Open details"); onTriggered: root.detailsRequested() }
-        MenuSeparator { contentItem: Rectangle { implicitHeight: 1; color: theme ? theme.border : "#454545" } }
+        MenuSeparator { }
         MenuItem { visible: root.canPause(); text: qsTr("Pause"); onTriggered: root.pauseRequested() }
         MenuItem { visible: root.canResume(); text: qsTr("Resume"); onTriggered: root.resumeRequested() }
         MenuItem { visible: root.canRetry(); text: qsTr("Retry"); onTriggered: root.retryRequested() }
         MenuItem { text: qsTr("Cancel"); enabled: root.status !== "completed" && root.status !== "cancelled"; onTriggered: root.cancelRequested() }
-        MenuSeparator { contentItem: Rectangle { implicitHeight: 1; color: theme ? theme.border : "#454545" } }
+        MenuSeparator { }
         MenuItem { text: qsTr("Delete"); onTriggered: root.deleteRequested() }
     }
 }

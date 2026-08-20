@@ -40,7 +40,7 @@ WorkspaceWindow {
                 delegate: InfoCard {
                     required property var modelData
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 86
+                    Layout.preferredHeight: theme ? theme.metricCardHeight : 86
                     theme: root.theme
                     contentPadding: theme ? theme.spaceMd : 12
                     RowLayout {
