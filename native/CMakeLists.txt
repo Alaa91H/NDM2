@@ -53,6 +53,17 @@ install(TARGETS NDM2
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
+# Produce the platform-appropriate Qt runtime and QML deployment at install time.
+# On Windows and macOS this delegates to Qt's deployment tools; on Linux it still
+# installs the application's QML module for the release bundle.
+qt_generate_deploy_qml_app_script(
+    TARGET NDM2
+    FILENAME_VARIABLE ndm2_deploy_script
+    NO_UNSUPPORTED_PLATFORM_ERROR
+    DEPLOY_USER_QML_MODULES_ON_UNSUPPORTED_PLATFORM
+)
+install(SCRIPT ${ndm2_deploy_script})
+
 if(BUILD_TESTING)
     qt_add_executable(NDM2ModelTests
         tests/DownloadModelTest.cpp

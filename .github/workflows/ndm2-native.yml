@@ -1,0 +1,161 @@
+name: NDM2 Native Package
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ndm2-native-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package-linux:
+    name: Package NDM2 native Linux client
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install Qt and packaging dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            cmake \
+            ninja-build \
+            qt6-base-dev \
+            qt6-base-dev-tools \
+            qt6-declarative-dev \
+            qt6-declarative-dev-tools \
+            qt6-tools-dev-tools
+
+      - name: Configure NDM2 Release build
+        run: cmake -S . -B build-native-release -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build NDM2
+        run: cmake --build build-native-release --parallel 2
+
+      - name: Test NDM2 model layer
+        run: ctest --test-dir build-native-release --output-on-failure
+
+      - name: Package NDM2 with Qt runtime
+        run: |
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" \
+            scripts/package_linux_rc.sh build-native-release 3.0.0
+
+      - name: Verify extracted native package
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$(find release -maxdepth 1 -type f -name 'NDM2-3.0.0-linux-*.tar.gz' -print -quit)"
+          test -n "$archive"
+          test -s "$archive"
+
+          verify_root="$RUNNER_TEMP/ndm2-native-verify"
+          runtime_dir="$RUNNER_TEMP/ndm2-runtime"
+          rm -rf "$verify_root" "$runtime_dir"
+          mkdir -p "$verify_root" "$runtime_dir"
+          chmod 700 "$runtime_dir"
+          tar -xzf "$archive" -C "$verify_root"
+
+          bundle="$(find "$verify_root" -mindepth 1 -maxdepth 1 -type d -name 'NDM2-*' -print -quit)"
+          test -x "$bundle/bin/NDM2"
+          test -x "$bundle/ndm2"
+          test -f "$bundle/plugins/platforms/libqoffscreen.so"
+          test -d "$bundle/qml/QtQuick"
+
+          set +e
+          XDG_RUNTIME_DIR="$runtime_dir" QT_QPA_PLATFORM=offscreen \
+            timeout 4s "$bundle/ndm2" --daemon-endpoint http://127.0.0.1:3199 \
+            > "$RUNNER_TEMP/ndm2-native-smoke.log" 2>&1
+          status=$?
+          set -e
+          cat "$RUNNER_TEMP/ndm2-native-smoke.log"
+          test "$status" -eq 124
+          ! grep -qiE 'module .* is not installed|could not find the Qt platform plugin|failed to load|QML.*error' \
+            "$RUNNER_TEMP/ndm2-native-smoke.log"
+
+      - name: Generate package checksum
+        run: sha256sum release/NDM2-3.0.0-linux-*.tar.gz > release/NDM2-3.0.0-linux-SHA256SUMS.txt
+
+      - name: Upload NDM2 native package
+        uses: actions/upload-artifact@v7
+        with:
+          name: NDM2-native-linux-amd64-${{ github.sha }}
+          path: |
+            release/NDM2-3.0.0-linux-*.tar.gz
+            release/NDM2-3.0.0-linux-SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  package-windows:
+    name: Package NDM2 native Windows installer
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.4.3'
+          host: windows
+          target: desktop
+          arch: win64_msvc2019_64
+          cache: true
+
+      - name: Install native build tools
+        shell: pwsh
+        run: choco install ninja nsis -y --no-progress
+
+      - name: Configure NDM2 Release build
+        shell: pwsh
+        run: cmake -S . -B build-native-release -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build NDM2
+        shell: pwsh
+        run: cmake --build build-native-release --parallel 2
+
+      - name: Test NDM2 model layer
+        shell: pwsh
+        run: ctest --test-dir build-native-release --output-on-failure
+
+      - name: Build NDM2 installer
+        shell: pwsh
+        run: |
+          cpack --config build-native-release/CPackConfig.cmake -G NSIS -B package-native
+          $installer = Get-ChildItem package-native -File -Filter '*.exe' | Select-Object -First 1
+          if (-not $installer) {
+            throw 'CPack did not produce an NDM2 NSIS installer.'
+          }
+          New-Item -ItemType Directory -Force release | Out-Null
+          Copy-Item $installer.FullName 'release/NDM2-3.0.0-windows-x64-setup.exe' -Force
+
+      - name: Generate installer checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash 'release/NDM2-3.0.0-windows-x64-setup.exe' -Algorithm SHA256).Hash.ToLower()
+          "$hash  NDM2-3.0.0-windows-x64-setup.exe" | Out-File 'release/NDM2-3.0.0-windows-x64-SHA256SUMS.txt' -Encoding ascii
+
+      - name: Upload NDM2 native installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: NDM2-native-windows-x64-${{ github.sha }}
+          path: |
+            release/NDM2-3.0.0-windows-x64-setup.exe
+            release/NDM2-3.0.0-windows-x64-SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30

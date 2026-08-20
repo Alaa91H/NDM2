@@ -27,7 +27,7 @@ done < <(ldd "$source_binary" | awk '/Qt6/ {print $3}' | sort -u)
 
 qt_plugin_dir="$(qtpaths6 --plugin-dir)"
 qt_qml_dir="$(qtpaths6 --query QT_INSTALL_QML)"
-for plugin in platforms/libqxcb.so imageformats/libqico.so imageformats/libqjpeg.so imageformats/libqgif.so imageformats/libqsvg.so; do
+for plugin in platforms/libqxcb.so platforms/libqoffscreen.so imageformats/libqico.so imageformats/libqjpeg.so imageformats/libqgif.so imageformats/libqsvg.so; do
     if [[ -f "$qt_plugin_dir/$plugin" ]]; then
         install -m 0644 -D "$qt_plugin_dir/$plugin" "$release_root/plugins/$plugin"
     fi
