@@ -242,8 +242,12 @@ jobs:
           test -x "$bundle/bin/NDM2"
           test -x "$bundle/bin/nova-core"
           test -x "$bundle/start-nova-core.sh"
-          dpkg-deb --contents "release/NDM2-$NDM2_PACKAGE_VERSION-linux-${{ matrix.architecture }}.deb" | grep -q 'opt/ndm2/bin/nova-core'
-          rpm -qlp "release/NDM2-$NDM2_PACKAGE_VERSION-linux-${{ matrix.architecture }}.rpm" | grep -q '/opt/ndm2/bin/nova-core'
+          deb_contents="$RUNNER_TEMP/ndm2-deb-contents.txt"
+          rpm_contents="$RUNNER_TEMP/ndm2-rpm-contents.txt"
+          dpkg-deb --contents "release/NDM2-$NDM2_PACKAGE_VERSION-linux-${{ matrix.architecture }}.deb" > "$deb_contents"
+          rpm -qlp "release/NDM2-$NDM2_PACKAGE_VERSION-linux-${{ matrix.architecture }}.rpm" > "$rpm_contents"
+          grep -q 'opt/ndm2/bin/nova-core' "$deb_contents"
+          grep -q '/opt/ndm2/bin/nova-core' "$rpm_contents"
           sha256sum release/NDM2-$NDM2_PACKAGE_VERSION-linux-${{ matrix.architecture }}.* \
             > "release/NDM2-$NDM2_PACKAGE_VERSION-linux-${{ matrix.architecture }}-SHA256SUMS.txt"
 
