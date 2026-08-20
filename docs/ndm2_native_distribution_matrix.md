@@ -6,20 +6,20 @@ The native distribution workflow builds the **Qt Quick NDM2 client** and the mat
 
 | Target | GitHub-hosted runner | Native package | Included NOVA Core |
 |---|---|---|---|
-| Linux x64 | `ubuntu-24.04` | Portable `tar.gz` | `bin/nova-core` |
-| Linux ARM64 | `ubuntu-24.04-arm` | Portable `tar.gz` | `bin/nova-core` |
+| Linux x64 | `ubuntu-24.04` | AppImage, DEB, RPM | `bin/nova-core` |
+| Linux ARM64 | `ubuntu-24.04-arm` | AppImage, DEB, RPM | `bin/nova-core` |
 | Windows x64 | `windows-latest` | NSIS installer | `bin/nova-core.exe` |
-| Windows ARM64 | `windows-11-arm` | Portable ZIP | `bin/nova-core.exe` |
-| macOS Intel | `macos-15-intel` | DMG and ZIP | `NDM2.app/Contents/MacOS/nova-core` |
-| macOS Apple Silicon | `macos-15` | DMG and ZIP | `NDM2.app/Contents/MacOS/nova-core` |
+| Windows ARM64 | `windows-11-arm` | NSIS installer | `bin/nova-core.exe` |
+| macOS Intel | `macos-15-intel` | DMG and `.app` | `NDM2.app/Contents/MacOS/nova-core` |
+| macOS Apple Silicon | `macos-15` | DMG and `.app` | `NDM2.app/Contents/MacOS/nova-core` |
 
 > GitHub provides the Intel macOS, Apple-Silicon macOS, Linux ARM64, and Windows ARM64 runner labels used by this matrix.[1]
 
 ## Linux distribution support
 
-The Linux artifacts are **portable Qt bundles**, rather than distribution-locked packages. They bundle the NDM2 executable, Qt runtime, QML modules, platform plugins, icon assets, and a platform-matched NOVA Core. This approach is intended for current glibc-based desktop distributions that provide the normal graphics stack required by Qt, including mainstream Debian/Ubuntu, Fedora/RHEL-family, Arch-family, openSUSE, and derivatives.
+Linux receives the same format families as the primary CI: **AppImage**, **DEB**, and **RPM**. All three carry the NDM2 executable, bundled Qt runtime and QML modules, platform plugins, icon assets, and a platform-matched NOVA Core. The AppImage is the portable choice for current glibc-based desktops; DEB targets Debian/Ubuntu derivatives and RPM targets Fedora/RHEL/openSUSE-style systems.
 
-No binary package can honestly guarantee execution on every historical or non-glibc Linux distribution. The workflow therefore validates the portable bundle on Ubuntu 24.04 for both x64 and ARM64 and preserves the existing legacy CI outputs for AppImage, DEB, and RPM where those formats are appropriate.
+No binary package can honestly guarantee execution on every historical or non-glibc Linux distribution. The workflow validates all three formats on Ubuntu 24.04 for x64 and ARM64, and verifies that both DEB and RPM payloads contain the expected Core binary.
 
 ## Core launch and authentication
 

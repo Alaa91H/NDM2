@@ -15,6 +15,7 @@ concurrency:
 env:
   NDM2_PACKAGE_VERSION: 3.0.0
   QT_VERSION: '6.8.*'
+  NODE_VERSION: '22'
 
 jobs:
   package-native:
@@ -64,6 +65,16 @@ jobs:
         with:
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -142,6 +153,37 @@ jobs:
           brew untap aws/tap 2>/dev/null || true
           brew install cmake ninja pkg-config curl openssl@3 brotli zstd nghttp2 libssh2 ffmpeg
 
+      - name: Install Node dependencies
+        shell: bash
+        run: pnpm install --frozen-lockfile
+
+      - name: Synchronize translation indexes
+        shell: bash
+        run: pnpm run i18n:sync
+
+      - name: Fetch Core engines
+        shell: bash
+        run: pnpm run fetch-engines
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NOVA_REQUIRE_FFMPEG: '1'
+          NOVA_BUNDLE_SYSTEM_FFMPEG: '1'
+          NOVA_NATIVE_CURL_OPTIONAL: ${{ runner.os == 'Windows' && '1' || '0' }}
+
+      - name: Stage Tauri resources
+        shell: bash
+        run: pnpm run tauri:prepare
+
+      - name: Export native curl link environment
+        if: matrix.family == 'windows'
+        shell: pwsh
+        run: node scripts/print-native-curl-env.mjs | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8NoBOM
+
+      - name: Verify native curl manifest
+        if: matrix.family == 'windows'
+        shell: bash
+        run: pnpm run native-curl:verify
+
       - name: Build NOVA Core and native client
         if: matrix.family != 'windows'
         shell: bash
@@ -167,25 +209,43 @@ jobs:
           cmake --build build-native-release --parallel 2
           ctest --test-dir build-native-release --output-on-failure
 
-      - name: Package Linux portable bundle
+      - name: Package Linux AppImage, DEB, and RPM
         if: matrix.family == 'linux'
         shell: bash
         run: |
           set -euo pipefail
+          case "${{ matrix.architecture }}" in
+            amd64) appimage_arch=x86_64 ;;
+            arm64) appimage_arch=aarch64 ;;
+          esac
+          appimagetool="$RUNNER_TEMP/appimagetool-$appimage_arch.AppImage"
+          curl --fail --location --retry 3 --retry-delay 2 \
+            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-$appimage_arch.AppImage" \
+            --output "$appimagetool"
+          chmod +x "$appimagetool"
           SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" \
             scripts/package_linux_rc.sh build-native-release "$NDM2_PACKAGE_VERSION" \
               "$PWD/src-tauri/target/release/nova" "${{ matrix.architecture }}"
-          archive="release/NDM2-$NDM2_PACKAGE_VERSION-linux-${{ matrix.architecture }}.tar.gz"
-          test -s "$archive"
+          APPIMAGE_EXTRACT_AND_RUN=1 scripts/package_linux_formats.sh "$NDM2_PACKAGE_VERSION" \
+            "${{ matrix.architecture }}" "$appimagetool"
+          for package in \
+            "release/NDM2-$NDM2_PACKAGE_VERSION-linux-${{ matrix.architecture }}.AppImage" \
+            "release/NDM2-$NDM2_PACKAGE_VERSION-linux-${{ matrix.architecture }}.deb" \
+            "release/NDM2-$NDM2_PACKAGE_VERSION-linux-${{ matrix.architecture }}.rpm"; do
+            test -s "$package"
+          done
           verify_root="$RUNNER_TEMP/ndm2-package-verify"
           rm -rf "$verify_root"
           mkdir -p "$verify_root"
-          tar -xzf "$archive" -C "$verify_root"
+          tar -xzf "release/NDM2-$NDM2_PACKAGE_VERSION-linux-${{ matrix.architecture }}.tar.gz" -C "$verify_root"
           bundle="$verify_root/NDM2-$NDM2_PACKAGE_VERSION-linux-${{ matrix.architecture }}"
           test -x "$bundle/bin/NDM2"
           test -x "$bundle/bin/nova-core"
           test -x "$bundle/start-nova-core.sh"
-          sha256sum "$archive" > "release/NDM2-$NDM2_PACKAGE_VERSION-linux-${{ matrix.architecture }}-SHA256SUMS.txt"
+          dpkg-deb --contents "release/NDM2-$NDM2_PACKAGE_VERSION-linux-${{ matrix.architecture }}.deb" | grep -q 'opt/ndm2/bin/nova-core'
+          rpm -qlp "release/NDM2-$NDM2_PACKAGE_VERSION-linux-${{ matrix.architecture }}.rpm" | grep -q '/opt/ndm2/bin/nova-core'
+          sha256sum release/NDM2-$NDM2_PACKAGE_VERSION-linux-${{ matrix.architecture }}.* \
+            > "release/NDM2-$NDM2_PACKAGE_VERSION-linux-${{ matrix.architecture }}-SHA256SUMS.txt"
 
       - name: Package Windows installer or portable bundle
         if: matrix.family == 'windows'
@@ -197,17 +257,10 @@ jobs:
           if (-not (Test-Path 'package-native-stage\bin\NDM2.exe') -or -not (Test-Path 'package-native-stage\bin\nova-core.exe')) {
             throw 'The staged Windows package is missing NDM2 or NOVA Core.'
           }
-          if ('${{ matrix.architecture }}' -eq 'x64') {
-            cpack --config build-native-release\CPackConfig.cmake -G NSIS -B package-native
-            $installer = Get-ChildItem package-native -File -Filter '*.exe' | Select-Object -First 1
-            if (-not $installer) { throw 'CPack did not produce the NDM2 NSIS installer.' }
-            Copy-Item $installer.FullName "release\NDM2-$env:NDM2_PACKAGE_VERSION-windows-x64-setup.exe" -Force
-          } else {
-            $bundle = "package-native-stage\NDM2-$env:NDM2_PACKAGE_VERSION-windows-arm64"
-            New-Item -ItemType Directory -Force $bundle | Out-Null
-            Copy-Item 'package-native-stage\*' $bundle -Recurse -Force
-            Compress-Archive -Path $bundle -DestinationPath "release\NDM2-$env:NDM2_PACKAGE_VERSION-windows-arm64.zip" -Force
-          }
+          cpack --config build-native-release\CPackConfig.cmake -G NSIS -B package-native
+          $installer = Get-ChildItem package-native -File -Filter '*.exe' | Select-Object -First 1
+          if (-not $installer) { throw 'CPack did not produce the NDM2 NSIS installer.' }
+          Copy-Item $installer.FullName "release\NDM2-$env:NDM2_PACKAGE_VERSION-windows-${{ matrix.architecture }}-setup.exe" -Force
           $artifact = Get-ChildItem release -File | Select-Object -First 1
           $hash = (Get-FileHash $artifact.FullName -Algorithm SHA256).Hash.ToLower()
           "$hash  $($artifact.Name)" | Out-File "release\NDM2-$env:NDM2_PACKAGE_VERSION-windows-${{ matrix.architecture }}-SHA256SUMS.txt" -Encoding ascii
@@ -219,13 +272,13 @@ jobs:
           set -euo pipefail
           chmod +x scripts/package_macos_rc.sh
           scripts/package_macos_rc.sh build-native-release "$NDM2_PACKAGE_VERSION" "${{ matrix.architecture }}" "$PWD/src-tauri/target/release/nova"
-          test -s "release/NDM2-$NDM2_PACKAGE_VERSION-macos-${{ matrix.architecture }}.zip"
           test -s "release/NDM2-$NDM2_PACKAGE_VERSION-macos-${{ matrix.architecture }}.dmg"
-          test -x "package-native-stage/NDM2.app/Contents/MacOS/NDM2"
-          test -x "package-native-stage/NDM2.app/Contents/MacOS/nova-core"
-          shasum -a 256 "release/NDM2-$NDM2_PACKAGE_VERSION-macos-${{ matrix.architecture }}.zip" \
-            "release/NDM2-$NDM2_PACKAGE_VERSION-macos-${{ matrix.architecture }}.dmg" \
+          test -x "release/NDM2.app/Contents/MacOS/NDM2"
+          test -x "release/NDM2.app/Contents/MacOS/nova-core"
+          shasum -a 256 "release/NDM2-$NDM2_PACKAGE_VERSION-macos-${{ matrix.architecture }}.dmg" \
             > "release/NDM2-$NDM2_PACKAGE_VERSION-macos-${{ matrix.architecture }}-SHA256SUMS.txt"
+          find "release/NDM2.app" -type f -exec shasum -a 256 {} \; \
+            > "release/NDM2-$NDM2_PACKAGE_VERSION-macos-${{ matrix.architecture }}-APP-SHA256SUMS.txt"
 
       - name: Upload NDM2 package and checksum
         uses: actions/upload-artifact@v7

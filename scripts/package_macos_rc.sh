@@ -9,7 +9,7 @@ core_binary="${4:-}"
 staging_root="$root/package-native-stage"
 release_dir="$root/release"
 app_bundle="$staging_root/NDM2.app"
-zip_archive="$release_dir/NDM2-$version-macos-$architecture.zip"
+release_app="$release_dir/NDM2.app"
 dmg_archive="$release_dir/NDM2-$version-macos-$architecture.dmg"
 
 if [[ ! -x "$build_dir/native/NDM2.app/Contents/MacOS/NDM2" ]]; then
@@ -21,7 +21,7 @@ if [[ -z "$core_binary" || ! -x "$core_binary" ]]; then
     exit 1
 fi
 
-rm -rf "$staging_root" "$zip_archive" "$dmg_archive"
+rm -rf "$staging_root" "$release_app" "$dmg_archive"
 mkdir -p "$staging_root" "$release_dir"
 cmake --install "$build_dir" --prefix "$staging_root"
 
@@ -51,8 +51,8 @@ Start the authenticated loopback Core explicitly, then launch NDM2 with the same
 NOVA Core remains loopback-only. Credentials are never stored in this archive.
 EOF
 
-# Keep a direct ZIP for clean extraction and a native DMG for Finder installation.
-ditto -c -k --sequesterRsrc --keepParent "$app_bundle" "$zip_archive"
+# Match the primary CI deliverables: an installable app bundle and Finder-ready DMG.
+cp -a "$app_bundle" "$release_app"
 hdiutil create -volname "NOVA Download Manager" -srcfolder "$staging_root" -ov -format UDZO "$dmg_archive" >/dev/null
 
-printf 'app=%s\nzip=%s\ndmg=%s\n' "$app_bundle" "$zip_archive" "$dmg_archive"
+printf 'app=%s\ndmg=%s\n' "$release_app" "$dmg_archive"
