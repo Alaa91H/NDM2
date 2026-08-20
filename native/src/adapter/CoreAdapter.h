@@ -60,6 +60,7 @@ public:
     QVariantMap ffmpegStatus() const { return m_ffmpegStatus; }
     QVariantMap retryPolicy() const { return m_retryPolicy; }
 
+    void reportLocalStartupError(const QString &message);
     Q_INVOKABLE void refresh();
     Q_INVOKABLE void refreshAll();
     Q_INVOKABLE void createDownload(const QVariantMap &payload);
@@ -145,6 +146,7 @@ private:
     QString m_token;
     bool m_connected = false;
     QString m_lastError;
+    bool m_hasLocalStartupError = false;
     QVariantMap m_capabilities;
     DownloadModel m_downloads;
     QVariantList m_queueEntries;

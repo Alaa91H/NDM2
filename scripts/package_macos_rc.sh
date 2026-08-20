@@ -42,13 +42,14 @@ cat > "$staging_root/README.txt" <<EOF
 NDM2 $version macOS release
 
 This archive contains the native NDM2 app plus a platform-matched NOVA Core.
-Start the authenticated loopback Core explicitly, then launch NDM2 with the same token:
+Open NDM2 normally from Finder or with:
 
-  export NOVA_INTEGRATION_API_TOKEN="<at-least-24-character-secret>"
-  "NDM2.app/Contents/MacOS/start-nova-core"
-  NOVA_DAEMON_TOKEN="\$NOVA_INTEGRATION_API_TOKEN" open -a NDM2
+  open -a NDM2
 
-NOVA Core remains loopback-only. Credentials are never stored in this archive.
+On each launch, NDM2 starts its bundled NOVA Core on loopback and supplies a fresh in-memory
+bearer token automatically. No credential is stored in this archive. For advanced external-Core
+diagnostics, provide NOVA_DAEMON_URL and NOVA_DAEMON_TOKEN before opening NDM2; explicit values
+are preserved and NDM2 will not start a second Core.
 EOF
 
 # Match the primary CI deliverables: an installable app bundle and Finder-ready DMG.

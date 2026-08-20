@@ -122,20 +122,22 @@ NDM2 $version Linux Release Candidate
 
 This bundle contains the native NDM2 client, the platform-matched NOVA Core, Qt runtime
 libraries, XCB platform plugin, image plugins and Qt Quick QML modules required by this client.
-Start the authenticated loopback Core explicitly, then launch the client with the same token:
+Start NDM2 directly:
 
-  export NOVA_INTEGRATION_API_TOKEN="<at-least-24-character-secret>"
-  ./start-nova-core.sh
-  NOVA_DAEMON_TOKEN="\${NOVA_INTEGRATION_API_TOKEN}" ./ndm2 --daemon-endpoint http://127.0.0.1:3199
+  ./ndm2
+
+On each launch, NDM2 starts its bundled NOVA Core on loopback and supplies a fresh in-memory
+bearer token automatically. No token is stored in this bundle or requires manual configuration.
 
 To create a desktop shortcut that uses the bundled NOVA icon, run:
 
   ./install-desktop-shortcut.sh
 
-The NOVA Core binds only to loopback and requires its per-launch bearer credential. Supply
-it through NOVA_INTEGRATION_API_TOKEN for the bundled Core and NOVA_DAEMON_TOKEN (or
---daemon-token) for NDM2; do not place credentials in this bundle. The host still needs a
-supported Linux graphics stack and the system libraries required by Qt's XCB platform integration.
+The NOVA Core binds only to loopback and uses a per-launch bearer credential. For advanced
+external-Core diagnostics, use NOVA_DAEMON_URL plus NOVA_DAEMON_TOKEN (or the matching command
+line options); NDM2 will preserve those explicit values and will not start a second Core. The host
+still needs a supported Linux graphics stack and the system libraries required by Qt's XCB platform
+integration.
 EOF
 
 find "$release_root" -type f -print0 | xargs -0r touch -h -d "@${SOURCE_DATE_EPOCH:-0}"

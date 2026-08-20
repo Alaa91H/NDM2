@@ -9,8 +9,6 @@ Menu {
 
     padding: theme ? theme.spaceXs : 4
     implicitWidth: 208
-    Accessible.role: Accessible.PopupMenu
-
     background: Rectangle {
         radius: control.theme ? control.theme.radiusMd : 8
         color: control.theme ? control.theme.surfaceRaised : "#323232"

@@ -8,6 +8,7 @@ qt_add_executable(NDM2
     src/models/DownloadFilterProxyModel.cpp
     src/services/TaskController.cpp
     src/services/SettingsService.cpp
+    src/services/BundledCoreLauncher.cpp
     src/platform/DesktopService.cpp
     $<$<PLATFORM_ID:Windows>:resources/ndm2.rc>
 )
@@ -82,8 +83,8 @@ install(TARGETS NDM2
 )
 
 # The native Qt client always speaks only to an authenticated loopback NOVA
-# Core. Packaging can add a platform-matched Core binary, but it never embeds
-# a token or changes how the client authenticates.
+# Core. Packaging places a platform-matched Core beside NDM2; at runtime NDM2
+# starts that binary with a fresh per-launch token and never embeds a secret.
 if(NDM2_CORE_BINARY)
     if(NOT EXISTS "${NDM2_CORE_BINARY}")
         message(FATAL_ERROR "NDM2_CORE_BINARY does not exist: ${NDM2_CORE_BINARY}")

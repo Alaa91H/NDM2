@@ -2,6 +2,7 @@
 #include "platform/DesktopService.h"
 #include "services/SettingsService.h"
 #include "services/TaskController.h"
+#include "services/BundledCoreLauncher.h"
 
 #include <QAction>
 #include <QCommandLineOption>
@@ -54,8 +55,31 @@ int main(int argc, char *argv[]) {
     QCommandLineOption tokenOption({"t", "daemon-token"}, "Daemon bearer token. Prefer NOVA_DAEMON_TOKEN in non-interactive environments.", "token", qEnvironmentVariable("NOVA_DAEMON_TOKEN"));
     parser.addOption(endpointOption); parser.addOption(tokenOption); parser.process(app);
 
-    CoreAdapter adapter(parser.value(endpointOption), parser.value(tokenOption));
+    const bool externalConnectionRequested = parser.isSet(endpointOption)
+        || parser.isSet(tokenOption)
+        || qEnvironmentVariableIsSet("NOVA_DAEMON_URL")
+        || qEnvironmentVariableIsSet("NOVA_DAEMON_TOKEN");
+    BundledCoreLauncher bundledCore(parser.value(endpointOption), parser.value(tokenOption), externalConnectionRequested);
+    CoreAdapter adapter(bundledCore.endpoint(), bundledCore.token());
     TaskController controller(&adapter); SettingsService settings; DesktopService desktop;
+
+    QTimer coreStartupRetry;
+    coreStartupRetry.setInterval(350);
+    int coreStartupAttempts = 0;
+    QObject::connect(&bundledCore, &BundledCoreLauncher::coreStarted, &app, [&] {
+        coreStartupAttempts = 0;
+        coreStartupRetry.start();
+    });
+    QObject::connect(&coreStartupRetry, &QTimer::timeout, &app, [&] {
+        adapter.refreshAll();
+        if (adapter.connected() || ++coreStartupAttempts >= 30) coreStartupRetry.stop();
+    });
+    QObject::connect(&adapter, &CoreAdapter::connectionChanged, &app, [&] {
+        if (adapter.connected()) coreStartupRetry.stop();
+    });
+    QObject::connect(&bundledCore, &BundledCoreLauncher::coreLaunchFailed, &adapter, &CoreAdapter::reportLocalStartupError);
+    QObject::connect(&bundledCore, &BundledCoreLauncher::managedCoreExited, &adapter, &CoreAdapter::reportLocalStartupError);
+    bundledCore.start();
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("taskController", &controller);
     engine.rootContext()->setContextProperty("settingsService", &settings);

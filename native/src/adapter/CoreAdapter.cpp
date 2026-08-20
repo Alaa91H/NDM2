@@ -58,6 +58,12 @@ QNetworkRequest CoreAdapter::requestFor(const QString &path) const {
 void CoreAdapter::setConnected(bool connected) { if (m_connected == connected) return; m_connected = connected; emit connectionChanged(); }
 void CoreAdapter::setError(const QString &message) { if (m_lastError == message) return; m_lastError = message; emit lastErrorChanged(); }
 
+void CoreAdapter::reportLocalStartupError(const QString &message) {
+    m_hasLocalStartupError = true;
+    setConnected(false);
+    setError(message);
+}
+
 DownloadRecord CoreAdapter::parseDownload(const QJsonObject &item) const {
     DownloadRecord record;
     record.id = string(item, "id"); record.name = string(item, "name"); record.url = string(item, "url");
@@ -83,9 +89,11 @@ void CoreAdapter::refresh() {
         const auto status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         const auto body = reply->readAll(); const auto error = reply->error(); reply->deleteLater();
         if (error != QNetworkReply::NoError || status < 200 || status >= 300) {
-            setConnected(false); setError(tr("Unable to refresh downloads: %1").arg(status > 0 ? QString::number(status) : tr("daemon unavailable"))); return;
+            setConnected(false);
+            if (!m_hasLocalStartupError) setError(tr("Unable to refresh downloads: %1").arg(status > 0 ? QString::number(status) : tr("daemon unavailable")));
+            return;
         }
-        loadDownloads(body); setConnected(true); setError({});
+        loadDownloads(body); m_hasLocalStartupError = false; setConnected(true); setError({});
     });
 }
 
@@ -138,8 +146,8 @@ void CoreAdapter::consumeEventStream() {
             else if (line.startsWith("data:")) dataParts.push_back(line.mid(5).trimmed());
         }
         const auto data = dataParts.join("\n");
-        if (event == "downloads") { loadDownloads(data); setConnected(true); setError({}); }
-        else if (event == "downloads-delta") { loadDownloadDelta(data); setConnected(true); setError({}); }
+        if (event == "downloads") { loadDownloads(data); m_hasLocalStartupError = false; setConnected(true); setError({}); }
+        else if (event == "downloads-delta") { loadDownloadDelta(data); m_hasLocalStartupError = false; setConnected(true); setError({}); }
     }
 }
 
