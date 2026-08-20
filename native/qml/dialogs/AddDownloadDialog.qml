@@ -37,10 +37,10 @@ Dialog {
         urlField.forceActiveFocus()
     }
 
-    background: Rectangle { color: design.surface; radius: design.radiusLg; border.color: design.borderStrong; border.width: 1 }
+    background: Rectangle { color: design.backdrop; radius: design.radiusXl; border.color: design.borderStrong; border.width: 1 }
 
     header: Rectangle {
-        height: 82
+        height: 76
         color: "transparent"
         RowLayout {
             anchors.fill: parent
@@ -178,7 +178,7 @@ Dialog {
     }
 
     footer: Rectangle {
-        height: 74
+        height: 68
         color: "transparent"
         RowLayout {
             anchors.fill: parent

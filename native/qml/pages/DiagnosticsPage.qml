@@ -67,13 +67,13 @@ Item {
                 delegate: InfoCard {
                     required property var modelData
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 72
+                    Layout.preferredHeight: 76
                     theme: root.theme
                     emphasized: true
-                    contentPadding: root.theme ? root.theme.spaceSm : 8
+                    contentPadding: root.theme ? root.theme.spaceMd : 12
                     RowLayout {
                         Layout.fillWidth: true
-                        Rectangle { Layout.preferredWidth: 30; Layout.preferredHeight: 30; radius: 15; color: Qt.rgba(modelData[3].r, modelData[3].g, modelData[3].b, .14); Text { anchors.centerIn: parent; text: modelData[2]; color: modelData[3]; font.pixelSize: 14; font.weight: Font.DemiBold } }
+                        Rectangle { Layout.preferredWidth: 30; Layout.preferredHeight: 30; radius: root.theme ? root.theme.radiusSm : 6; color: Qt.rgba(modelData[3].r, modelData[3].g, modelData[3].b, .14); Text { anchors.centerIn: parent; text: modelData[2]; color: modelData[3]; font.pixelSize: 14; font.weight: Font.DemiBold } }
                         ColumnLayout {
                             Layout.fillWidth: true
                             spacing: 1
@@ -115,9 +115,9 @@ Item {
                         visible: root.logMatches(modelData)
                         width: logList.width
                         height: visible ? logLabel.implicitHeight + 14 : 0
-                        radius: root.theme ? root.theme.radiusSm : 7
-                        color: Qt.rgba(root.levelColor(modelData.level).r, root.levelColor(modelData.level).g, root.levelColor(modelData.level).b, .07)
-                        border.color: Qt.rgba(root.levelColor(modelData.level).r, root.levelColor(modelData.level).g, root.levelColor(modelData.level).b, .20)
+                        radius: root.theme ? root.theme.radiusXs : 4
+                        color: Qt.rgba(root.levelColor(modelData.level).r, root.levelColor(modelData.level).g, root.levelColor(modelData.level).b, .09)
+                        border.color: Qt.rgba(root.levelColor(modelData.level).r, root.levelColor(modelData.level).g, root.levelColor(modelData.level).b, .24)
                         RowLayout {
                             anchors.fill: parent
                             anchors.margins: 7
@@ -143,15 +143,15 @@ Item {
                 TabBar {
                     id: detailsTabs
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 36
-                    background: Rectangle { radius: root.theme ? root.theme.radiusSm : 7; color: root.theme ? root.theme.surfaceSubtle : "#0E192B"; border.color: root.theme ? root.theme.border : "#243651" }
+                    Layout.preferredHeight: root.theme ? root.theme.controlHeight : 32
+                    background: Rectangle { radius: root.theme ? root.theme.radiusSm : 6; color: root.theme ? root.theme.controlFill : "#363636"; border.color: root.theme ? root.theme.border : "#454545" }
                     Repeater {
                         model: [qsTr("Task trace"), qsTr("Capabilities")]
                         delegate: TabButton {
                             required property string modelData
                             text: modelData
                             contentItem: Text { text: parent.text; color: parent.checked ? "#FFFFFF" : (root.theme ? root.theme.textSecondary : root.muted); font.pixelSize: root.theme ? root.theme.fontCaption : 11; font.weight: parent.checked ? Font.DemiBold : Font.Normal; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                            background: Rectangle { anchors.margins: 3; radius: root.theme ? root.theme.radiusSm : 7; color: parent.checked ? (root.theme ? root.theme.accent : "#5C9EFF") : parent.hovered ? (root.theme ? root.theme.surfaceRaised : "#172741") : "transparent" }
+                            background: Rectangle { anchors.margins: 3; radius: root.theme ? root.theme.radiusXs : 4; color: parent.checked ? (root.theme ? root.theme.selection : "#1B5C7D") : parent.hovered ? (root.theme ? root.theme.surfaceHover : "#3A3A3A") : "transparent"; border.width: parent.checked ? 1 : 0; border.color: root.theme ? root.theme.focus : "#60CDFF" }
                         }
                     }
                 }

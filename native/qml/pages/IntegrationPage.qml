@@ -5,21 +5,80 @@ import "../components"
 
 Item {
     id: root
-    property color surface: "#142239"
-    property color textColor: "#EAF1FF"
-    property color muted: "#8D9AB0"
+
+    property color surface: "#292929"
+    property color textColor: "#FFFFFF"
+    property color muted: "#A6A6A6"
     property var theme: null
+
+    function bridgeOnline() {
+        var value = taskController.browserHealth.status || taskController.browserHealth.ok || ""
+        return value === true || String(value).toLowerCase() === "connected" || String(value).toLowerCase() === "ok" || String(value).toLowerCase() === "healthy"
+    }
+
     ColumnLayout {
         anchors.fill: parent
-        spacing: 14
-        SectionHeader { title: qsTr("Browser integration"); subtitle: qsTr("Uses the preserved NOVA browser-extension and native-messaging bridge; NDM2 opens no new network endpoint."); actionText: qsTr("Refresh status"); theme: root.theme; onActionRequested: taskController.refreshAll() }
-        Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 156; radius: theme ? theme.radiusLg : 12; color: root.surface; border.color: theme ? theme.border : "#233653"
-            GridLayout { anchors.fill: parent; anchors.margins: 18; columns: 2; columnSpacing: 30; rowSpacing: 14
-                Repeater { model: [[qsTr("Bridge status"), taskController.browserHealth.status || taskController.browserHealth.ok || qsTr("Unavailable")], [qsTr("Native messaging"), taskController.browserHealth.nativeMessaging || taskController.browserHealth.native_messaging || "—"], [qsTr("Extension version"), taskController.browserHealth.version || "—"], [qsTr("Core endpoint"), taskController.endpoint || "loopback"]]
-                    delegate: ColumnLayout { required property var modelData; Layout.fillWidth: true; spacing: 3; Label { text: modelData[0]; color: root.muted; font.pixelSize: theme ? theme.fontMeta : 10 } Label { Layout.fillWidth: true; text: modelData[1]; color: root.textColor; font.pixelSize: theme ? theme.fontBody : 13; elide: Text.ElideRight } }
+        spacing: theme ? theme.spaceLg : 16
+
+        SectionHeader { title: qsTr("Browser integration"); subtitle: qsTr("The preserved NOVA extension and native-messaging bridge remain the only browser handoff path."); actionText: qsTr("Refresh status"); theme: root.theme; onActionRequested: taskController.refreshAll() }
+
+        InfoCard {
+            Layout.fillWidth: true
+            theme: root.theme
+            emphasized: true
+            RowLayout {
+                Layout.fillWidth: true
+                Rectangle { Layout.preferredWidth: 42; Layout.preferredHeight: 42; radius: root.theme ? root.theme.radiusMd : 8; color: root.bridgeOnline() ? (root.theme ? root.theme.successSoft : "#183C2B") : (root.theme ? root.theme.warningSoft : "#493A1C"); Text { anchors.centerIn: parent; text: root.bridgeOnline() ? "✓" : "◈"; color: root.bridgeOnline() ? (root.theme ? root.theme.success : "#6CCB9A") : (root.theme ? root.theme.warning : "#F5C96A"); font.pixelSize: 20; font.weight: Font.DemiBold } }
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 2
+                    Label { text: root.bridgeOnline() ? qsTr("Browser bridge is ready") : qsTr("Browser bridge status"); color: root.theme ? root.theme.textPrimary : root.textColor; font.pixelSize: root.theme ? root.theme.fontBodyLarge : 15; font.weight: Font.DemiBold }
+                    Label { Layout.fillWidth: true; text: taskController.browserHealth.status || taskController.browserHealth.ok || qsTr("No bridge status reported by NOVA Core yet."); color: root.theme ? root.theme.textSecondary : root.muted; font.pixelSize: root.theme ? root.theme.fontCaption : 12; elide: Text.ElideRight }
+                }
+                StatusBadge { status: root.bridgeOnline() ? "completed" : "waiting"; labelOverride: root.bridgeOnline() ? qsTr("Connected") : qsTr("Checking"); dark: settingsService.dark; theme: root.theme }
+            }
+        }
+
+        GridLayout {
+            Layout.fillWidth: true
+            columns: width < 620 ? 1 : 2
+            columnSpacing: theme ? theme.spaceMd : 12
+            rowSpacing: theme ? theme.spaceMd : 12
+            Repeater {
+                model: [
+                    [qsTr("Native messaging"), taskController.browserHealth.nativeMessaging || taskController.browserHealth.native_messaging || "—", "⌁"],
+                    [qsTr("Extension version"), taskController.browserHealth.version || "—", "◫"],
+                    [qsTr("Core endpoint"), taskController.endpoint || "loopback", "⌂"],
+                    [qsTr("Authentication"), qsTr("Authenticated loopback bridge"), "✓"]
+                ]
+                delegate: InfoCard {
+                    required property var modelData
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 94
+                    theme: root.theme
+                    contentPadding: theme ? theme.spaceMd : 12
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Rectangle { Layout.preferredWidth: 28; Layout.preferredHeight: 28; radius: root.theme ? root.theme.radiusXs : 4; color: root.theme ? root.theme.surfaceSubtle : "#252525"; Text { anchors.centerIn: parent; text: modelData[2]; color: root.theme ? root.theme.information : "#75BEFF"; font.pixelSize: 14 } }
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 3
+                            Label { text: modelData[0]; color: root.theme ? root.theme.textMuted : root.muted; font.pixelSize: root.theme ? root.theme.fontCaption : 12 }
+                            Label { Layout.fillWidth: true; text: modelData[1]; color: root.theme ? root.theme.textPrimary : root.textColor; font.pixelSize: root.theme ? root.theme.fontBody : 13; font.weight: Font.Medium; elide: Text.ElideRight }
+                        }
+                    }
                 }
             }
         }
-        Label { Layout.fillWidth: true; text: qsTr("Browser configuration, installation and authentication remain owned by the existing secured NOVA extension/native-messaging flow. A live browser-handoff test requires installed browser profiles and is recorded as a manual release test."); wrapMode: Text.Wrap; color: root.muted; font.pixelSize: 11 }
+
+        InfoCard {
+            Layout.fillWidth: true
+            theme: root.theme
+            RowLayout {
+                Layout.fillWidth: true
+                Rectangle { Layout.preferredWidth: 28; Layout.preferredHeight: 28; radius: root.theme ? root.theme.radiusXs : 4; color: root.theme ? root.theme.accentSoft : "#17445D"; Text { anchors.centerIn: parent; text: "i"; color: root.theme ? root.theme.accent : "#60CDFF"; font.pixelSize: 15; font.weight: Font.DemiBold } }
+                Label { Layout.fillWidth: true; text: qsTr("Browser configuration, installation, and authentication remain owned by the existing secured NOVA extension/native-messaging flow. NDM2 opens no additional network endpoint."); wrapMode: Text.Wrap; color: root.theme ? root.theme.textSecondary : root.muted; font.pixelSize: root.theme ? root.theme.fontCaption : 12 }
+            }
+        }
     }
 }

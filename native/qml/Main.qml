@@ -15,7 +15,7 @@ ApplicationWindow {
     visible: true
     title: "NDM2"
     readonly property bool dark: settingsService.dark
-    color: design.background
+    color: design.backdrop
     property string section: "library"
     property string statusFilter: ""
     property string categoryFilter: ""
@@ -74,7 +74,7 @@ ApplicationWindow {
         spacing: 0
         Rectangle {
             Layout.fillHeight: true
-            Layout.preferredWidth: window.width < 1110 ? 224 : 252
+            Layout.preferredWidth: window.width < 1110 ? 220 : 244
             color: design.sidebar
             border.color: design.border
             border.width: 1
@@ -86,7 +86,7 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 52
                     Rectangle { width: 36; height: 36; radius: design.radiusSm; color: design.accent; clip: true; Image { anchors.fill: parent; anchors.margins: 3; source: "qrc:/branding/app-icon.png"; fillMode: Image.PreserveAspectFit; smooth: true; mipmap: true } }
-                    ColumnLayout { spacing: 0; Label { text: "NDM2"; color: design.textPrimary; font.pixelSize: 18; font.weight: Font.Bold } Label { text: qsTr("Native Download Manager"); color: design.textSecondary; font.pixelSize: design.fontMeta } }
+                    ColumnLayout { spacing: 0; Label { text: qsTr("NOVA Download Manager"); color: design.textPrimary; font.pixelSize: design.fontBodyLarge; font.weight: Font.DemiBold } Label { text: qsTr("Native desktop client"); color: design.textSecondary; font.pixelSize: design.fontMeta } }
                 }
                 Label { text: qsTr("LIBRARY"); color: design.textMuted; font.pixelSize: design.fontMeta; font.weight: Font.DemiBold; Layout.topMargin: design.spaceLg; Layout.leftMargin: design.spaceSm }
                 NavItem { label: qsTr("All downloads"); glyph: "▦"; selected: window.section === "library" && window.statusFilter === ""; count: taskController.downloads.count; theme: design; Layout.fillWidth: true; onClicked: window.setSection("library", "") }
@@ -112,14 +112,14 @@ ApplicationWindow {
         Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            color: design.background
+            color: design.backdrop
             ColumnLayout {
                 anchors.fill: parent
                 spacing: 0
                 Rectangle {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 86
-                    color: design.surface
+                    Layout.preferredHeight: 80
+                    color: design.backdrop
                     border.color: design.border
                     border.width: 1
                     RowLayout {
@@ -135,9 +135,9 @@ ApplicationWindow {
                 }
                 Rectangle {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: window.section === "library" ? 104 : 0
+                    Layout.preferredHeight: window.section === "library" ? 100 : 0
                     visible: window.section === "library"
-                    color: design.background
+                    color: design.backdrop
                     ColumnLayout {
                         anchors.fill: parent
                         anchors.leftMargin: design.spaceXl
@@ -167,14 +167,14 @@ ApplicationWindow {
                 StackLayout {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    Layout.leftMargin: design.spaceLg
-                    Layout.rightMargin: design.spaceLg
-                    Layout.bottomMargin: design.spaceMd
+                    Layout.leftMargin: design.spaceXl
+                    Layout.rightMargin: design.spaceXl
+                    Layout.bottomMargin: design.spaceLg
                     currentIndex: window.section === "queue" ? 1 : window.section === "automation" ? 2 : window.section === "media" ? 3 : window.section === "browser" ? 4 : window.section === "diagnostics" ? 5 : 0
                     Item {
                         Rectangle { anchors.fill: parent; color: design.surface; radius: design.radiusLg; border.color: design.border
                             ColumnLayout { anchors.fill: parent; spacing: 0
-                                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 40; color: design.surfaceSubtle; radius: design.radiusLg
+                                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 38; color: design.surfaceSubtle; radius: design.radiusLg
                                     RowLayout { anchors.fill: parent; anchors.leftMargin: design.spaceLg; anchors.rightMargin: design.spaceLg; spacing: design.spaceMd
                                         Label { Layout.preferredWidth: 34; text: "" }
                                         Label { Layout.preferredWidth: Math.max(205, parent.width * .29); text: qsTr("NAME"); color: design.textMuted; font.pixelSize: design.fontMeta; font.weight: Font.DemiBold }
@@ -195,7 +195,7 @@ ApplicationWindow {
                     IntegrationPage { surface: design.surface; textColor: design.textPrimary; muted: design.textSecondary; theme: design }
                     DiagnosticsPage { surface: design.surface; textColor: design.textPrimary; muted: design.textSecondary; theme: design }
                 }
-                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 34; color: design.surface; border.color: design.border; border.width: 1
+                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 32; color: design.backdrop; border.color: design.border; border.width: 1
                     RowLayout { anchors.fill: parent; anchors.leftMargin: design.spaceXl; anchors.rightMargin: design.spaceXl
                         StatusBadge { status: taskController.connected ? "connected" : "offline"; labelOverride: taskController.connected ? qsTr("Core online") : qsTr("Offline"); dark: window.dark; theme: design }
                         Label { text: taskController.selectedIds.length > 0 ? qsTr("%1 tasks selected").arg(taskController.selectedIds.length) : qsTr("Ready"); color: design.textSecondary; font.pixelSize: design.fontMeta }

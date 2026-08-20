@@ -8,18 +8,19 @@ TextArea {
     property bool dark: true
     property bool monospace: false
 
-    padding: 10
+    padding: theme ? theme.spaceMd : 12
     selectByMouse: true
     wrapMode: TextEdit.WrapAnywhere
-    color: theme ? theme.textPrimary : "#F0F5FF"
-    placeholderTextColor: theme ? theme.textMuted : "#71829B"
-    font.pixelSize: theme ? theme.fontCaption : 11
-    font.family: monospace ? (theme ? theme.fontMono : "monospace") : font.family
+    color: theme ? theme.textPrimary : "#FFFFFF"
+    placeholderTextColor: theme ? theme.textMuted : "#A6A6A6"
+    font.pixelSize: theme ? theme.fontCaption : 12
+    font.family: monospace ? (theme ? theme.fontMono : "monospace") : ""
 
     background: Rectangle {
-        radius: theme ? theme.radiusSm : 7
-        color: control.readOnly ? (control.theme ? control.theme.surfaceSubtle : "#0E192B") : (control.theme ? control.theme.surfaceRaised : "#172741")
+        radius: control.theme ? control.theme.radiusSm : 6
+        color: control.readOnly ? (control.theme ? control.theme.surfaceSubtle : "#252525") : (control.hovered ? (control.theme ? control.theme.controlHover : "#454545") : (control.theme ? control.theme.controlFill : "#363636"))
         border.width: control.activeFocus ? 2 : 1
-        border.color: control.activeFocus ? (control.theme ? control.theme.accent : "#5C9EFF") : (control.theme ? control.theme.border : "#243651")
+        border.color: control.activeFocus ? (control.theme ? control.theme.focus : "#60CDFF") : (control.theme ? control.theme.border : "#454545")
+        Behavior on color { ColorAnimation { duration: 100 } }
     }
 }
