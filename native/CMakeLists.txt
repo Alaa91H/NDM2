@@ -23,8 +23,14 @@ qt_add_qml_module(NDM2
     QML_FILES
         qml/Main.qml
         qml/components/Theme.qml
+        qml/components/InfoCard.qml
+        qml/components/IconButton.qml
         qml/components/ThemedCheckBox.qml
         qml/components/ThemedComboBox.qml
+        qml/components/ThemedSpinBox.qml
+        qml/components/ThemedSwitch.qml
+        qml/components/ThemedTextArea.qml
+        qml/components/ThemedTextField.qml
         qml/components/ActionButton.qml
         qml/components/SectionHeader.qml
         qml/components/StatusBadge.qml

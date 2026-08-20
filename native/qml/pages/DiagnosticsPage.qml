@@ -5,12 +5,14 @@ import "../components"
 
 Item {
     id: root
+
     property color surface: "#142239"
     property color textColor: "#EAF1FF"
     property color muted: "#8D9AB0"
     property var theme: null
     property string searchText: ""
     property string viewLevel: "all"
+
     function safeText(value) {
         return String(value === undefined || value === null ? "" : value)
             .replace(/Bearer\s+[A-Za-z0-9._~+\/-]+=*/gi, "Bearer [REDACTED]")
@@ -21,41 +23,153 @@ Item {
         var text = root.safeText((item.message || "") + " " + (item.target || "") + " " + (item.task || "")).toLowerCase()
         return (root.viewLevel === "all" || level === root.viewLevel) && (root.searchText.length === 0 || text.indexOf(root.searchText.toLowerCase()) >= 0)
     }
+    function levelColor(level) {
+        var normalized = String(level || "info").toLowerCase()
+        if (normalized === "error") return theme ? theme.danger : "#FF8493"
+        if (normalized === "warn") return theme ? theme.warning : "#FFC56A"
+        if (normalized === "debug" || normalized === "trace") return theme ? theme.textMuted : "#71829B"
+        return theme ? theme.information : "#8DBDFF"
+    }
+
     ColumnLayout {
         anchors.fill: parent
-        spacing: 14
-        RowLayout { Layout.fillWidth: true
-            SectionHeader { Layout.fillWidth: true; title: qsTr("Core diagnostics"); subtitle: qsTr("Live NOVA health, declared capabilities, safe logs and the selected Core task trace."); theme: root.theme }
-            ComboBox { id: levelSelector; model: ["trace", "debug", "info", "warn", "error"]; currentIndex: Math.max(0, model.indexOf(taskController.logLevel)); Accessible.name: qsTr("Core log level"); onActivated: taskController.setLogLevel(currentText) }
+        spacing: theme ? theme.spaceMd : 12
+
+        RowLayout {
+            Layout.fillWidth: true
+            SectionHeader {
+                Layout.fillWidth: true
+                title: qsTr("Core diagnostics")
+                subtitle: qsTr("Live health, safe logs, declared capabilities and selected task trace from NOVA Core.")
+                theme: root.theme
+            }
+            ThemedComboBox { id: levelSelector; Layout.preferredWidth: 148; model: ["trace", "debug", "info", "warn", "error"]; currentIndex: Math.max(0, model.indexOf(taskController.logLevel)); theme: root.theme; dark: settingsService.dark; Accessible.name: qsTr("Core log level"); onActivated: taskController.setLogLevel(currentText) }
             ActionButton { text: qsTr("Refresh"); tone: "secondary"; dark: settingsService.dark; theme: root.theme; onClicked: taskController.refreshAll() }
         }
-        GridLayout { Layout.fillWidth: true; columns: 4; columnSpacing: 12; rowSpacing: 12
-            Repeater { model: [[qsTr("Client"), "NDM2 " + ndm2Version], [qsTr("Core"), taskController.health.status || (taskController.connected ? qsTr("Online") : qsTr("Offline"))], [qsTr("Core version"), taskController.health.version || taskController.capabilities.version || "—"], [qsTr("Active"), taskController.statistics.activeDownloads || 0], [qsTr("Queue"), taskController.queueEntries.length], [qsTr("Bandwidth"), (taskController.bandwidth.globalLimitKbps || taskController.bandwidth.global_limit_kbps || 0) + " KB/s"], [qsTr("Profile"), taskController.activeProfile || "—"], [qsTr("Completed"), taskController.statistics.totalCompleted || 0], [qsTr("Failed"), taskController.statistics.totalFailed || 0]]
-                delegate: Rectangle { required property var modelData; Layout.fillWidth: true; Layout.preferredHeight: 64; radius: 10; color: Qt.rgba(1,1,1,.035); border.color: Qt.rgba(1,1,1,.08); ColumnLayout { anchors.fill: parent; anchors.margins: 10; spacing: 2; Label { text: modelData[0]; color: root.muted; font.pixelSize: 10 } Label { Layout.fillWidth: true; text: modelData[1]; color: root.textColor; font.pixelSize: 13; font.weight: Font.Medium; elide: Text.ElideRight } } }
-            }
-        }
-        SplitView { Layout.fillWidth: true; Layout.fillHeight: true; orientation: Qt.Horizontal
-            Rectangle { SplitView.preferredWidth: parent.width * .52; color: root.surface; radius: 12; border.color: "#233653"
-                ColumnLayout { anchors.fill: parent; anchors.margins: 10; spacing: 8
-                    RowLayout { Layout.fillWidth: true; TextField { Layout.fillWidth: true; placeholderText: qsTr("Filter safe log text") ; onTextChanged: root.searchText = text } ComboBox { model: ["all", "trace", "debug", "info", "warn", "error"]; onActivated: root.viewLevel = currentText } ActionButton { text: qsTr("Reload"); tone: "quiet"; dark: settingsService.dark; theme: root.theme; onClicked: taskController.refreshLogsFiltered(500, root.viewLevel) } }
-                    ListView { id: logList; Layout.fillWidth: true; Layout.fillHeight: true; clip: true; model: taskController.logs
-                        delegate: Label { required property var modelData; visible: root.logMatches(modelData); width: logList.width; padding: 8; text: root.safeText((modelData.timestamp || "") + "  " + (modelData.level || "INFO") + "  " + (modelData.message || "")); color: String(modelData.level || "").toUpperCase() === "ERROR" ? (root.theme ? root.theme.danger : "#FF8794") : String(modelData.level || "").toUpperCase() === "WARN" ? (root.theme ? root.theme.warning : "#FFBE69") : (root.theme ? root.theme.textSecondary : "#B4C2D7"); wrapMode: Text.Wrap; font.family: "monospace"; font.pixelSize: 10 }
-                        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+
+        GridLayout {
+            Layout.fillWidth: true
+            columns: width < 860 ? 3 : 5
+            columnSpacing: theme ? theme.spaceSm : 8
+            rowSpacing: theme ? theme.spaceSm : 8
+            Repeater {
+                model: [
+                    [qsTr("Client"), "NDM2 " + ndm2Version, "◆", theme ? theme.accent : "#5C9EFF"],
+                    [qsTr("Core"), taskController.health.status || (taskController.connected ? qsTr("Online") : qsTr("Offline")), "●", taskController.connected ? (theme ? theme.success : "#58D6A3") : (theme ? theme.danger : "#FF8493")],
+                    [qsTr("Core version"), taskController.health.version || taskController.capabilities.version || "—", "⌁", theme ? theme.information : "#8DBDFF"],
+                    [qsTr("Active"), taskController.statistics.activeDownloads || 0, "↓", theme ? theme.success : "#58D6A3"],
+                    [qsTr("Queue"), taskController.queueEntries.length, "≡", theme ? theme.warning : "#FFC56A"],
+                    [qsTr("Bandwidth"), (taskController.bandwidth.globalLimitKbps || taskController.bandwidth.global_limit_kbps || 0) + " KB/s", "↯", theme ? theme.accent : "#5C9EFF"],
+                    [qsTr("Profile"), taskController.activeProfile || "—", "◈", theme ? theme.information : "#8DBDFF"],
+                    [qsTr("Completed"), taskController.statistics.totalCompleted || 0, "✓", theme ? theme.success : "#58D6A3"],
+                    [qsTr("Failed"), taskController.statistics.totalFailed || 0, "!", theme ? theme.danger : "#FF8493"]
+                ]
+                delegate: InfoCard {
+                    required property var modelData
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 72
+                    theme: root.theme
+                    emphasized: true
+                    contentPadding: root.theme ? root.theme.spaceSm : 8
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Rectangle { Layout.preferredWidth: 30; Layout.preferredHeight: 30; radius: 15; color: Qt.rgba(modelData[3].r, modelData[3].g, modelData[3].b, .14); Text { anchors.centerIn: parent; text: modelData[2]; color: modelData[3]; font.pixelSize: 14; font.weight: Font.DemiBold } }
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 1
+                            Label { text: modelData[0]; color: root.theme ? root.theme.textMuted : root.muted; font.pixelSize: root.theme ? root.theme.fontMeta : 10 }
+                            Label { Layout.fillWidth: true; text: modelData[1]; color: root.theme ? root.theme.textPrimary : root.textColor; font.pixelSize: root.theme ? root.theme.fontBody : 12; font.weight: Font.DemiBold; elide: Text.ElideRight }
+                        }
                     }
                 }
             }
-            Rectangle { SplitView.preferredWidth: parent.width * .48; color: root.surface; radius: 12; border.color: "#233653"
-                TabBar { id: detailsTabs; width: parent.width; TabButton { text: qsTr("Task trace") } TabButton { text: qsTr("Capabilities") } }
-                StackLayout { anchors.top: detailsTabs.bottom; anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: 12; currentIndex: detailsTabs.currentIndex
-                    ColumnLayout { spacing: 8
-                        Label { text: qsTr("Selected task trace"); color: root.textColor; font.pixelSize: 13; font.weight: Font.DemiBold }
-                        Label { Layout.fillWidth: true; text: taskController.selectedDownload.name || qsTr("Select a task in the library to request its Core trace."); color: root.muted; wrapMode: Text.Wrap; font.pixelSize: 10 }
-                        TextArea { Layout.fillWidth: true; Layout.fillHeight: true; readOnly: true; selectByMouse: true; text: Object.keys(taskController.taskTrace).length > 0 ? root.safeText(JSON.stringify(taskController.taskTrace, null, 2)) : qsTr("No per-task trace was returned by the Core."); wrapMode: Text.WrapAnywhere; font.family: "monospace"; font.pixelSize: 10 }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            spacing: theme ? theme.spaceMd : 12
+
+            InfoCard {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.preferredWidth: parent.width * .55
+                theme: root.theme
+                Label { text: qsTr("Safe Core log"); color: root.theme ? root.theme.textPrimary : root.textColor; font.pixelSize: root.theme ? root.theme.fontBodyLarge : 14; font.weight: Font.DemiBold }
+                Label { text: qsTr("Sensitive authorization values are redacted before display."); color: root.theme ? root.theme.textSecondary : root.muted; font.pixelSize: root.theme ? root.theme.fontCaption : 11 }
+                RowLayout {
+                    Layout.fillWidth: true
+                    ThemedTextField { Layout.fillWidth: true; placeholderText: qsTr("Filter safe log text"); leadingGlyph: "⌕"; theme: root.theme; dark: settingsService.dark; onTextChanged: root.searchText = text }
+                    ThemedComboBox { Layout.preferredWidth: 116; model: ["all", "trace", "debug", "info", "warn", "error"]; theme: root.theme; dark: settingsService.dark; onActivated: root.viewLevel = currentText }
+                    IconButton { glyph: "↻"; accessibleLabel: qsTr("Reload logs"); theme: root.theme; dark: settingsService.dark; onClicked: taskController.refreshLogsFiltered(500, root.viewLevel) }
+                }
+                ListView {
+                    id: logList
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+                    spacing: 2
+                    model: taskController.logs
+                    delegate: Rectangle {
+                        required property var modelData
+                        visible: root.logMatches(modelData)
+                        width: logList.width
+                        height: visible ? logLabel.implicitHeight + 14 : 0
+                        radius: root.theme ? root.theme.radiusSm : 7
+                        color: Qt.rgba(root.levelColor(modelData.level).r, root.levelColor(modelData.level).g, root.levelColor(modelData.level).b, .07)
+                        border.color: Qt.rgba(root.levelColor(modelData.level).r, root.levelColor(modelData.level).g, root.levelColor(modelData.level).b, .20)
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.margins: 7
+                            spacing: 8
+                            Label { Layout.preferredWidth: 42; text: String(modelData.level || "info").toUpperCase(); color: root.levelColor(modelData.level); font.pixelSize: root.theme ? root.theme.fontMeta : 10; font.weight: Font.DemiBold; horizontalAlignment: Text.AlignHCenter }
+                            Label { id: logLabel; Layout.fillWidth: true; text: root.safeText((modelData.timestamp || "") + "  " + (modelData.message || "")); color: root.theme ? root.theme.textSecondary : root.muted; wrapMode: Text.Wrap; font.family: root.theme ? root.theme.fontMono : "monospace"; font.pixelSize: root.theme ? root.theme.fontMeta : 10 }
+                        }
                     }
-                    ColumnLayout { spacing: 8
-                        Label { text: qsTr("Core capability report"); color: root.textColor; font.pixelSize: 13; font.weight: Font.DemiBold }
-                        Label { Layout.fillWidth: true; text: qsTr("This report is provided by the active Core; it never displays the NDM2 daemon token."); color: root.muted; wrapMode: Text.Wrap; font.pixelSize: 10 }
-                        TextArea { Layout.fillWidth: true; Layout.fillHeight: true; readOnly: true; selectByMouse: true; text: root.safeText(JSON.stringify(taskController.capabilities, null, 2)); wrapMode: Text.WrapAnywhere; font.family: "monospace"; font.pixelSize: 10 }
+                    ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+                }
+            }
+
+            InfoCard {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.preferredWidth: parent.width * .45
+                theme: root.theme
+                RowLayout {
+                    Layout.fillWidth: true
+                    Label { text: qsTr("Core inspection"); color: root.theme ? root.theme.textPrimary : root.textColor; font.pixelSize: root.theme ? root.theme.fontBodyLarge : 14; font.weight: Font.DemiBold }
+                    Item { Layout.fillWidth: true }
+                }
+                TabBar {
+                    id: detailsTabs
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 36
+                    background: Rectangle { radius: root.theme ? root.theme.radiusSm : 7; color: root.theme ? root.theme.surfaceSubtle : "#0E192B"; border.color: root.theme ? root.theme.border : "#243651" }
+                    Repeater {
+                        model: [qsTr("Task trace"), qsTr("Capabilities")]
+                        delegate: TabButton {
+                            required property string modelData
+                            text: modelData
+                            contentItem: Text { text: parent.text; color: parent.checked ? "#FFFFFF" : (root.theme ? root.theme.textSecondary : root.muted); font.pixelSize: root.theme ? root.theme.fontCaption : 11; font.weight: parent.checked ? Font.DemiBold : Font.Normal; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                            background: Rectangle { anchors.margins: 3; radius: root.theme ? root.theme.radiusSm : 7; color: parent.checked ? (root.theme ? root.theme.accent : "#5C9EFF") : parent.hovered ? (root.theme ? root.theme.surfaceRaised : "#172741") : "transparent" }
+                        }
+                    }
+                }
+                StackLayout {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    currentIndex: detailsTabs.currentIndex
+                    ColumnLayout {
+                        spacing: root.theme ? root.theme.spaceSm : 8
+                        Label { text: qsTr("Selected task trace"); color: root.theme ? root.theme.textPrimary : root.textColor; font.pixelSize: root.theme ? root.theme.fontBody : 12; font.weight: Font.DemiBold }
+                        Label { Layout.fillWidth: true; text: taskController.selectedDownload.name || qsTr("Select a task in the library to request its Core trace."); color: root.theme ? root.theme.textSecondary : root.muted; wrapMode: Text.Wrap; font.pixelSize: root.theme ? root.theme.fontCaption : 11 }
+                        ThemedTextArea { Layout.fillWidth: true; Layout.fillHeight: true; readOnly: true; monospace: true; text: Object.keys(taskController.taskTrace).length > 0 ? root.safeText(JSON.stringify(taskController.taskTrace, null, 2)) : qsTr("No per-task trace was returned by the Core."); theme: root.theme; dark: settingsService.dark }
+                    }
+                    ColumnLayout {
+                        spacing: root.theme ? root.theme.spaceSm : 8
+                        Label { text: qsTr("Core capability report"); color: root.theme ? root.theme.textPrimary : root.textColor; font.pixelSize: root.theme ? root.theme.fontBody : 12; font.weight: Font.DemiBold }
+                        Label { Layout.fillWidth: true; text: qsTr("Provided by the active Core; the NDM2 daemon token is never shown here."); color: root.theme ? root.theme.textSecondary : root.muted; wrapMode: Text.Wrap; font.pixelSize: root.theme ? root.theme.fontCaption : 11 }
+                        ThemedTextArea { Layout.fillWidth: true; Layout.fillHeight: true; readOnly: true; monospace: true; text: root.safeText(JSON.stringify(taskController.capabilities, null, 2)); theme: root.theme; dark: settingsService.dark }
                     }
                 }
             }

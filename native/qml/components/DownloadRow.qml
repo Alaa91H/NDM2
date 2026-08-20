@@ -29,7 +29,7 @@ Item {
     signal retryRequested()
     signal cancelRequested()
     signal deleteRequested()
-    height: compact ? 70 : 88
+    height: compact ? 74 : 94
     width: ListView.view ? ListView.view.width : 1000
     function bytes(value) { if (value <= 0) return "—"; var u = ["B", "KB", "MB", "GB", "TB"], i = 0; while (value >= 1024 && i < u.length - 1) { value /= 1024; i++ } return value.toFixed(i === 0 ? 0 : 1) + " " + u[i] }
     function duration(seconds) { if (seconds <= 0 || !isFinite(seconds)) return "—"; var h = Math.floor(seconds / 3600), m = Math.floor((seconds % 3600) / 60), s = Math.floor(seconds % 60); return h > 0 ? h + "h " + m + "m" : m > 0 ? m + "m " + s + "s" : s + "s" }
@@ -44,7 +44,7 @@ Item {
         anchors.rightMargin: 5
         radius: theme ? theme.radiusMd : 10
         color: root.selected ? (theme ? theme.selection : "#182F50") : rowMouse.containsMouse ? (theme ? theme.surfaceSubtle : "#142137") : "transparent"
-        border.color: root.selected ? (theme ? theme.borderStrong : "#2D67B4") : rowMouse.containsMouse ? (theme ? theme.border : "transparent") : "transparent"
+        border.color: root.selected ? (theme ? theme.accent : "#5C9EFF") : rowMouse.containsMouse ? (theme ? theme.border : "transparent") : "transparent"
         border.width: root.selected ? 1 : 1
         Behavior on color { ColorAnimation { duration: 100 } }
         MouseArea {
@@ -63,7 +63,7 @@ Item {
             anchors.leftMargin: theme ? theme.spaceMd : 14
             anchors.rightMargin: theme ? theme.spaceMd : 14
             spacing: theme ? theme.spaceMd : 12
-            CheckBox { checked: root.selected; Accessible.name: qsTr("Select %1").arg(root.name); onToggled: if (activeFocus) root.activated(true) }
+            ThemedCheckBox { checked: root.selected; theme: root.theme; dark: root.dark; Accessible.name: qsTr("Select %1").arg(root.name); onToggled: if (activeFocus) root.activated(true) }
             Rectangle { Layout.preferredWidth: 38; Layout.preferredHeight: 38; radius: theme ? theme.radiusSm : 10; color: theme ? theme.accentSoft : "#223654"; Text { anchors.centerIn: parent; text: root.typeGlyph(root.fileType); color: theme ? theme.information : "#8FC0FF"; font.pixelSize: 16; font.weight: Font.DemiBold } }
             ColumnLayout { Layout.preferredWidth: Math.max(205, root.width * .30); Layout.fillHeight: true; spacing: 2
                 Label { Layout.fillWidth: true; text: root.name || qsTr("Untitled download"); elide: Text.ElideRight; color: theme ? theme.textPrimary : "#EAF1FF"; font.pixelSize: theme ? theme.fontBodyLarge : 14; font.weight: Font.Medium; Accessible.name: text }
@@ -78,9 +78,9 @@ Item {
             ColumnLayout { Layout.preferredWidth: Math.max(54, root.width * .06); spacing: 2; Label { text: root.duration(root.eta); color: theme ? theme.textSecondary : "#AAB8CC"; font.pixelSize: theme ? theme.fontBody : 12 } Label { text: qsTr("ETA"); color: theme ? theme.textMuted : "#7F8CA1"; font.pixelSize: theme ? theme.fontMeta : 10 } }
             StatusBadge { Layout.preferredWidth: 92; status: root.status; dark: root.dark; theme: root.theme }
             RowLayout { visible: rowMouse.containsMouse || root.selected; Layout.preferredWidth: visible ? implicitWidth : 0; spacing: 2
-                ToolButton { visible: root.canPause(); text: "Ⅱ"; Accessible.name: qsTr("Pause download"); ToolTip.text: qsTr("Pause"); ToolTip.visible: hovered; onClicked: root.pauseRequested() }
-                ToolButton { visible: root.canResume(); text: "▶"; Accessible.name: qsTr("Resume download"); ToolTip.text: qsTr("Resume"); ToolTip.visible: hovered; onClicked: root.resumeRequested() }
-                ToolButton { visible: root.canRetry(); text: "↻"; Accessible.name: qsTr("Retry download"); ToolTip.text: qsTr("Retry"); ToolTip.visible: hovered; onClicked: root.retryRequested() }
+                IconButton { visible: root.canPause(); glyph: "Ⅱ"; accessibleLabel: qsTr("Pause download"); theme: root.theme; dark: root.dark; onClicked: root.pauseRequested() }
+                IconButton { visible: root.canResume(); glyph: "▶"; accessibleLabel: qsTr("Resume download"); tone: "accent"; theme: root.theme; dark: root.dark; onClicked: root.resumeRequested() }
+                IconButton { visible: root.canRetry(); glyph: "↻"; accessibleLabel: qsTr("Retry download"); theme: root.theme; dark: root.dark; onClicked: root.retryRequested() }
             }
         }
     }

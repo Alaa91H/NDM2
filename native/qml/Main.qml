@@ -118,7 +118,7 @@ ApplicationWindow {
                 spacing: 0
                 Rectangle {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 80
+                    Layout.preferredHeight: 86
                     color: design.surface
                     border.color: design.border
                     border.width: 1
@@ -128,14 +128,14 @@ ApplicationWindow {
                         anchors.rightMargin: design.spaceXl
                         spacing: design.spaceMd
                         ColumnLayout { Layout.fillWidth: true; spacing: 1; Label { text: window.pageTitle(); color: design.textPrimary; font.pixelSize: design.fontPage; font.weight: Font.DemiBold } Label { text: window.section === "library" ? qsTr("%1 visible of %2 tasks from NOVA Core").arg(list.count).arg(taskController.downloads.count) : qsTr("Live state from the authenticated NOVA Core"); color: design.textSecondary; font.pixelSize: design.fontCaption } }
-                        TextField { id: search; visible: window.section === "library"; Layout.preferredWidth: Math.min(310, Math.max(190, window.width * .23)); placeholderText: qsTr("Search name, URL or category  ·  Ctrl+F"); selectByMouse: true; Accessible.name: qsTr("Search downloads"); onTextChanged: window.applyLibraryFilters(); background: Rectangle { radius: design.radiusSm; color: design.surfaceSubtle; border.width: search.activeFocus ? 2 : 1; border.color: search.activeFocus ? design.accent : design.border } leftPadding: 13; rightPadding: 13 }
+                        ThemedTextField { id: search; visible: window.section === "library"; Layout.preferredWidth: Math.min(320, Math.max(200, window.width * .24)); placeholderText: qsTr("Search name, URL or category  ·  Ctrl+F"); leadingGlyph: "⌕"; assistiveText: qsTr("Filter downloads by name, URL, or category"); Accessible.name: qsTr("Search downloads"); theme: design; dark: window.dark; onTextChanged: window.applyLibraryFilters() }
                         ActionButton { text: "↻  " + qsTr("Refresh"); tone: "secondary"; dark: window.dark; theme: design; onClicked: taskController.refreshAll() }
                         ActionButton { text: "+  " + qsTr("Add download"); tone: "primary"; dark: window.dark; theme: design; onClicked: addDialog.open() }
                     }
                 }
                 Rectangle {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: window.section === "library" ? 98 : 0
+                    Layout.preferredHeight: window.section === "library" ? 104 : 0
                     visible: window.section === "library"
                     color: design.background
                     ColumnLayout {
@@ -151,7 +151,7 @@ ApplicationWindow {
                             Item { Layout.fillWidth: true }
                             Label { text: taskController.selectedIds.length > 0 ? qsTr("%1 selected").arg(taskController.selectedIds.length) : qsTr("Ctrl/Cmd-click to select multiple"); color: design.textMuted; font.pixelSize: design.fontMeta }
                         }
-                        Rectangle { Layout.fillWidth: true; Layout.preferredHeight: taskController.selectedIds.length > 0 ? 34 : 0; visible: taskController.selectedIds.length > 0; radius: design.radiusSm; color: design.accentSoft
+                        Rectangle { Layout.fillWidth: true; Layout.preferredHeight: taskController.selectedIds.length > 0 ? 40 : 0; visible: taskController.selectedIds.length > 0; radius: design.radiusMd; color: design.accentSoft; border.width: 1; border.color: design.borderStrong
                             RowLayout { anchors.fill: parent; anchors.leftMargin: design.spaceSm; anchors.rightMargin: design.spaceSm; spacing: design.spaceXs
                                 Label { text: qsTr("Bulk actions"); color: design.textPrimary; font.pixelSize: design.fontCaption; font.weight: Font.DemiBold }
                                 ActionButton { text: qsTr("Pause"); tone: "quiet"; dark: window.dark; theme: design; onClicked: taskController.bulkPause() }
