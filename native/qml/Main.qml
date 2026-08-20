@@ -100,13 +100,13 @@ ApplicationWindow {
                 NavItem { label: qsTr("Browser"); glyph: "◈"; selected: window.section === "browser"; theme: design; Layout.fillWidth: true; onClicked: { window.section = "browser"; taskController.refreshAll() } }
                 NavItem { label: qsTr("Diagnostics"); glyph: "⌁"; selected: window.section === "diagnostics"; theme: design; Layout.fillWidth: true; onClicked: { window.section = "diagnostics"; taskController.refreshAll() } }
                 Item { Layout.fillHeight: true }
-                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 66; radius: design.radiusMd; color: taskController.connected ? design.successSoft : design.dangerSoft; border.color: taskController.connected ? Qt.rgba(design.success.r, design.success.g, design.success.b, .35) : Qt.rgba(design.danger.r, design.danger.g, design.danger.b, .35)
+                Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 54; radius: design.radiusSm; color: design.surfaceSubtle; border.color: taskController.connected ? design.border : design.danger; border.width: 1
                     RowLayout { anchors.fill: parent; anchors.margins: design.spaceSm; spacing: design.spaceSm
-                        StatusBadge { status: taskController.connected ? "connected" : "offline"; labelOverride: taskController.connected ? qsTr("Core connected") : qsTr("Core offline"); dark: window.dark; theme: design }
-                        ColumnLayout { Layout.fillWidth: true; spacing: 1; Label { Layout.fillWidth: true; text: taskController.connected ? qsTr("Authenticated loopback") : taskController.lastError; color: design.textSecondary; font.pixelSize: design.fontMeta; elide: Text.ElideRight } }
+                        Rectangle { Layout.preferredWidth: 8; Layout.preferredHeight: 8; radius: 4; color: taskController.connected ? design.success : design.danger }
+                        ColumnLayout { Layout.fillWidth: true; spacing: 1; Label { Layout.fillWidth: true; text: taskController.connected ? qsTr("NOVA Core connected") : qsTr("NOVA Core unavailable"); color: design.textPrimary; font.pixelSize: design.fontCaption; font.weight: Font.DemiBold; elide: Text.ElideRight } Label { Layout.fillWidth: true; text: taskController.connected ? qsTr("Authenticated loopback") : taskController.lastError; color: design.textMuted; font.pixelSize: design.fontMeta; elide: Text.ElideRight } }
                     }
                 }
-                ActionButton { Layout.fillWidth: true; text: qsTr("Settings"); tone: "quiet"; dark: window.dark; theme: design; onClicked: settingsDialog.open() }
+                ActionButton { Layout.fillWidth: true; text: "⚙  " + qsTr("Settings"); tone: "quiet"; dark: window.dark; theme: design; onClicked: settingsDialog.open() }
             }
         }
         Rectangle {
@@ -144,9 +144,9 @@ ApplicationWindow {
                         anchors.rightMargin: design.spaceXl
                         spacing: design.spaceXs
                         RowLayout { Layout.fillWidth: true; spacing: design.spaceSm
-                            ThemedComboBox { id: categoryBox; theme: design; dark: window.dark; Layout.preferredWidth: 154; model: ["", "other", "document", "program", "compressed", "video", "audio"]; displayText: currentText.length === 0 ? qsTr("All categories") : currentText; onActivated: { window.categoryFilter = currentText; window.applyLibraryFilters() } }
-                            ThemedComboBox { id: queueBox; theme: design; dark: window.dark; Layout.preferredWidth: 132; model: ["", "main"]; displayText: currentText.length === 0 ? qsTr("All queues") : currentText; onActivated: { window.queueFilter = currentText; window.applyLibraryFilters() } }
-                            ThemedComboBox { id: sortBox; theme: design; dark: window.dark; Layout.preferredWidth: 140; model: ["date", "name", "status", "size", "progress", "speed", "eta", "category", "queue"]; displayText: qsTr("Sort: ") + currentText; onActivated: taskController.setLibrarySort(currentText, descending.checked) }
+                            ThemedComboBox { id: categoryBox; theme: design; dark: window.dark; Layout.preferredWidth: 172; model: ["", "other", "document", "program", "compressed", "video", "audio"]; displayText: currentText.length === 0 ? qsTr("All categories") : currentText; onActivated: { window.categoryFilter = currentText; window.applyLibraryFilters() } }
+                            ThemedComboBox { id: queueBox; theme: design; dark: window.dark; Layout.preferredWidth: 146; model: ["", "main"]; displayText: currentText.length === 0 ? qsTr("All queues") : currentText; onActivated: { window.queueFilter = currentText; window.applyLibraryFilters() } }
+                            ThemedComboBox { id: sortBox; theme: design; dark: window.dark; Layout.preferredWidth: 154; model: ["date", "name", "status", "size", "progress", "speed", "eta", "category", "queue"]; displayText: qsTr("Sort: ") + currentText; onActivated: taskController.setLibrarySort(currentText, descending.checked) }
                             ThemedCheckBox { id: descending; theme: design; dark: window.dark; text: qsTr("Descending"); checked: true; onToggled: taskController.setLibrarySort(sortBox.currentText, checked) }
                             Item { Layout.fillWidth: true }
                             Label { text: taskController.selectedIds.length > 0 ? qsTr("%1 selected").arg(taskController.selectedIds.length) : qsTr("Ctrl/Cmd-click to select multiple"); color: design.textMuted; font.pixelSize: design.fontMeta }

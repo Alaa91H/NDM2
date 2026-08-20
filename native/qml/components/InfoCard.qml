@@ -10,6 +10,8 @@ Rectangle {
     property int contentPadding: theme ? theme.spaceLg : 16
     property color fill: emphasized ? (theme ? theme.surfaceRaised : "#323232") : (theme ? theme.surface : "#292929")
 
+    implicitWidth: contentHost.implicitWidth + contentPadding * 2
+    implicitHeight: contentHost.implicitHeight + contentPadding * 2
     radius: theme ? theme.radiusLg : 12
     color: interactive && cardMouse.containsMouse ? (theme ? theme.surfaceHover : "#3A3A3A") : fill
     border.width: activeFocus ? 2 : 1

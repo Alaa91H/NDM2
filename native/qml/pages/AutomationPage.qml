@@ -15,6 +15,7 @@ Item {
     property string schedulerValidation: ""
 
     function ruleId(prefix) { return prefix + "-" + Date.now() }
+    function collectionCount(value) { return value && value.length !== undefined ? value.length : (value && value.count !== undefined ? value.count : 0) }
     function safeJson(text) { try { return JSON.parse(text) } catch (e) { return null } }
     function schedulerTrigger() {
         if (schedulerTriggerBox.currentText === "TimeWindow")
@@ -57,8 +58,8 @@ Item {
 
         SectionHeader {
             Layout.fillWidth: true
-            title: qsTr("Automation")
-            subtitle: qsTr("Create real Core rules, schedules and mirror failover plans without leaving NDM2.")
+            title: qsTr("Build automation")
+            subtitle: qsTr("Create verified NOVA Core rules, schedules, and mirror failover plans from one workspace.")
             actionText: qsTr("Refresh")
             theme: root.theme
             onActionRequested: taskController.refreshAll()
@@ -66,10 +67,10 @@ Item {
 
         InfoCard {
             Layout.fillWidth: true
-            Layout.preferredHeight: 48
+            Layout.preferredHeight: root.theme ? root.theme.touchHeight : 40
             theme: root.theme
-            emphasized: true
-            contentPadding: root.theme ? root.theme.spaceXs : 4
+            emphasized: false
+            contentPadding: root.theme ? root.theme.space2xs : 2
             RowLayout {
                 Layout.fillWidth: true
                 spacing: root.theme ? root.theme.spaceXs : 4
@@ -104,7 +105,7 @@ Item {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 290
+                        Layout.preferredHeight: 270
                         spacing: root.theme ? root.theme.spaceMd : 12
 
                         InfoCard {
@@ -167,7 +168,7 @@ Item {
                                 Label { Layout.fillWidth: true; text: root.ruleValidation; color: root.theme ? root.theme.danger : "#FF8794"; font.pixelSize: root.theme ? root.theme.fontCaption : 11; elide: Text.ElideRight }
                                 ActionButton {
                                     text: qsTr("Add Core rule")
-                                    tone: "secondary"
+                                    tone: "primary"
                                     dark: settingsService.dark
                                     theme: root.theme
                                     onClicked: {
@@ -192,7 +193,7 @@ Item {
                             Layout.fillWidth: true
                             Label { text: qsTr("Saved Core rules"); color: root.theme ? root.theme.textPrimary : root.textColor; font.pixelSize: root.theme ? root.theme.fontBodyLarge : 14; font.weight: Font.DemiBold }
                             Item { Layout.fillWidth: true }
-                            Label { text: qsTr("%1 rules").arg(taskController.rules.count); color: root.theme ? root.theme.textMuted : root.muted; font.pixelSize: root.theme ? root.theme.fontCaption : 11 }
+                            Label { text: qsTr("%1 rules").arg(root.collectionCount(taskController.rules)); color: root.theme ? root.theme.textMuted : root.muted; font.pixelSize: root.theme ? root.theme.fontCaption : 11 }
                         }
                         ListView {
                             id: rulesList
@@ -234,7 +235,7 @@ Item {
                     spacing: root.theme ? root.theme.spaceMd : 12
                     RowLayout {
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 330
+                        Layout.preferredHeight: 316
                         spacing: root.theme ? root.theme.spaceMd : 12
 
                         InfoCard {
@@ -287,7 +288,7 @@ Item {
                             RowLayout {
                                 Layout.fillWidth: true
                                 Label { Layout.fillWidth: true; text: root.schedulerValidation; color: root.theme ? root.theme.danger : "#FF8794"; font.pixelSize: root.theme ? root.theme.fontCaption : 11; elide: Text.ElideRight }
-                                ActionButton { text: qsTr("Add"); tone: "secondary"; dark: settingsService.dark; theme: root.theme; onClicked: { var value = root.safeJson(schedulerJson.text); if (!value || !value.id || !value.trigger || !value.action) root.schedulerValidation = qsTr("Enter a complete Core SchedulerRule JSON object."); else { root.schedulerValidation = ""; taskController.addSchedulerRule(value) } } }
+                                ActionButton { text: qsTr("Add schedule"); tone: "primary"; dark: settingsService.dark; theme: root.theme; onClicked: { var value = root.safeJson(schedulerJson.text); if (!value || !value.id || !value.trigger || !value.action) root.schedulerValidation = qsTr("Enter a complete Core SchedulerRule JSON object."); else { root.schedulerValidation = ""; taskController.addSchedulerRule(value) } } }
                                 ActionButton { text: qsTr("Update"); tone: "quiet"; dark: settingsService.dark; theme: root.theme; onClicked: { var value = root.safeJson(schedulerJson.text); if (!value || !value.id || !value.trigger || !value.action) root.schedulerValidation = qsTr("Enter a complete Core SchedulerRule JSON object."); else { root.schedulerValidation = ""; taskController.updateSchedulerRule(value) } } }
                             }
                         }
@@ -301,7 +302,7 @@ Item {
                             Layout.fillWidth: true
                             Label { text: qsTr("Scheduled actions"); color: root.theme ? root.theme.textPrimary : root.textColor; font.pixelSize: root.theme ? root.theme.fontBodyLarge : 14; font.weight: Font.DemiBold }
                             Item { Layout.fillWidth: true }
-                            Label { text: qsTr("%1 schedules").arg(taskController.schedulerRules.count); color: root.theme ? root.theme.textMuted : root.muted; font.pixelSize: root.theme ? root.theme.fontCaption : 11 }
+                            Label { text: qsTr("%1 schedules").arg(root.collectionCount(taskController.schedulerRules)); color: root.theme ? root.theme.textMuted : root.muted; font.pixelSize: root.theme ? root.theme.fontCaption : 11 }
                         }
                         ListView {
                             id: schedulerList
