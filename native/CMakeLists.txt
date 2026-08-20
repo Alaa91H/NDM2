@@ -9,12 +9,19 @@ qt_add_executable(NDM2
     src/services/TaskController.cpp
     src/services/SettingsService.cpp
     src/platform/DesktopService.cpp
+    $<$<PLATFORM_ID:Windows>:resources/ndm2.rc>
 )
 
 target_include_directories(NDM2 PRIVATE src)
 target_compile_definitions(NDM2 PRIVATE NDM2_VERSION="${PROJECT_VERSION}")
 target_link_libraries(NDM2 PRIVATE
     Qt6::Core Qt6::Gui Qt6::Network Qt6::Quick Qt6::QuickControls2 Qt6::Widgets
+)
+
+qt_add_resources(NDM2 "ndm2_branding"
+    PREFIX "/branding"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/../branding/source"
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/../branding/source/app-icon.png"
 )
 
 qt_add_qml_module(NDM2
@@ -51,7 +58,16 @@ qt_add_qml_module(NDM2
 set_target_properties(NDM2 PROPERTIES
     WIN32_EXECUTABLE TRUE
     MACOSX_BUNDLE TRUE
+    MACOSX_BUNDLE_BUNDLE_NAME "NOVA Download Manager"
+    MACOSX_BUNDLE_GUI_IDENTIFIER "download.nova.ndm2"
 )
+
+if(APPLE)
+    set(ndm2_macos_icon "${CMAKE_CURRENT_SOURCE_DIR}/../src-tauri/icons/icon.icns")
+    set_source_files_properties("${ndm2_macos_icon}" PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+    target_sources(NDM2 PRIVATE "${ndm2_macos_icon}")
+    set_target_properties(NDM2 PROPERTIES MACOSX_BUNDLE_ICON_FILE "icon.icns")
+endif()
 
 include(GNUInstallDirs)
 install(TARGETS NDM2

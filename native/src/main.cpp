@@ -3,24 +3,50 @@
 #include "services/SettingsService.h"
 #include "services/TaskController.h"
 
+#include <QAction>
 #include <QCommandLineOption>
 #include <QCommandLineParser>
-#include <QAction>
+#include <QDebug>
 #include <QGuiApplication>
-#include <QIcon>
 #include <QHash>
+#include <QIcon>
 #include <QMenu>
+#include <QScreen>
 #include <QSettings>
 #include <QSystemTrayIcon>
-#include <QWindow>
 #include <QTimer>
+#include <QWindow>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+
+namespace {
+QRect preferredWindowGeometry(QWindow *window, QSettings *settings) {
+    const auto *screen = window && window->screen() ? window->screen() : QGuiApplication::primaryScreen();
+    const QRect available = screen ? screen->availableGeometry() : QRect(0, 0, 1280, 800);
+    const int maximumWidth = qMax(820, available.width() - 48);
+    const int maximumHeight = qMax(560, available.height() - 48);
+    const int defaultWidth = qMin(1180, maximumWidth);
+    const int defaultHeight = qMin(760, maximumHeight);
+    const int width = qBound(820, settings->value("window/width", defaultWidth).toInt(), maximumWidth);
+    const int height = qBound(560, settings->value("window/height", defaultHeight).toInt(), maximumHeight);
+    const QPoint savedPosition(settings->value("window/x", available.center().x() - width / 2).toInt(), settings->value("window/y", available.center().y() - height / 2).toInt());
+    QRect restored(savedPosition, QSize(width, height));
+    const QRect visibleArea = restored.intersected(available);
+    if (!available.intersects(restored) || visibleArea.width() < 160 || visibleArea.height() < 120) restored.moveCenter(available.center());
+    if (restored.left() < available.left()) restored.moveLeft(available.left());
+    if (restored.top() < available.top()) restored.moveTop(available.top());
+    if (restored.right() > available.right()) restored.moveRight(available.right());
+    if (restored.bottom() > available.bottom()) restored.moveBottom(available.bottom());
+    return restored;
+}
+}
 
 int main(int argc, char *argv[]) {
     QGuiApplication app(argc, argv);
     app.setOrganizationName("NOVA"); app.setOrganizationDomain("nova.download"); app.setApplicationName("NDM2");
     app.setApplicationVersion(QStringLiteral(NDM2_VERSION));
+    const QIcon applicationIcon(QStringLiteral(":/branding/app-icon.png"));
+    if (!applicationIcon.isNull()) app.setWindowIcon(applicationIcon);
 
     QCommandLineParser parser;
     parser.setApplicationDescription("NDM2 native Qt Quick desktop user interface"); parser.addHelpOption();
@@ -36,30 +62,33 @@ int main(int argc, char *argv[]) {
     engine.rootContext()->setContextProperty("desktopService", &desktop);
     engine.rootContext()->setContextProperty("ndm2Version", app.applicationVersion());
     engine.load(QUrl(QStringLiteral("qrc:/NDM/qml/Main.qml")));
-    if (engine.rootObjects().isEmpty()) return 1;
+    if (engine.rootObjects().isEmpty()) {
+        qCritical() << "NDM2 startup error: the native interface could not be loaded.";
+        return 1;
+    }
 
     auto *mainWindow = qobject_cast<QWindow *>(engine.rootObjects().constFirst());
     auto *windowSettings = new QSettings(&app);
     if (mainWindow) {
-        mainWindow->setWidth(windowSettings->value("window/width", 1440).toInt());
-        mainWindow->setHeight(windowSettings->value("window/height", 900).toInt());
-        mainWindow->setX(windowSettings->value("window/x", mainWindow->x()).toInt());
-        mainWindow->setY(windowSettings->value("window/y", mainWindow->y()).toInt());
+        if (!applicationIcon.isNull()) mainWindow->setIcon(applicationIcon);
+        mainWindow->setGeometry(preferredWindowGeometry(mainWindow, windowSettings));
         QObject::connect(&app, &QCoreApplication::aboutToQuit, mainWindow, [mainWindow, windowSettings] {
             windowSettings->setValue("window/width", mainWindow->width());
             windowSettings->setValue("window/height", mainWindow->height());
             windowSettings->setValue("window/x", mainWindow->x());
             windowSettings->setValue("window/y", mainWindow->y());
+            windowSettings->sync();
         });
     }
 
     if (QSystemTrayIcon::isSystemTrayAvailable()) {
-        auto *tray = new QSystemTrayIcon(QIcon::fromTheme("folder-download"), &app);
-        if (tray->icon().isNull()) tray->setIcon(QIcon::fromTheme("applications-internet"));
+        app.setQuitOnLastWindowClosed(false);
+        const QIcon trayIcon = !applicationIcon.isNull() ? applicationIcon : QIcon::fromTheme("folder-download");
+        auto *tray = new QSystemTrayIcon(trayIcon, &app);
         auto *menu = new QMenu;
         auto *summaryAction = menu->addAction(QObject::tr("NOVA Core: loading…"));
         summaryAction->setEnabled(false);
-        auto *showAction = menu->addAction(QObject::tr("Show NDM2"));
+        auto *showAction = menu->addAction(QObject::tr("Open NDM2"));
         auto *pauseAllAction = menu->addAction(QObject::tr("Pause active downloads"));
         auto *resumeAllAction = menu->addAction(QObject::tr("Resume queued and paused downloads"));
         menu->addSeparator();
@@ -103,11 +132,11 @@ int main(int argc, char *argv[]) {
         QObject::connect(controller.downloads(), &QAbstractItemModel::modelReset, &app, [updateTray, notifyTransitions] { updateTray(); notifyTransitions(); });
         QObject::connect(controller.downloads(), &QAbstractItemModel::dataChanged, &app, [updateTray, notifyTransitions](const QModelIndex &, const QModelIndex &, const QList<int> &) { updateTray(); notifyTransitions(); });
         QObject::connect(&controller, &TaskController::connectionChanged, &app, updateTray);
-        QObject::connect(showAction, &QAction::triggered, mainWindow, [mainWindow] { if (mainWindow) { mainWindow->show(); mainWindow->raise(); mainWindow->requestActivate(); } });
+        QObject::connect(showAction, &QAction::triggered, mainWindow, [mainWindow] { if (mainWindow) { mainWindow->showNormal(); mainWindow->raise(); mainWindow->requestActivate(); } });
         QObject::connect(pauseAllAction, &QAction::triggered, &controller, &TaskController::pauseAll);
         QObject::connect(resumeAllAction, &QAction::triggered, &controller, &TaskController::resumeAll);
         QObject::connect(quitAction, &QAction::triggered, &app, &QCoreApplication::quit);
-        QObject::connect(tray, &QSystemTrayIcon::activated, mainWindow, [mainWindow](QSystemTrayIcon::ActivationReason reason) { if (reason == QSystemTrayIcon::Trigger && mainWindow) { mainWindow->show(); mainWindow->raise(); mainWindow->requestActivate(); } });
+        QObject::connect(tray, &QSystemTrayIcon::activated, mainWindow, [mainWindow](QSystemTrayIcon::ActivationReason reason) { if (reason == QSystemTrayIcon::Trigger && mainWindow) { mainWindow->showNormal(); mainWindow->raise(); mainWindow->requestActivate(); } });
         updateTray();
         trayTimer->start();
         tray->show();

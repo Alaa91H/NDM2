@@ -8,10 +8,10 @@ import "pages"
 
 ApplicationWindow {
     id: window
-    width: 1480
-    height: 920
-    minimumWidth: 980
-    minimumHeight: 650
+    width: 1180
+    height: 760
+    minimumWidth: 820
+    minimumHeight: 560
     visible: true
     title: "NDM2"
     readonly property bool dark: settingsService.dark
@@ -85,7 +85,7 @@ ApplicationWindow {
                 RowLayout {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 52
-                    Rectangle { width: 36; height: 36; radius: design.radiusSm; color: design.accent; Text { anchors.centerIn: parent; text: "N"; color: "white"; font.pixelSize: 18; font.weight: Font.Bold } }
+                    Rectangle { width: 36; height: 36; radius: design.radiusSm; color: design.accent; clip: true; Image { anchors.fill: parent; anchors.margins: 3; source: "qrc:/branding/app-icon.png"; fillMode: Image.PreserveAspectFit; smooth: true; mipmap: true } }
                     ColumnLayout { spacing: 0; Label { text: "NDM2"; color: design.textPrimary; font.pixelSize: 18; font.weight: Font.Bold } Label { text: qsTr("Native Download Manager"); color: design.textSecondary; font.pixelSize: design.fontMeta } }
                 }
                 Label { text: qsTr("LIBRARY"); color: design.textMuted; font.pixelSize: design.fontMeta; font.weight: Font.DemiBold; Layout.topMargin: design.spaceLg; Layout.leftMargin: design.spaceSm }

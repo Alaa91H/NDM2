@@ -15,8 +15,9 @@ if [[ ! -x "$source_binary" ]]; then
 fi
 
 rm -rf "$release_root" "$archive"
-mkdir -p "$release_root/bin" "$release_root/lib" "$release_root/plugins" "$release_root/qml"
+mkdir -p "$release_root/bin" "$release_root/lib" "$release_root/plugins" "$release_root/qml" "$release_root/share/applications" "$release_root/share/icons/hicolor/512x512/apps"
 install -m 0755 "$source_binary" "$release_root/bin/NDM2"
+install -m 0644 "$root/branding/source/app-icon.png" "$release_root/share/icons/hicolor/512x512/apps/ndm2.png"
 
 # Bundle only Qt runtime libraries. The supported Linux baseline continues to provide libc,
 # graphics drivers, X11/Wayland stack, OpenSSL and other operating-system components.
@@ -65,6 +66,43 @@ exec "$root/bin/NDM2" "$@"
 LAUNCHER
 chmod 0755 "$release_root/ndm2"
 
+cat > "$release_root/share/applications/ndm2.desktop" <<'DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=NOVA Download Manager
+Comment=Native NOVA download manager
+Exec=ndm2
+Icon=ndm2
+Terminal=false
+Categories=Network;FileTransfer;
+StartupWMClass=NDM2
+DESKTOP
+
+cat > "$release_root/install-desktop-shortcut.sh" <<'SHORTCUT'
+#!/usr/bin/env sh
+set -eu
+root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+desktop="${XDG_DESKTOP_DIR:-}"
+if [ -z "$desktop" ] && command -v xdg-user-dir >/dev/null 2>&1; then desktop="$(xdg-user-dir DESKTOP 2>/dev/null || true)"; fi
+if [ -z "$desktop" ] || [ "$desktop" = "$HOME" ]; then desktop="$HOME/Desktop"; fi
+mkdir -p "$desktop"
+desktop_file="$desktop/NOVA Download Manager.desktop"
+cat > "$desktop_file" <<EOF
+[Desktop Entry]
+Type=Application
+Name=NOVA Download Manager
+Comment=Native NOVA download manager
+Exec=$root/ndm2
+Icon=$root/share/icons/hicolor/512x512/apps/ndm2.png
+Terminal=false
+Categories=Network;FileTransfer;
+StartupWMClass=NDM2
+EOF
+chmod 0755 "$desktop_file"
+printf 'desktop_shortcut=%s\\n' "$desktop_file"
+SHORTCUT
+chmod 0755 "$release_root/install-desktop-shortcut.sh"
+
 cat > "$release_root/README.txt" <<EOF
 NDM2 $version Linux Release Candidate
 
@@ -72,6 +110,10 @@ This bundle contains the native NDM2 client plus the Qt runtime libraries, XCB p
 plugin, image plugins and Qt Quick QML modules required by this client. Start it with:
 
   ./ndm2 --daemon-endpoint http://127.0.0.1:3199
+
+To create a desktop shortcut that uses the bundled NOVA icon, run:
+
+  ./install-desktop-shortcut.sh
 
 The NOVA daemon remains a separately managed, authenticated loopback service. Supply its
 Bearer credential through NOVA_DAEMON_TOKEN or --daemon-token; do not place credentials in
