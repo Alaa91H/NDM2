@@ -53,7 +53,7 @@ Item {
             hoverEnabled: true
             acceptedButtons: Qt.LeftButton | Qt.RightButton
             onClicked: function(mouse) {
-                if (mouse.button === Qt.RightButton) { root.activated(false); contextMenu.popup(); return }
+                if (mouse.button === Qt.RightButton) { root.activated(false); contextMenu.popup(rowMouse, mouse.x, mouse.y); return }
                 root.activated((mouse.modifiers & Qt.ControlModifier) || (mouse.modifiers & Qt.ShiftModifier))
             }
             onDoubleClicked: root.detailsRequested()
@@ -81,7 +81,6 @@ Item {
                 ToolButton { visible: root.canPause(); text: "Ⅱ"; Accessible.name: qsTr("Pause download"); ToolTip.text: qsTr("Pause"); ToolTip.visible: hovered; onClicked: root.pauseRequested() }
                 ToolButton { visible: root.canResume(); text: "▶"; Accessible.name: qsTr("Resume download"); ToolTip.text: qsTr("Resume"); ToolTip.visible: hovered; onClicked: root.resumeRequested() }
                 ToolButton { visible: root.canRetry(); text: "↻"; Accessible.name: qsTr("Retry download"); ToolTip.text: qsTr("Retry"); ToolTip.visible: hovered; onClicked: root.retryRequested() }
-                ToolButton { text: "⋮"; Accessible.name: qsTr("Download actions"); ToolTip.text: qsTr("More actions"); ToolTip.visible: hovered; onClicked: contextMenu.popup() }
             }
         }
     }

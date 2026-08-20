@@ -22,6 +22,8 @@ qt_add_qml_module(NDM2
     QML_FILES
         qml/Main.qml
         qml/components/Theme.qml
+        qml/components/ThemedCheckBox.qml
+        qml/components/ThemedComboBox.qml
         qml/components/ActionButton.qml
         qml/components/SectionHeader.qml
         qml/components/StatusBadge.qml

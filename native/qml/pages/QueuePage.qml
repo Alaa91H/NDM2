@@ -60,7 +60,7 @@ Item {
                     height: 68
                     radius: theme ? theme.radiusSm : 9
                     color: queueMouse.containsMouse ? (theme ? theme.surfaceSubtle : "#192A45") : "transparent"
-                    MouseArea { id: queueMouse; anchors.fill: parent; hoverEnabled: true; onClicked: taskController.setSelectedId(modelData.taskId || modelData.task_id || modelData.id || "") }
+                    MouseArea { id: queueMouse; anchors.fill: parent; hoverEnabled: true; onClicked: taskController.selectedId = modelData.taskId || modelData.task_id || modelData.id || "" }
                     RowLayout {
                         anchors.fill: parent
                         anchors.leftMargin: theme ? theme.spaceMd : 14
@@ -74,7 +74,7 @@ Item {
                             Label { Layout.fillWidth: true; text: modelData.priority || modelData.status || qsTr("Reported by the Core"); color: root.muted; elide: Text.ElideRight; font.pixelSize: theme ? theme.fontCaption : 11 }
                         }
                         StatusBadge { status: modelData.status || root.queueState(); labelOverride: modelData.status || qsTr("In queue"); dark: settingsService.dark; theme: root.theme }
-                        ActionButton { text: qsTr("Select"); tone: "quiet"; dark: settingsService.dark; theme: root.theme; onClicked: taskController.setSelectedId(modelData.taskId || modelData.task_id || modelData.id || "") }
+                        ActionButton { text: qsTr("Select"); tone: "quiet"; dark: settingsService.dark; theme: root.theme; onClicked: taskController.selectedId = modelData.taskId || modelData.task_id || modelData.id || "" }
                     }
                 }
                 ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }

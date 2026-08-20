@@ -27,6 +27,22 @@ ApplicationWindow {
     LayoutMirroring.childrenInherit: true
 
     Theme { id: design; dark: window.dark }
+    palette: Palette {
+        window: design.background
+        windowText: design.textPrimary
+        base: design.surface
+        alternateBase: design.surfaceSubtle
+        text: design.textPrimary
+        button: design.surfaceRaised
+        buttonText: design.textPrimary
+        highlight: design.accent
+        highlightedText: "#FFFFFF"
+        placeholderText: design.textMuted
+        brightText: design.danger
+        light: design.borderStrong
+        mid: design.border
+        dark: design.surfaceSubtle
+    }
     function applyLibraryFilters() { taskController.setLibraryFilters(search.text, statusFilter, categoryFilter, queueFilter) }
     function setSection(value, status) { section = value; statusFilter = status || ""; applyLibraryFilters() }
     function pageTitle() { return section === "queue" ? qsTr("Queue") : section === "automation" ? qsTr("Automation") : section === "media" ? qsTr("Media discovery") : section === "browser" ? qsTr("Browser integration") : section === "diagnostics" ? qsTr("Diagnostics") : statusFilter === "downloading" ? qsTr("Active downloads") : statusFilter === "completed" ? qsTr("Completed downloads") : statusFilter === "error" ? qsTr("Failed downloads") : qsTr("Download library") }
@@ -51,7 +67,6 @@ ApplicationWindow {
     Connections {
         target: taskController
         function onNotice(message, isError) { window.toastText = message; window.toastError = isError; toastTimer.restart() }
-        function onSelectedChanged() { if (taskController.selectedId.length > 0) window.detailsOpen = true }
     }
 
     RowLayout {
@@ -112,7 +127,7 @@ ApplicationWindow {
                         anchors.leftMargin: design.spaceXl
                         anchors.rightMargin: design.spaceXl
                         spacing: design.spaceMd
-                        ColumnLayout { Layout.fillWidth: true; spacing: 1; Label { text: window.pageTitle(); color: design.textPrimary; font.pixelSize: design.fontPage; font.weight: Font.DemiBold } Label { text: window.section === "library" ? qsTr("%1 visible of %2 tasks from NOVA Core").arg(taskController.filteredDownloads.count).arg(taskController.downloads.count) : qsTr("Live state from the authenticated NOVA Core"); color: design.textSecondary; font.pixelSize: design.fontCaption } }
+                        ColumnLayout { Layout.fillWidth: true; spacing: 1; Label { text: window.pageTitle(); color: design.textPrimary; font.pixelSize: design.fontPage; font.weight: Font.DemiBold } Label { text: window.section === "library" ? qsTr("%1 visible of %2 tasks from NOVA Core").arg(list.count).arg(taskController.downloads.count) : qsTr("Live state from the authenticated NOVA Core"); color: design.textSecondary; font.pixelSize: design.fontCaption } }
                         TextField { id: search; visible: window.section === "library"; Layout.preferredWidth: Math.min(310, Math.max(190, window.width * .23)); placeholderText: qsTr("Search name, URL or category  ·  Ctrl+F"); selectByMouse: true; Accessible.name: qsTr("Search downloads"); onTextChanged: window.applyLibraryFilters(); background: Rectangle { radius: design.radiusSm; color: design.surfaceSubtle; border.width: search.activeFocus ? 2 : 1; border.color: search.activeFocus ? design.accent : design.border } leftPadding: 13; rightPadding: 13 }
                         ActionButton { text: "↻  " + qsTr("Refresh"); tone: "secondary"; dark: window.dark; theme: design; onClicked: taskController.refreshAll() }
                         ActionButton { text: "+  " + qsTr("Add download"); tone: "primary"; dark: window.dark; theme: design; onClicked: addDialog.open() }
@@ -129,10 +144,10 @@ ApplicationWindow {
                         anchors.rightMargin: design.spaceXl
                         spacing: design.spaceXs
                         RowLayout { Layout.fillWidth: true; spacing: design.spaceSm
-                            ComboBox { id: categoryBox; Layout.preferredWidth: 154; model: ["", "other", "document", "program", "compressed", "video", "audio"]; displayText: currentText.length === 0 ? qsTr("All categories") : currentText; onActivated: { window.categoryFilter = currentText; window.applyLibraryFilters() } }
-                            ComboBox { id: queueBox; Layout.preferredWidth: 132; model: ["", "main"]; displayText: currentText.length === 0 ? qsTr("All queues") : currentText; onActivated: { window.queueFilter = currentText; window.applyLibraryFilters() } }
-                            ComboBox { id: sortBox; Layout.preferredWidth: 140; model: ["date", "name", "status", "size", "progress", "speed", "eta", "category", "queue"]; displayText: qsTr("Sort: ") + currentText; onActivated: taskController.setLibrarySort(currentText, descending.checked) }
-                            CheckBox { id: descending; text: qsTr("Descending"); checked: true; onToggled: taskController.setLibrarySort(sortBox.currentText, checked) }
+                            ThemedComboBox { id: categoryBox; theme: design; dark: window.dark; Layout.preferredWidth: 154; model: ["", "other", "document", "program", "compressed", "video", "audio"]; displayText: currentText.length === 0 ? qsTr("All categories") : currentText; onActivated: { window.categoryFilter = currentText; window.applyLibraryFilters() } }
+                            ThemedComboBox { id: queueBox; theme: design; dark: window.dark; Layout.preferredWidth: 132; model: ["", "main"]; displayText: currentText.length === 0 ? qsTr("All queues") : currentText; onActivated: { window.queueFilter = currentText; window.applyLibraryFilters() } }
+                            ThemedComboBox { id: sortBox; theme: design; dark: window.dark; Layout.preferredWidth: 140; model: ["date", "name", "status", "size", "progress", "speed", "eta", "category", "queue"]; displayText: qsTr("Sort: ") + currentText; onActivated: taskController.setLibrarySort(currentText, descending.checked) }
+                            ThemedCheckBox { id: descending; theme: design; dark: window.dark; text: qsTr("Descending"); checked: true; onToggled: taskController.setLibrarySort(sortBox.currentText, checked) }
                             Item { Layout.fillWidth: true }
                             Label { text: taskController.selectedIds.length > 0 ? qsTr("%1 selected").arg(taskController.selectedIds.length) : qsTr("Ctrl/Cmd-click to select multiple"); color: design.textMuted; font.pixelSize: design.fontMeta }
                         }
@@ -169,7 +184,7 @@ ApplicationWindow {
                                         Item { Layout.fillWidth: true }
                                     }
                                 }
-                                ListView { id: list; Layout.fillWidth: true; Layout.fillHeight: true; clip: true; model: taskController.filteredDownloads; spacing: 2; visible: count > 0; delegate: DownloadRow { selected: taskController.isSelected(downloadId); compact: settingsService.density === "compact"; theme: design; dark: window.dark; onActivated: function(extendSelection) { taskController.toggleSelection(downloadId, !extendSelection) } onDetailsRequested: { taskController.setSelectedId(downloadId); window.detailsOpen = true } onPauseRequested: { taskController.setSelectedId(downloadId); taskController.pauseSelected() } onResumeRequested: { taskController.setSelectedId(downloadId); taskController.resumeSelected() } onRetryRequested: { taskController.setSelectedId(downloadId); taskController.retrySelected() } onCancelRequested: { taskController.setSelectedId(downloadId); taskController.cancelSelected() } onDeleteRequested: { taskController.setSelectedId(downloadId); taskController.deleteSelected(false) } } ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded } }
+                                ListView { id: list; Layout.fillWidth: true; Layout.fillHeight: true; clip: true; model: taskController.filteredDownloads; spacing: 2; visible: count > 0; delegate: DownloadRow { selected: taskController.isSelected(downloadId); compact: settingsService.density === "compact"; theme: design; dark: window.dark; onActivated: function(extendSelection) { taskController.toggleSelection(downloadId, !extendSelection) } onDetailsRequested: { taskController.selectedId = downloadId; window.detailsOpen = true } onPauseRequested: { taskController.selectedId = downloadId; taskController.pauseSelected() } onResumeRequested: { taskController.selectedId = downloadId; taskController.resumeSelected() } onRetryRequested: { taskController.selectedId = downloadId; taskController.retrySelected() } onCancelRequested: { taskController.selectedId = downloadId; taskController.cancelSelected() } onDeleteRequested: { taskController.selectedId = downloadId; taskController.deleteSelected(false) } } ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded } }
                                 EmptyState { Layout.fillWidth: true; Layout.fillHeight: true; visible: list.count === 0; title: taskController.connected ? qsTr("No downloads in this view") : qsTr("Waiting for NOVA Core"); subtitle: taskController.connected ? qsTr("Change filters or add a download to see live Core state here.") : taskController.lastError; state: taskController.connected ? "empty" : "offline"; actionText: taskController.connected ? qsTr("Add download") : qsTr("Refresh connection"); theme: design; onActionRequested: taskController.connected ? addDialog.open() : taskController.refreshAll() }
                             }
                         }
