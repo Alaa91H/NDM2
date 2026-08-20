@@ -20,6 +20,7 @@
 int main(int argc, char *argv[]) {
     QGuiApplication app(argc, argv);
     app.setOrganizationName("NOVA"); app.setOrganizationDomain("nova.download"); app.setApplicationName("NDM2");
+    app.setApplicationVersion(QStringLiteral(NDM2_VERSION));
 
     QCommandLineParser parser;
     parser.setApplicationDescription("NDM2 native Qt Quick desktop user interface"); parser.addHelpOption();
@@ -33,6 +34,7 @@ int main(int argc, char *argv[]) {
     engine.rootContext()->setContextProperty("taskController", &controller);
     engine.rootContext()->setContextProperty("settingsService", &settings);
     engine.rootContext()->setContextProperty("desktopService", &desktop);
+    engine.rootContext()->setContextProperty("ndm2Version", app.applicationVersion());
     engine.load(QUrl(QStringLiteral("qrc:/NDM/qml/Main.qml")));
     if (engine.rootObjects().isEmpty()) return 1;
 

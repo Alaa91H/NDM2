@@ -121,7 +121,7 @@ void CoreAdapter::startEventStream() {
         if (m_eventReply != reply) { reply->deleteLater(); return; }
         m_eventBuffer.append(reply->readAll()); consumeEventStream();
         const auto error = reply->error(); m_eventReply = nullptr; reply->deleteLater();
-        if (error != QNetworkReply::NoError) setError(tr("Live update stream reconnecting."));
+        if (error != QNetworkReply::NoError) { setConnected(false); setError(tr("Live update stream reconnecting.")); }
         scheduleEventReconnect();
     });
 }

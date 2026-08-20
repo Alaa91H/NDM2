@@ -12,6 +12,7 @@ qt_add_executable(NDM2
 )
 
 target_include_directories(NDM2 PRIVATE src)
+target_compile_definitions(NDM2 PRIVATE NDM2_VERSION="${PROJECT_VERSION}")
 target_link_libraries(NDM2 PRIVATE
     Qt6::Core Qt6::Gui Qt6::Network Qt6::Quick Qt6::QuickControls2 Qt6::Widgets
 )
@@ -57,8 +58,10 @@ if(BUILD_TESTING)
         tests/DownloadModelTest.cpp
         src/models/DownloadModel.cpp
         src/models/DownloadFilterProxyModel.cpp
+        src/services/SettingsService.cpp
     )
     target_include_directories(NDM2ModelTests PRIVATE src)
-    target_link_libraries(NDM2ModelTests PRIVATE Qt6::Core Qt6::Test)
+    target_link_libraries(NDM2ModelTests PRIVATE Qt6::Core Qt6::Gui Qt6::Test)
     add_test(NAME NDM2ModelTests COMMAND NDM2ModelTests)
+    set_tests_properties(NDM2ModelTests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
